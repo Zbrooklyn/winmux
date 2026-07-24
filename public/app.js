@@ -24,8 +24,11 @@
 
   var NEW_SVG = '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>';
   var CARET_SVG = '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
+  var FIND_SVG = '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
   var SPLIT_SVG = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg>';
   var CLOSE_SVG = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  var UP_SVG = '<svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>';
+  var DOWN_SVG = '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
 
   // Shell picker dropdown (reuses the mockup's .ofmenu styling).
   var openMenu = null;
@@ -59,6 +62,14 @@
   function activeTermOf(p) { for (var i = 0; i < p.terms.length; i++) if (p.terms[i].id === p.activeTermId) return p.terms[i]; return null; }
   function sendResize(t) { if (t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'r', c: t.term.cols, r: t.term.rows })); }
   function fitActive(p) { var t = activeTermOf(p); if (t) { try { t.fit.fit(); } catch (e) {} sendResize(t); } }
+
+  function openFind(p) { if (!p.findbar) return; p.findbar.classList.add('on'); p.findInput.focus(); p.findInput.select(); }
+  function closeFind(p) { if (!p.findbar) return; p.findbar.classList.remove('on'); var t = activeTermOf(p); if (t) t.term.focus(); }
+  function doFind(p, dir, incremental) {
+    var t = activeTermOf(p); if (!t) return;
+    var q = p.findInput.value; if (!q) return;
+    try { if (dir === 'prev') t.search.findPrevious(q, { incremental: !!incremental }); else t.search.findNext(q, { incremental: !!incremental }); } catch (e) {}
+  }
 
   function reflect(p) {
     var t = activeTermOf(p);
@@ -116,7 +127,13 @@
     });
     var fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
+    var search = new SearchAddon.SearchAddon();
+    term.loadAddon(search);
     term.open(host);
+    term.attachCustomKeyEventHandler(function (e) {
+      if (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F')) { openFind(p); return false; }
+      return true;
+    });
 
     var tabEl = document.createElement('div');
     tabEl.className = 'ptab';
@@ -128,7 +145,7 @@
     var ws = new WebSocket(proto + '//' + location.host + '/pty?shell=' + encodeURIComponent(shellKey));
     ws.binaryType = 'arraybuffer';
 
-    var t = { id: id, paneId: p.id, term: term, fit: fit, ws: ws, host: host, tabEl: tabEl, state: 'idle', cwd: null };
+    var t = { id: id, paneId: p.id, term: term, fit: fit, search: search, ws: ws, host: host, tabEl: tabEl, state: 'idle', cwd: null };
 
     ws.onopen = function () { t.state = 'open'; if (p.activeTermId === id) reflect(p); sendResize(t); };
     ws.onmessage = function (ev) {
@@ -222,12 +239,20 @@
         '<div class="pctrls">' +
           '<div class="pc pc-new" title="New terminal tab" role="button">' + NEW_SVG + '</div>' +
           '<div class="pc pcaret pc-newmenu" title="Choose shell" role="button">' + CARET_SVG + '</div>' +
+          '<div class="pc pc-find" title="Find (Ctrl+F)" role="button">' + FIND_SVG + '</div>' +
           '<div class="pc pc-split" title="Split right" role="button">' + SPLIT_SVG + '</div>' +
           '<div class="pc pc-close" title="Close pane" role="button" style="display:none">' + CLOSE_SVG + '</div>' +
         '</div>' +
         '<div class="connpill" data-state="idle"><span class="dot"></span><span class="conntext">connecting…</span></div>' +
       '</div>' +
-      '<div class="pbody"><div class="term-area"></div></div>';
+      '<div class="pbody"><div class="term-area"></div>' +
+        '<div class="findbar">' +
+          '<input type="text" placeholder="Find" spellcheck="false" />' +
+          '<div class="fb-btn fb-prev" title="Previous (Shift+Enter)">' + UP_SVG + '</div>' +
+          '<div class="fb-btn fb-next" title="Next (Enter)">' + DOWN_SVG + '</div>' +
+          '<div class="fb-btn fb-close" title="Close (Esc)">' + CLOSE_SVG + '</div>' +
+        '</div>' +
+      '</div>';
 
     if (panes.length > 0) wsrow.appendChild(makeDivider());
     wsrow.appendChild(el);
@@ -240,15 +265,27 @@
       connText: el.querySelector('.conntext'),
       newBtn: el.querySelector('.pc-new'),
       newMenuBtn: el.querySelector('.pc-newmenu'),
+      findBtn: el.querySelector('.pc-find'),
       splitBtn: el.querySelector('.pc-split'),
       closeBtn: el.querySelector('.pc-close'),
+      findbar: el.querySelector('.findbar'),
+      findInput: el.querySelector('.findbar input'),
       terms: [], activeTermId: null,
     };
     p.newBtn.addEventListener('click', function () { focusPane(p.id); newTerm(p, DEFAULT_SHELL); });
     p.newMenuBtn.addEventListener('click', function (e) { e.stopPropagation(); focusPane(p.id); showShellMenu(p, p.newMenuBtn); });
-    p.splitBtn.addEventListener('click', function () { var np = makePane(); newTerm(np); focusPane(np.id); panes.forEach(fitActive); });
+    p.findBtn.addEventListener('click', function () { focusPane(p.id); openFind(p); });
+    p.splitBtn.addEventListener('click', function () { var np = makePane(); newTerm(np, DEFAULT_SHELL); focusPane(np.id); panes.forEach(fitActive); });
     p.closeBtn.addEventListener('click', function () { closePane(p); });
     el.addEventListener('mousedown', function () { focusPane(p.id); });
+    p.findInput.addEventListener('input', function () { doFind(p, 'next', true); });
+    p.findInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); doFind(p, e.shiftKey ? 'prev' : 'next'); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeFind(p); }
+    });
+    el.querySelector('.fb-prev').addEventListener('click', function () { doFind(p, 'prev'); });
+    el.querySelector('.fb-next').addEventListener('click', function () { doFind(p, 'next'); });
+    el.querySelector('.fb-close').addEventListener('click', function () { closeFind(p); });
 
     panes.push(p);
     updateChrome();
