@@ -30,6 +30,11 @@
   var termSeq = 0;
   var activePaneId = null;
 
+  // Terminal font size (Ctrl +/- / Ctrl+wheel), persisted across restarts.
+  var DEFAULT_FONT = 13;
+  var fontSize = DEFAULT_FONT;
+  try { var _fs = parseInt(localStorage.getItem('ct-fontsize'), 10); if (_fs >= 8 && _fs <= 28) fontSize = _fs; } catch (e) {}
+
   // Shells available on this machine (filled from /shells). Falls back to PowerShell.
   var SHELLS = [{ key: 'powershell', label: 'PowerShell' }];
   var DEFAULT_SHELL = 'powershell';
@@ -153,6 +158,14 @@
   function activeTermOf(p) { for (var i = 0; i < p.terms.length; i++) if (p.terms[i].id === p.activeTermId) return p.terms[i]; return null; }
   function sendResize(t) { if (t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'r', c: t.term.cols, r: t.term.rows })); }
   function fitActive(p) { var t = activeTermOf(p); if (t) { try { t.fit.fit(); } catch (e) {} sendResize(t); } }
+  function setFontSize(px) {
+    px = Math.max(8, Math.min(28, px));
+    if (px === fontSize) return;
+    fontSize = px;
+    try { localStorage.setItem('ct-fontsize', String(px)); } catch (e) {}
+    panes.forEach(function (pp) { pp.terms.forEach(function (t) { try { t.term.options.fontSize = px; } catch (e) {} }); });
+    panes.forEach(fitActive);
+  }
 
   function openFind(p) { if (!p.findbar) return; p.findbar.classList.add('on'); p.findInput.focus(); p.findInput.select(); }
   function closeFind(p) { if (!p.findbar) return; p.findbar.classList.remove('on'); var t = activeTermOf(p); if (t) t.term.focus(); }
@@ -214,7 +227,7 @@
 
     var term = new Terminal({
       fontFamily: "'Cascadia Code','Cascadia Mono',Consolas,ui-monospace,monospace",
-      fontSize: 13, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, theme: themeColors(),
+      fontSize: fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, theme: themeColors(),
     });
     var fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
@@ -226,9 +239,13 @@
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F')) { openFind(p); return false; }
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'c' || e.key === 'C')) { copySel(t); return false; }
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'v' || e.key === 'V')) { pasteInto(t); return false; }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === '=' || e.key === '+')) { setFontSize(fontSize + 1); return false; }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === '-' || e.key === '_')) { setFontSize(fontSize - 1); return false; }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key === '0') { setFontSize(DEFAULT_FONT); return false; }
       return true;
     });
     host.addEventListener('contextmenu', function (e) { e.preventDefault(); focusPane(p.id); showTermMenu(p, t, e.clientX, e.clientY); });
+    host.addEventListener('wheel', function (e) { if (!(e.ctrlKey || e.metaKey)) return; e.preventDefault(); setFontSize(fontSize + (e.deltaY < 0 ? 1 : -1)); }, { passive: false });
 
     var tabEl = document.createElement('div');
     tabEl.className = 'ptab';
