@@ -197,7 +197,7 @@
     var ws = new WebSocket(proto + '//' + location.host + '/pty?shell=' + encodeURIComponent(shellKey));
     ws.binaryType = 'arraybuffer';
 
-    var t = { id: id, paneId: p.id, term: term, fit: fit, search: search, ws: ws, host: host, tabEl: tabEl, state: 'idle', cwd: null };
+    var t = { id: id, paneId: p.id, term: term, fit: fit, search: search, ws: ws, host: host, tabEl: tabEl, state: 'idle', cwd: null, renamed: false };
 
     ws.onopen = function () { t.state = 'open'; if (p.activeTermId === id) reflect(p); sendResize(t); };
     ws.onmessage = function (ev) {
@@ -206,7 +206,7 @@
         if (m.type === 'meta') {
           if (m.error) { term.write('\r\n\x1b[31m' + m.error + '\x1b[0m\r\n'); t.state = 'closed'; if (p.activeTermId === id) reflect(p); }
           else {
-            if (m.shell && ttEl) ttEl.textContent = m.shell;
+            if (m.shell && ttEl && !t.renamed) ttEl.textContent = m.shell;
             if (m.cwd) { t.cwd = m.cwd; if (p.activeTermId === id && p.id === activePaneId) pSub.textContent = m.cwd; }
           }
         }
@@ -223,6 +223,35 @@
       focusPane(p.id);
       if (e.target && e.target.classList.contains('x')) { e.stopPropagation(); closeTerm(p, id); }
       else activateTerm(p, id);
+    });
+
+    // Double-click a tab to rename it (mockup's .tt-in inline editor).
+    function startRename() {
+      if (tabEl.querySelector('.tt-in')) return;
+      var input = document.createElement('input');
+      input.className = 'tt-in'; input.type = 'text';
+      input.value = ttEl.textContent; input.spellcheck = false;
+      ttEl.style.display = 'none';
+      ttEl.parentNode.insertBefore(input, ttEl.nextSibling);
+      input.focus(); input.select();
+      var done = false;
+      function commit(save) {
+        if (done) return; done = true;
+        if (save) { var v = input.value.trim(); if (v) { ttEl.textContent = v; t.renamed = true; } }
+        input.remove(); ttEl.style.display = '';
+      }
+      input.addEventListener('keydown', function (e) {
+        e.stopPropagation();
+        if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+      });
+      input.addEventListener('blur', function () { commit(true); });
+      input.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+    }
+    tabEl.addEventListener('dblclick', function (e) {
+      if (e.target && e.target.classList.contains('x')) return;
+      e.preventDefault(); e.stopPropagation();
+      focusPane(p.id); activateTerm(p, id); startRename();
     });
 
     p.terms.push(t);
