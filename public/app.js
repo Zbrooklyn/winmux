@@ -17,9 +17,39 @@
   var termSeq = 0;
   var activePaneId = null;
 
+  // Shells available on this machine (filled from /shells). Falls back to PowerShell.
+  var SHELLS = [{ key: 'powershell', label: 'PowerShell' }];
+  var DEFAULT_SHELL = 'powershell';
+  function labelFor(key) { for (var i = 0; i < SHELLS.length; i++) if (SHELLS[i].key === key) return SHELLS[i].label; return 'Terminal'; }
+
   var NEW_SVG = '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>';
+  var CARET_SVG = '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
   var SPLIT_SVG = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg>';
   var CLOSE_SVG = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+
+  // Shell picker dropdown (reuses the mockup's .ofmenu styling).
+  var openMenu = null;
+  function closeMenu() { if (openMenu) { openMenu.remove(); openMenu = null; document.removeEventListener('mousedown', onDocDown); } }
+  function onDocDown(e) { if (openMenu && !openMenu.contains(e.target)) closeMenu(); }
+  function showShellMenu(p, anchor) {
+    closeMenu();
+    var menu = document.createElement('div');
+    menu.className = 'ofmenu';
+    menu.setAttribute('data-open', '');
+    SHELLS.forEach(function (s) {
+      var item = document.createElement('div');
+      item.className = 'ofmi';
+      item.innerHTML = '<span class="tfav"><span class="fav fav-t">&gt;_</span></span><span class="nm">' + s.label + '</span>';
+      item.addEventListener('click', function (e) { e.stopPropagation(); focusPane(p.id); newTerm(p, s.key); closeMenu(); });
+      menu.appendChild(item);
+    });
+    document.body.appendChild(menu);
+    var r = anchor.getBoundingClientRect();
+    menu.style.left = Math.min(r.left, window.innerWidth - 250) + 'px';
+    menu.style.top = (r.bottom + 4) + 'px';
+    openMenu = menu;
+    setTimeout(function () { document.addEventListener('mousedown', onDocDown); }, 0);
+  }
 
   function totalTerms() { return panes.reduce(function (n, p) { return n + p.terms.length; }, 0); }
   function updateChrome() {
@@ -72,7 +102,8 @@
     updateChrome();
   }
 
-  function newTerm(p) {
+  function newTerm(p, shellKey) {
+    shellKey = shellKey || DEFAULT_SHELL;
     var id = ++termSeq;
     var host = document.createElement('div');
     host.className = 'term-host';
@@ -89,11 +120,12 @@
 
     var tabEl = document.createElement('div');
     tabEl.className = 'ptab';
-    tabEl.innerHTML = '<span class="tfav"><span class="fav fav-t">&gt;_</span></span><span class="tt">PowerShell</span><span class="x" title="Close tab">×</span>';
+    tabEl.innerHTML = '<span class="tfav"><span class="fav fav-t">&gt;_</span></span><span class="tt">' + labelFor(shellKey) + '</span><span class="x" title="Close tab">×</span>';
     p.tabscroll.appendChild(tabEl);
+    var ttEl = tabEl.querySelector('.tt');
 
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    var ws = new WebSocket(proto + '//' + location.host + '/pty');
+    var ws = new WebSocket(proto + '//' + location.host + '/pty?shell=' + encodeURIComponent(shellKey));
     ws.binaryType = 'arraybuffer';
 
     var t = { id: id, paneId: p.id, term: term, fit: fit, ws: ws, host: host, tabEl: tabEl, state: 'idle', cwd: null };
@@ -104,7 +136,10 @@
         var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
         if (m.type === 'meta') {
           if (m.error) { term.write('\r\n\x1b[31m' + m.error + '\x1b[0m\r\n'); t.state = 'closed'; if (p.activeTermId === id) reflect(p); }
-          else if (m.cwd) { t.cwd = m.cwd; if (p.activeTermId === id && p.id === activePaneId) pSub.textContent = m.cwd; }
+          else {
+            if (m.shell && ttEl) ttEl.textContent = m.shell;
+            if (m.cwd) { t.cwd = m.cwd; if (p.activeTermId === id && p.id === activePaneId) pSub.textContent = m.cwd; }
+          }
         }
         return;
       }
@@ -185,7 +220,8 @@
       '<div class="ptabs">' +
         '<div class="tabscroll"></div>' +
         '<div class="pctrls">' +
-          '<div class="pc pc-new" title="New PowerShell tab" role="button">' + NEW_SVG + '</div>' +
+          '<div class="pc pc-new" title="New terminal tab" role="button">' + NEW_SVG + '</div>' +
+          '<div class="pc pcaret pc-newmenu" title="Choose shell" role="button">' + CARET_SVG + '</div>' +
           '<div class="pc pc-split" title="Split right" role="button">' + SPLIT_SVG + '</div>' +
           '<div class="pc pc-close" title="Close pane" role="button" style="display:none">' + CLOSE_SVG + '</div>' +
         '</div>' +
@@ -203,11 +239,13 @@
       pill: el.querySelector('.connpill'),
       connText: el.querySelector('.conntext'),
       newBtn: el.querySelector('.pc-new'),
+      newMenuBtn: el.querySelector('.pc-newmenu'),
       splitBtn: el.querySelector('.pc-split'),
       closeBtn: el.querySelector('.pc-close'),
       terms: [], activeTermId: null,
     };
-    p.newBtn.addEventListener('click', function () { focusPane(p.id); newTerm(p); });
+    p.newBtn.addEventListener('click', function () { focusPane(p.id); newTerm(p, DEFAULT_SHELL); });
+    p.newMenuBtn.addEventListener('click', function (e) { e.stopPropagation(); focusPane(p.id); showShellMenu(p, p.newMenuBtn); });
     p.splitBtn.addEventListener('click', function () { var np = makePane(); newTerm(np); focusPane(np.id); panes.forEach(fitActive); });
     p.closeBtn.addEventListener('click', function () { closePane(p); });
     el.addEventListener('mousedown', function () { focusPane(p.id); });
@@ -223,7 +261,12 @@
     resizeTimer = setTimeout(function () { panes.forEach(fitActive); }, 80);
   });
 
+  // Load the shells this machine actually has (for the picker menu).
+  fetch('/shells').then(function (r) { return r.json(); }).then(function (list) {
+    if (Array.isArray(list) && list.length) { SHELLS = list; DEFAULT_SHELL = list[0].key; }
+  }).catch(function () {});
+
   var first = makePane();
-  newTerm(first);
+  newTerm(first, DEFAULT_SHELL);
   focusPane(first.id);
 })();
