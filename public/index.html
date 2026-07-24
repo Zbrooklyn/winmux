@@ -9,9 +9,13 @@
 <style>
   /* The pane body hosts the real terminals instead of the mockup's fake rows. */
   .pbody { background: var(--term-bg); }
-  #term-area { position: absolute; inset: 0; }
+  .term-area { position: absolute; inset: 0; }
   .term-host { position: absolute; inset: 0; padding: 10px 6px 10px 12px; }
   .xterm { height: 100%; }
+  .pane.focused { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+  /* Tabs hug their content instead of the mockup's fixed ~166px width. */
+  .ptab { flex: 0 0 auto; min-width: 0; max-width: 220px; padding: 0 10px; gap: 8px; }
+  .ptab .x { margin-left: 2px; }
   /* Connection status pill in the tab row */
   .connpill { display:flex; align-items:center; gap:6px; margin-left:auto; padding:0 12px; font-size:11px; color:var(--faint); }
   .connpill .dot { width:8px; height:8px; border-radius:50%; background:var(--idle); }
@@ -40,22 +44,7 @@
 
   <div class="main">
     <div class="workspace">
-      <div class="wsrow">
-        <div class="pane">
-          <div class="ptabs">
-            <div class="tabscroll" id="tabscroll"></div>
-            <div class="pctrls">
-              <div class="pc" id="new-term" title="New PowerShell tab" role="button" aria-label="New PowerShell tab">
-                <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-              </div>
-            </div>
-            <div class="connpill" id="connpill" data-state="idle"><span class="dot"></span><span id="conntext">connecting…</span></div>
-          </div>
-          <div class="pbody">
-            <div id="term-area"></div>
-          </div>
-        </div>
-      </div>
+      <div class="wsrow" id="wsrow"></div>
     </div>
   </div>
 
