@@ -38,6 +38,7 @@
   var NEW_SVG = '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>';
   var CARET_SVG = '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
   var FIND_SVG = '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
+  var ZOOM_SVG = '<svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
   var SPLIT_SVG = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg>';
   var CLOSE_SVG = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
   var UP_SVG = '<svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>';
@@ -94,7 +95,21 @@
   function totalTerms() { return panes.reduce(function (n, p) { return n + p.terms.length; }, 0); }
   function updateChrome() {
     if (countEl) countEl.textContent = String(totalTerms());
-    panes.forEach(function (p) { p.closeBtn.style.display = panes.length > 1 ? 'flex' : 'none'; });
+    var multi = panes.length > 1;
+    panes.forEach(function (p) {
+      p.closeBtn.style.display = multi ? 'flex' : 'none';
+      if (p.zoomBtn) p.zoomBtn.style.display = multi ? 'flex' : 'none';
+    });
+  }
+  function clearZoom() {
+    wsrow.classList.remove('zoomed');
+    panes.forEach(function (p) { p.el.classList.remove('zoom-on'); if (p.zoomBtn) p.zoomBtn.classList.remove('on'); });
+  }
+  function toggleZoom(p) {
+    var on = p.el.classList.contains('zoom-on');
+    clearZoom();
+    if (!on) { wsrow.classList.add('zoomed'); p.el.classList.add('zoom-on'); if (p.zoomBtn) p.zoomBtn.classList.add('on'); }
+    panes.forEach(fitActive);
   }
   function activeTermOf(p) { for (var i = 0; i < p.terms.length; i++) if (p.terms[i].id === p.activeTermId) return p.terms[i]; return null; }
   function sendResize(t) { if (t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'r', c: t.term.cols, r: t.term.rows })); }
@@ -251,6 +266,7 @@
 
   function closePane(p) {
     if (panes.length <= 1) return;
+    clearZoom();
     p.terms.forEach(function (t) { try { t.ws.close(); } catch (e) {} try { t.term.dispose(); } catch (e) {} });
     var idx = panes.indexOf(p);
     // remove the divider adjacent to this pane
@@ -277,6 +293,7 @@
           '<div class="pc pc-new" title="New terminal tab" role="button">' + NEW_SVG + '</div>' +
           '<div class="pc pcaret pc-newmenu" title="Choose shell" role="button">' + CARET_SVG + '</div>' +
           '<div class="pc pc-find" title="Find (Ctrl+F)" role="button">' + FIND_SVG + '</div>' +
+          '<div class="pc pc-zoom" title="Maximize pane" role="button" style="display:none">' + ZOOM_SVG + '</div>' +
           '<div class="pc pc-split" title="Split right" role="button">' + SPLIT_SVG + '</div>' +
           '<div class="pc pc-close" title="Close pane" role="button" style="display:none">' + CLOSE_SVG + '</div>' +
         '</div>' +
@@ -303,6 +320,7 @@
       newBtn: el.querySelector('.pc-new'),
       newMenuBtn: el.querySelector('.pc-newmenu'),
       findBtn: el.querySelector('.pc-find'),
+      zoomBtn: el.querySelector('.pc-zoom'),
       splitBtn: el.querySelector('.pc-split'),
       closeBtn: el.querySelector('.pc-close'),
       findbar: el.querySelector('.findbar'),
@@ -312,7 +330,8 @@
     p.newBtn.addEventListener('click', function () { focusPane(p.id); newTerm(p, DEFAULT_SHELL); });
     p.newMenuBtn.addEventListener('click', function (e) { e.stopPropagation(); focusPane(p.id); showShellMenu(p, p.newMenuBtn); });
     p.findBtn.addEventListener('click', function () { focusPane(p.id); openFind(p); });
-    p.splitBtn.addEventListener('click', function () { var np = makePane(); newTerm(np, DEFAULT_SHELL); focusPane(np.id); panes.forEach(fitActive); });
+    p.zoomBtn.addEventListener('click', function () { focusPane(p.id); toggleZoom(p); });
+    p.splitBtn.addEventListener('click', function () { clearZoom(); var np = makePane(); newTerm(np, DEFAULT_SHELL); focusPane(np.id); panes.forEach(fitActive); });
     p.closeBtn.addEventListener('click', function () { closePane(p); });
     el.addEventListener('mousedown', function () { focusPane(p.id); });
     p.findInput.addEventListener('input', function () { doFind(p, 'next', true); });
