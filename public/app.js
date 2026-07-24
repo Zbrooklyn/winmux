@@ -1,11 +1,24 @@
 // Cockpit terminal — panes + tabs. Each pane holds its own tabbed PowerShell
 // terminals; panes sit side by side with a draggable divider (split screen).
 (function () {
-  var isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+  function isLightNow() {
+    var t = document.documentElement.getAttribute('data-theme');
+    if (t === 'light') return true;
+    if (t === 'dark') return false;
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+  }
   function themeColors() {
-    return isLight
+    return isLightNow()
       ? { background: '#fbfbfb', foreground: '#232323', cursor: '#8a5cf5', selectionBackground: 'rgba(138,92,245,.25)' }
       : { background: '#1a1a1a', foreground: '#dadada', cursor: '#8a5cf5', selectionBackground: 'rgba(138,92,245,.30)' };
+  }
+  function currentThemeMode() { return document.documentElement.getAttribute('data-theme') || 'system'; }
+  function applyTheme(mode) {
+    if (mode === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', mode);
+    try { localStorage.setItem('ct-theme', mode); } catch (e) {}
+    var colors = themeColors();
+    panes.forEach(function (pp) { pp.terms.forEach(function (t) { try { t.term.options.theme = colors; } catch (e) {} }); });
   }
 
   var wsrow = document.getElementById('wsrow');
@@ -50,6 +63,30 @@
     var r = anchor.getBoundingClientRect();
     menu.style.left = Math.min(r.left, window.innerWidth - 250) + 'px';
     menu.style.top = (r.bottom + 4) + 'px';
+    openMenu = menu;
+    setTimeout(function () { document.addEventListener('mousedown', onDocDown); }, 0);
+  }
+
+  function showThemeMenu(anchor) {
+    closeMenu();
+    var menu = document.createElement('div');
+    menu.className = 'ofmenu';
+    menu.setAttribute('data-open', '');
+    menu.innerHTML = '<div class="ctxlabel">Theme</div>';
+    var cur = currentThemeMode();
+    [['system', 'Match system'], ['light', 'Light'], ['dark', 'Dark']].forEach(function (opt) {
+      var item = document.createElement('div');
+      item.className = 'ofmi';
+      if (opt[0] === cur) item.setAttribute('data-on', '');
+      item.innerHTML = '<span class="nm">' + opt[1] + '</span>';
+      item.addEventListener('click', function (e) { e.stopPropagation(); applyTheme(opt[0]); closeMenu(); });
+      menu.appendChild(item);
+    });
+    document.body.appendChild(menu);
+    var r = anchor.getBoundingClientRect();
+    menu.style.left = Math.min(r.left, window.innerWidth - 220) + 'px';
+    var above = r.top - menu.offsetHeight - 6;
+    menu.style.top = (above > 8 ? above : r.bottom + 4) + 'px';
     openMenu = menu;
     setTimeout(function () { document.addEventListener('mousedown', onDocDown); }, 0);
   }
@@ -297,6 +334,14 @@
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(function () { panes.forEach(fitActive); }, 80);
   });
+
+  // Restore saved theme choice (before any terminal is created).
+  try { var saved = localStorage.getItem('ct-theme'); if (saved === 'light' || saved === 'dark') document.documentElement.setAttribute('data-theme', saved); } catch (e) {}
+  var settingsBtn = document.getElementById('open-settings');
+  if (settingsBtn) settingsBtn.addEventListener('click', function (e) { e.stopPropagation(); showThemeMenu(settingsBtn); });
+  if (window.matchMedia) {
+    try { window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function () { if (currentThemeMode() === 'system') applyTheme('system'); }); } catch (e) {}
+  }
 
   // Load the shells this machine actually has (for the picker menu).
   fetch('/shells').then(function (r) { return r.json(); }).then(function (list) {

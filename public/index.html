@@ -26,6 +26,11 @@
   .findbar .fb-btn { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--faint); cursor: pointer; }
   .findbar .fb-btn:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
   .findbar .fb-btn svg { width: 14px; height: 14px; }
+  /* Manual theme override (Settings). Unset = follow system. These win over the
+     mockup's prefers-color-scheme media query because of the attribute selector. */
+  :root[data-theme="light"] { --bg0:#fff; --bg1:#f6f6f6; --bg2:#eeeef0; --bg3:#e6e6e8; --border:#e2e2e2; --border-s:#c4c4c4; --text:#232323; --muted:#5c5c5c; --faint:#a0a0a0; --term-bg:#fbfbfb; }
+  :root[data-theme="dark"]  { --bg0:#1e1e1e; --bg1:#262626; --bg2:#2d2d2d; --bg3:#333; --border:#363636; --border-s:#4a4a4a; --text:#dadada; --muted:#a8a8a8; --faint:#6b6b6b; --term-bg:#1a1a1a; }
+  .ofmi[data-on]::after { content: "✓"; margin-left: auto; color: var(--accent); font-weight: 700; }
   /* Connection status pill in the tab row */
   .connpill { display:flex; align-items:center; gap:6px; margin-left:auto; padding:0 12px; font-size:11px; color:var(--faint); }
   .connpill .dot { width:8px; height:8px; border-radius:50%; background:var(--idle); }
@@ -48,6 +53,10 @@
       </div>
     </div>
     <div class="sx-foot">
+      <span class="sxbtn" id="open-settings" title="Settings — theme" role="button" aria-label="Settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+      </span>
+      <span class="sxsp"></span>
       <span class="brand"><b>●</b> wmux</span>
     </div>
   </aside>
