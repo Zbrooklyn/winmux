@@ -31,9 +31,21 @@
   :root[data-theme="light"] { --bg0:#fff; --bg1:#f6f6f6; --bg2:#eeeef0; --bg3:#e6e6e8; --border:#e2e2e2; --border-s:#c4c4c4; --text:#232323; --muted:#5c5c5c; --faint:#a0a0a0; --term-bg:#fbfbfb; }
   :root[data-theme="dark"]  { --bg0:#1e1e1e; --bg1:#262626; --bg2:#2d2d2d; --bg3:#333; --border:#363636; --border-s:#4a4a4a; --text:#dadada; --muted:#a8a8a8; --faint:#6b6b6b; --term-bg:#1a1a1a; }
   .ofmi[data-on]::after { content: "✓"; margin-left: auto; color: var(--accent); font-weight: 700; }
-  /* Zoom: one pane fills the workspace; siblings + dividers hide. */
-  .wsrow.zoomed > .pane:not(.zoom-on) { display: none; }
-  .wsrow.zoomed > .wsdiv { display: none; }
+  /* Split layout: wsrow holds columns; each column stacks panes vertically. */
+  .wscol { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); }
+  .wscol:last-child { border-right: none; }
+  .pane { border-right: none; }
+  .wscol > .pane:not(:last-child) { border-bottom: 1px solid var(--border); }
+  /* Horizontal divider between stacked panes (resize height). */
+  .wsdiv.h { flex: 0 0 6px; margin: -3px 0; cursor: row-resize; }
+  .wsdiv.h::after { left: 0; right: 0; top: 2px; bottom: auto; width: auto; height: 2px; }
+  body.row-resizing, body.row-resizing * { cursor: row-resize !important; user-select: none; }
+  /* Zoom: one pane fills the workspace; all other columns, panes + dividers hide. */
+  .wsrow.zoomed .wsdiv { display: none; }
+  .wsrow.zoomed > .wscol { display: none; }
+  .wsrow.zoomed > .wscol.zoom-col { display: flex; flex: 1 1 0 !important; }
+  .wsrow.zoomed > .wscol.zoom-col > .pane { display: none; }
+  .wsrow.zoomed > .wscol.zoom-col > .pane.zoom-on { display: flex; flex: 1 1 0 !important; }
   .pane .pc-zoom.on { color: var(--accent); }
   /* Sidebar reopen strip (shown only when the sidebar is collapsed). */
   #sidebar-reopen { display: none; position: fixed; left: 0; top: 50%; transform: translateY(-50%); z-index: 30;

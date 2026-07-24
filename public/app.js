@@ -45,6 +45,7 @@
   var FIND_SVG = '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
   var ZOOM_SVG = '<svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
   var SPLIT_SVG = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg>';
+  var SPLITDOWN_SVG = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/></svg>';
   var CLOSE_SVG = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
   var UP_SVG = '<svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>';
   var DOWN_SVG = '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
@@ -147,12 +148,13 @@
   }
   function clearZoom() {
     wsrow.classList.remove('zoomed');
+    [].forEach.call(wsrow.querySelectorAll('.wscol'), function (c) { c.classList.remove('zoom-col'); });
     panes.forEach(function (p) { p.el.classList.remove('zoom-on'); if (p.zoomBtn) p.zoomBtn.classList.remove('on'); });
   }
   function toggleZoom(p) {
     var on = p.el.classList.contains('zoom-on');
     clearZoom();
-    if (!on) { wsrow.classList.add('zoomed'); p.el.classList.add('zoom-on'); if (p.zoomBtn) p.zoomBtn.classList.add('on'); }
+    if (!on) { wsrow.classList.add('zoomed'); if (p.col) p.col.classList.add('zoom-col'); p.el.classList.add('zoom-on'); if (p.zoomBtn) p.zoomBtn.classList.add('on'); }
     panes.forEach(fitActive);
   }
   function activeTermOf(p) { for (var i = 0; i < p.terms.length; i++) if (p.terms[i].id === p.activeTermId) return p.terms[i]; return null; }
@@ -320,31 +322,32 @@
     return t;
   }
 
-  function makeDivider() {
+  // A divider between two flex siblings. horizontal=false → vertical bar between
+  // columns (resize width); horizontal=true → bar between stacked panes (resize height).
+  function makeDivider(horizontal) {
     var d = document.createElement('div');
-    d.className = 'wsdiv';
+    d.className = horizontal ? 'wsdiv h' : 'wsdiv';
     d.addEventListener('mousedown', function (e) {
       e.preventDefault();
-      var left = d.previousElementSibling;   // .pane
-      var right = d.nextElementSibling;       // .pane
-      if (!left || !right) return;
-      var startX = e.clientX;
-      var lw = left.getBoundingClientRect().width;
-      var rw = right.getBoundingClientRect().width;
+      var a = d.previousElementSibling;
+      var b = d.nextElementSibling;
+      if (!a || !b) return;
+      var start = horizontal ? e.clientY : e.clientX;
+      var aSize = horizontal ? a.getBoundingClientRect().height : a.getBoundingClientRect().width;
+      var bSize = horizontal ? b.getBoundingClientRect().height : b.getBoundingClientRect().width;
       d.classList.add('drag');
-      document.body.classList.add('col-resizing');
+      document.body.classList.add(horizontal ? 'row-resizing' : 'col-resizing');
       function move(ev) {
-        var dx = ev.clientX - startX;
-        var nl = Math.max(160, lw + dx);
-        var nr = Math.max(160, rw - dx);
-        left.style.flex = nl + ' 1 0';
-        right.style.flex = nr + ' 1 0';
+        var delta = (horizontal ? ev.clientY : ev.clientX) - start;
+        a.style.flex = Math.max(120, aSize + delta) + ' 1 0';
+        b.style.flex = Math.max(120, bSize - delta) + ' 1 0';
       }
       function up() {
         document.removeEventListener('mousemove', move);
         document.removeEventListener('mouseup', up);
         d.classList.remove('drag');
         document.body.classList.remove('col-resizing');
+        document.body.classList.remove('row-resizing');
         panes.forEach(fitActive);
       }
       document.addEventListener('mousemove', move);
@@ -353,24 +356,51 @@
     return d;
   }
 
+  // A column is a vertical stack of panes; columns sit side by side in the wsrow.
+  function makeCol() {
+    var col = document.createElement('div');
+    col.className = 'wscol';
+    col.style.flex = '1 1 0';
+    if (wsrow.children.length > 0) wsrow.appendChild(makeDivider(false));
+    wsrow.appendChild(col);
+    return col;
+  }
+
+  function resetFlex() {
+    [].forEach.call(wsrow.querySelectorAll('.wscol'), function (c) {
+      c.style.flex = '1 1 0';
+      [].forEach.call(c.querySelectorAll('.pane'), function (pe) { pe.style.flex = '1 1 0'; });
+    });
+  }
+
   function closePane(p) {
     if (panes.length <= 1) return;
     clearZoom();
     p.terms.forEach(function (t) { try { t.ws.close(); } catch (e) {} try { t.term.dispose(); } catch (e) {} });
-    var idx = panes.indexOf(p);
-    // remove the divider adjacent to this pane
-    var div = p.el.previousElementSibling && p.el.previousElementSibling.classList.contains('wsdiv') ? p.el.previousElementSibling
-            : (p.el.nextElementSibling && p.el.nextElementSibling.classList.contains('wsdiv') ? p.el.nextElementSibling : null);
-    if (div) div.remove();
+    var col = p.col;
+    // Remove the horizontal divider adjacent to this pane inside its column.
+    var prev = p.el.previousElementSibling;
+    var next = p.el.nextElementSibling;
+    var hdiv = (prev && prev.classList.contains('wsdiv')) ? prev : ((next && next.classList.contains('wsdiv')) ? next : null);
+    if (hdiv) hdiv.remove();
     p.el.remove();
+    var idx = panes.indexOf(p);
     panes.splice(idx, 1);
-    panes.forEach(function (pp) { pp.el.style.flex = '1 1 0'; });
+    // If the column is now empty, remove it and its adjacent vertical divider.
+    if (col && !col.querySelector('.pane')) {
+      var cprev = col.previousElementSibling;
+      var cnext = col.nextElementSibling;
+      var vdiv = (cprev && cprev.classList.contains('wsdiv')) ? cprev : ((cnext && cnext.classList.contains('wsdiv')) ? cnext : null);
+      if (vdiv) vdiv.remove();
+      col.remove();
+    }
+    resetFlex();
     updateChrome();
     focusPane(panes[Math.max(0, idx - 1)].id);
     panes.forEach(fitActive);
   }
 
-  function makePane() {
+  function makePane(col, afterPane) {
     var id = ++paneSeq;
     var el = document.createElement('div');
     el.className = 'pane';
@@ -384,6 +414,7 @@
           '<div class="pc pc-find" title="Find (Ctrl+F)" role="button">' + FIND_SVG + '</div>' +
           '<div class="pc pc-zoom" title="Maximize pane" role="button" style="display:none">' + ZOOM_SVG + '</div>' +
           '<div class="pc pc-split" title="Split right" role="button">' + SPLIT_SVG + '</div>' +
+          '<div class="pc pc-splitdown" title="Split down" role="button">' + SPLITDOWN_SVG + '</div>' +
           '<div class="pc pc-close" title="Close pane" role="button" style="display:none">' + CLOSE_SVG + '</div>' +
         '</div>' +
         '<div class="connpill" data-state="idle"><span class="dot"></span><span class="conntext">connecting…</span></div>' +
@@ -397,11 +428,19 @@
         '</div>' +
       '</div>';
 
-    if (panes.length > 0) wsrow.appendChild(makeDivider());
-    wsrow.appendChild(el);
+    // Place the pane into its column. afterPane → insert just below it (with a
+    // horizontal divider); otherwise append to the bottom of the column.
+    if (afterPane) {
+      var ref = afterPane.el.nextSibling;
+      col.insertBefore(makeDivider(true), ref);
+      col.insertBefore(el, ref);
+    } else {
+      if (col.children.length > 0) col.appendChild(makeDivider(true));
+      col.appendChild(el);
+    }
 
     var p = {
-      id: id, el: el,
+      id: id, el: el, col: col,
       tabscroll: el.querySelector('.tabscroll'),
       termArea: el.querySelector('.term-area'),
       pill: el.querySelector('.connpill'),
@@ -411,6 +450,7 @@
       findBtn: el.querySelector('.pc-find'),
       zoomBtn: el.querySelector('.pc-zoom'),
       splitBtn: el.querySelector('.pc-split'),
+      splitDownBtn: el.querySelector('.pc-splitdown'),
       closeBtn: el.querySelector('.pc-close'),
       findbar: el.querySelector('.findbar'),
       findInput: el.querySelector('.findbar input'),
@@ -420,7 +460,8 @@
     p.newMenuBtn.addEventListener('click', function (e) { e.stopPropagation(); focusPane(p.id); showShellMenu(p, p.newMenuBtn); });
     p.findBtn.addEventListener('click', function () { focusPane(p.id); openFind(p); });
     p.zoomBtn.addEventListener('click', function () { focusPane(p.id); toggleZoom(p); });
-    p.splitBtn.addEventListener('click', function () { clearZoom(); var np = makePane(); newTerm(np, DEFAULT_SHELL); focusPane(np.id); panes.forEach(fitActive); });
+    p.splitBtn.addEventListener('click', function () { clearZoom(); var np = makePane(makeCol()); newTerm(np, DEFAULT_SHELL); focusPane(np.id); panes.forEach(fitActive); });
+    p.splitDownBtn.addEventListener('click', function () { clearZoom(); var np = makePane(p.col, p); newTerm(np, DEFAULT_SHELL); focusPane(np.id); panes.forEach(fitActive); });
     p.closeBtn.addEventListener('click', function () { closePane(p); });
     el.addEventListener('mousedown', function () { focusPane(p.id); });
     p.findInput.addEventListener('input', function () { doFind(p, 'next', true); });
@@ -464,7 +505,7 @@
     if (Array.isArray(list) && list.length) { SHELLS = list; DEFAULT_SHELL = list[0].key; }
   }).catch(function () {});
 
-  var first = makePane();
+  var first = makePane(makeCol());
   newTerm(first, DEFAULT_SHELL);
   focusPane(first.id);
 })();
