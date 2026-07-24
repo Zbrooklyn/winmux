@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>wmux — PowerShell</title>
+<link rel="stylesheet" href="/vendor/xterm.css">
+<link rel="stylesheet" href="/cockpit.css">
+<style>
+  /* The pane body hosts the real terminals instead of the mockup's fake rows. */
+  .pbody { background: var(--term-bg); }
+  #term-area { position: absolute; inset: 0; }
+  .term-host { position: absolute; inset: 0; padding: 10px 6px 10px 12px; }
+  .xterm { height: 100%; }
+  /* Connection status pill in the tab row */
+  .connpill { display:flex; align-items:center; gap:6px; margin-left:auto; padding:0 12px; font-size:11px; color:var(--faint); }
+  .connpill .dot { width:8px; height:8px; border-radius:50%; background:var(--idle); }
+  .connpill[data-state="open"] .dot { background:var(--ok); }
+  .connpill[data-state="closed"] .dot { background:var(--err); }
+</style>
+</head>
+<body>
+<div class="cockpit" id="root" data-mode="full" data-view="focus" data-dock="closed" data-sidebar="open">
+
+  <aside class="sessions">
+    <div class="sx-head"><span>Projects</span><span class="n" id="sx-count">1</span></div>
+    <div class="sx-list" id="sx-list">
+      <div class="prow" data-active>
+        <div class="pfolder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg></div>
+        <div class="pinfo">
+          <div class="pname" id="p-name">PowerShell</div>
+          <div class="psub" id="p-sub">connecting…</div>
+        </div>
+      </div>
+    </div>
+    <div class="sx-foot">
+      <span class="brand"><b>●</b> wmux</span>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="workspace">
+      <div class="wsrow">
+        <div class="pane">
+          <div class="ptabs">
+            <div class="tabscroll" id="tabscroll"></div>
+            <div class="pctrls">
+              <div class="pc" id="new-term" title="New PowerShell tab" role="button" aria-label="New PowerShell tab">
+                <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+              </div>
+            </div>
+            <div class="connpill" id="connpill" data-state="idle"><span class="dot"></span><span id="conntext">connecting…</span></div>
+          </div>
+          <div class="pbody">
+            <div id="term-area"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
