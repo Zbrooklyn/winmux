@@ -35,6 +35,13 @@
   .wsrow.zoomed > .pane:not(.zoom-on) { display: none; }
   .wsrow.zoomed > .wsdiv { display: none; }
   .pane .pc-zoom.on { color: var(--accent); }
+  /* Sidebar reopen strip (shown only when the sidebar is collapsed). */
+  #sidebar-reopen { display: none; position: fixed; left: 0; top: 50%; transform: translateY(-50%); z-index: 30;
+    width: 20px; height: 52px; align-items: center; justify-content: center; background: var(--bg1);
+    border: 1px solid var(--border); border-left: none; border-radius: 0 8px 8px 0; color: var(--faint); cursor: pointer; }
+  .cockpit[data-sidebar="collapsed"] #sidebar-reopen { display: flex; }
+  #sidebar-reopen:hover { color: var(--text); }
+  #sidebar-reopen svg { width: 15px; height: 15px; }
   /* Connection status pill in the tab row */
   .connpill { display:flex; align-items:center; gap:6px; margin-left:auto; padding:0 12px; font-size:11px; color:var(--faint); }
   .connpill .dot { width:8px; height:8px; border-radius:50%; background:var(--idle); }
@@ -46,7 +53,9 @@
 <div class="cockpit" id="root" data-mode="full" data-view="focus" data-dock="closed" data-sidebar="open">
 
   <aside class="sessions">
-    <div class="sx-head"><span>Projects</span><span class="n" id="sx-count">1</span></div>
+    <div class="sx-head"><span>Projects</span><span class="n" id="sx-count">1</span>
+      <span class="sxbtn" id="collapse-sidebar" title="Collapse sidebar" role="button" aria-label="Collapse sidebar"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></span>
+    </div>
     <div class="sx-list" id="sx-list">
       <div class="prow" data-active>
         <div class="pfolder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg></div>
@@ -64,6 +73,8 @@
       <span class="brand"><b>●</b> wmux</span>
     </div>
   </aside>
+
+  <div id="sidebar-reopen" title="Show sidebar" role="button" aria-label="Show sidebar"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></div>
 
   <div class="main">
     <div class="workspace">

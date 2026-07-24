@@ -358,6 +358,14 @@
   try { var saved = localStorage.getItem('ct-theme'); if (saved === 'light' || saved === 'dark') document.documentElement.setAttribute('data-theme', saved); } catch (e) {}
   var settingsBtn = document.getElementById('open-settings');
   if (settingsBtn) settingsBtn.addEventListener('click', function (e) { e.stopPropagation(); showThemeMenu(settingsBtn); });
+
+  // Sidebar collapse / reopen.
+  var cockpitRoot = document.getElementById('root');
+  function setSidebar(state) { cockpitRoot.setAttribute('data-sidebar', state); setTimeout(function () { panes.forEach(fitActive); }, 40); }
+  var collapseBtn = document.getElementById('collapse-sidebar');
+  var sidebarReopen = document.getElementById('sidebar-reopen');
+  if (collapseBtn) collapseBtn.addEventListener('click', function () { setSidebar('collapsed'); });
+  if (sidebarReopen) sidebarReopen.addEventListener('click', function () { setSidebar('open'); });
   if (window.matchMedia) {
     try { window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function () { if (currentThemeMode() === 'system') applyTheme('system'); }); } catch (e) {}
   }
