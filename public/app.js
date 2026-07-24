@@ -92,6 +92,45 @@
     setTimeout(function () { document.addEventListener('mousedown', onDocDown); }, 0);
   }
 
+  // Terminal right-click menu: Copy / Paste / Select all / Clear (reuses .ofmenu).
+  function copySel(t) {
+    try { var s = t.term.getSelection(); if (s && navigator.clipboard) navigator.clipboard.writeText(s); } catch (e) {}
+  }
+  function pasteInto(t) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        navigator.clipboard.readText().then(function (txt) {
+          if (txt && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'i', d: txt }));
+          try { t.term.focus(); } catch (e) {}
+        }).catch(function () {});
+      }
+    } catch (e) {}
+  }
+  function showTermMenu(p, t, x, y) {
+    closeMenu();
+    var menu = document.createElement('div');
+    menu.className = 'ofmenu';
+    menu.setAttribute('data-open', '');
+    var hasSel = false; try { hasSel = !!t.term.getSelection(); } catch (e) {}
+    function addItem(label, kbd, enabled, fn) {
+      var item = document.createElement('div');
+      item.className = 'ofmi';
+      if (!enabled) item.style.opacity = '.4';
+      item.innerHTML = '<span class="nm">' + label + '</span>' + (kbd ? '<span class="kbd sm">' + kbd + '</span>' : '');
+      if (enabled) item.addEventListener('click', function (e) { e.stopPropagation(); fn(); closeMenu(); });
+      menu.appendChild(item);
+    }
+    addItem('Copy', 'Ctrl+Shift+C', hasSel, function () { copySel(t); });
+    addItem('Paste', 'Ctrl+Shift+V', true, function () { pasteInto(t); });
+    addItem('Select all', '', true, function () { try { t.term.selectAll(); } catch (e) {} });
+    addItem('Clear', '', true, function () { try { t.term.clear(); t.term.focus(); } catch (e) {} });
+    document.body.appendChild(menu);
+    menu.style.left = Math.min(x, window.innerWidth - menu.offsetWidth - 8) + 'px';
+    menu.style.top = Math.min(y, window.innerHeight - menu.offsetHeight - 8) + 'px';
+    openMenu = menu;
+    setTimeout(function () { document.addEventListener('mousedown', onDocDown); }, 0);
+  }
+
   function totalTerms() { return panes.reduce(function (n, p) { return n + p.terms.length; }, 0); }
   function updateChrome() {
     if (countEl) countEl.textContent = String(totalTerms());
@@ -183,9 +222,13 @@
     term.loadAddon(search);
     term.open(host);
     term.attachCustomKeyEventHandler(function (e) {
-      if (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F')) { openFind(p); return false; }
+      if (e.type !== 'keydown') return true;
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F')) { openFind(p); return false; }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'c' || e.key === 'C')) { copySel(t); return false; }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'v' || e.key === 'V')) { pasteInto(t); return false; }
       return true;
     });
+    host.addEventListener('contextmenu', function (e) { e.preventDefault(); focusPane(p.id); showTermMenu(p, t, e.clientX, e.clientY); });
 
     var tabEl = document.createElement('div');
     tabEl.className = 'ptab';
