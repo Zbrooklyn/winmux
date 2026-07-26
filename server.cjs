@@ -15,6 +15,7 @@
 // The phone door can only be opened or closed from the desk door, so someone
 // holding the link can never widen their own access.
 const http = require('http');
+const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -24,7 +25,14 @@ const { WebSocketServer } = require('ws');
 const pty = require('node-pty');
 const qrcode = require('qrcode');
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8799;
+// An explicitly requested port is obeyed exactly, even when it cannot serve the
+// phone door — verify.cjs depends on that to test the busy-port failure. With no
+// PORT set we choose for ourselves, and we refuse a port whose Tailscale face is
+// taken, because such a port can host the desk door and never the phone one.
+const PORT_REQUESTED = process.env.PORT ? parseInt(process.env.PORT, 10) : 8799;
+const PORT_FORCED = !!process.env.PORT;
+const PORT_CANDIDATES = [8799, 9912, 9911, 9913, 8800, 8801, 8802];
+let PORT = PORT_REQUESTED;
 const PUBLIC = path.join(__dirname, 'public');
 const HOST = '127.0.0.1';
 
@@ -39,6 +47,32 @@ function tailscaleIP() {
     }
   }
   return null;
+}
+
+// Can we actually bind this exact host:port right now?
+function bindable(host, port) {
+  return new Promise((resolve) => {
+    const s = net.createServer();
+    s.once('error', () => resolve(false));
+    s.once('listening', () => s.close(() => resolve(true)));
+    s.listen(port, host);
+  });
+}
+
+// A port is only usable if BOTH doors can open on it. Checking just the desk
+// door is how you end up with an app that looks fine and a phone switch that
+// can never turn on — on this machine tailscaled itself holds the Tailscale
+// side of the old default.
+async function pickPort() {
+  const ip = tailscaleIP();
+  for (const p of PORT_CANDIDATES) {
+    if (!(await bindable(HOST, p))) continue;
+    if (ip && !(await bindable(ip, p))) continue;
+    return p;
+  }
+  // Nothing was clean. Fall back to the default and let the existing polite
+  // failure explain itself, rather than refusing to start at all.
+  return PORT_CANDIDATES[0];
 }
 
 // --- The phone door --------------------------------------------------------
@@ -388,7 +422,7 @@ function onShellConnection(ws, req) {
   ws.on('close', () => { try { term.kill(); } catch {} });
 }
 
-server.listen(PORT, HOST, () => {
+function announce() {
   console.log('WinMux running at http://' + HOST + ':' + PORT);
   console.log('shells:', SHELLS.map((s) => s.label).join(', '));
   // CT_REMOTE=1 just pre-opens the same door the Settings toggle opens.
@@ -402,4 +436,14 @@ server.listen(PORT, HOST, () => {
   } else {
     console.log('phone access: off — turn it on in Settings → Phone');
   }
-});
+}
+
+(async () => {
+  if (!PORT_FORCED) {
+    PORT = await pickPort();
+    if (PORT !== PORT_REQUESTED) {
+      console.log('port ' + PORT_REQUESTED + ' was busy on your Tailscale address — using ' + PORT + ' instead');
+    }
+  }
+  server.listen(PORT, HOST, announce);
+})();

@@ -14,6 +14,7 @@
 
 const { spawn } = require('child_process');
 const net = require('net');
+const http = require('http');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
@@ -50,6 +51,32 @@ function inUse(host, port) {
   });
 }
 
+function get(url) {
+  return new Promise((res, rej) => {
+    http.get(url, (r) => {
+      let b = '';
+      r.on('data', (d) => { b += d; });
+      r.on('end', () => res({ status: r.statusCode, headers: r.headers, body: b }));
+    }).on('error', rej);
+  });
+}
+
+function post(url, body) {
+  return new Promise((res, rej) => {
+    const u = new URL(url);
+    const r = http.request({
+      hostname: u.hostname, port: u.port, path: u.pathname + u.search, method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+    }, (rs) => {
+      let b = '';
+      rs.on('data', (d) => { b += d; });
+      rs.on('end', () => res({ status: rs.statusCode, body: b }));
+    });
+    r.on('error', rej);
+    r.write(body); r.end();
+  });
+}
+
 function waitUp(port, ms) {
   const stop = Date.now() + ms;
   return new Promise(function poll(res, rej) {
@@ -72,6 +99,30 @@ async function server(port) {
   });
   await waitUp(port, 15000);
   return { port, borrowed: false, stop() { try { proc.kill(); } catch (e) {} } };
+}
+
+// Start a server with NO port forced, and read back the port it chose for
+// itself. Never borrows a running server — the choice IS the thing under test.
+function serverAuto() {
+  return new Promise((resolve, reject) => {
+    const env = Object.assign({}, process.env);
+    delete env.PORT;
+    const proc = spawn(process.execPath, ['server.cjs'], {
+      cwd: ROOT, env, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    let buf = '';
+    const timer = setTimeout(() => {
+      try { proc.kill(); } catch (e) {}
+      reject(new Error('auto-port server never announced itself'));
+    }, 20000);
+    proc.stdout.on('data', (d) => {
+      buf += d.toString();
+      const m = buf.match(/running at http:\/\/127\.0\.0\.1:(\d+)/);
+      if (!m) return;
+      clearTimeout(timer);
+      resolve({ port: Number(m[1]), log: buf, stop() { try { proc.kill(); } catch (e) {} } });
+    });
+  });
 }
 
 // ------------------------------------------------------------------ checks
@@ -98,6 +149,38 @@ const settings = async (p, tab) => {
   await p.locator('[data-settab="' + tab + '"]').click();
   await p.waitForTimeout(900);
 };
+
+// --- port: the app refuses a port it cannot fully use ---------------------
+// The desk door binding is not enough. If the Tailscale side of a port is
+// taken, phone access can never turn on there, so with no PORT forced the
+// server must move off it by itself instead of failing politely later.
+check('port', PORT_FREE, async ({ t }) => {
+  const ip = tailscaleIp();
+  const auto = await serverAuto();
+  try {
+    const answered = await get('http://127.0.0.1:' + auto.port + '/');
+    t('auto-picked port really serves the desk door', answered.status === 200, auto.port);
+    if (ip) {
+      t('auto-picked port is free on the Tailscale side', !(await inUse(ip, auto.port)), ip + ':' + auto.port);
+      if (await inUse(ip, 8799)) {
+        t('auto-picked away from the busy default', auto.port !== 8799, 'chose ' + auto.port);
+        t('said why it moved', /busy on your Tailscale address/.test(auto.log));
+      } else {
+        t('SKIP moved-off-default — 8799 is not busy on this tailnet', true);
+      }
+    } else {
+      t('SKIP tailnet side — Tailscale is not running', true);
+    }
+  } finally { auto.stop(); }
+
+  // An explicit port is never overridden — the busy-port fixture below depends
+  // on actually getting the busy port.
+  const forced = await server(PORT_BUSY);
+  try {
+    const onBusy = await get('http://127.0.0.1:' + PORT_BUSY + '/');
+    t('an explicit PORT is honoured exactly, not auto-moved', onBusy.status === 200, PORT_BUSY);
+  } finally { forced.stop(); }
+});
 
 // --- brand: the name is really rendered, in the right colours -------------
 check('brand', PORT_BUSY, async ({ browser, base, t, shot }) => {
