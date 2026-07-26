@@ -56,10 +56,14 @@ picks the right port for each scenario, drives the real app in one shared browse
 screenshots to `verify-out/`. It exits non-zero if anything fails, and prints **SKIP with a reason**
 rather than a false pass when a scenario can't be reproduced on this machine.
 
-The two ports are deliberate. `8799` is the *busy* one — tailscaled already owns its Tailscale side,
+The three ports are deliberate. `8799` is the *busy* one — tailscaled already owns its Tailscale side,
 which is exactly what makes it the fixture for "turning phone access on must fail politely instead of
 killing the app." `9912` is the *free* one, where the phone flow is proven end to end against a real
-shell.
+shell. `9911` belongs to the `remote` group alone, which really opens the phone door — sharing a port
+would have two groups fighting over one switch.
+
+**58/58 as of Phase 2.** The `remote` group is the one that talks to the Tailscale address rather than
+`127.0.0.1`, because a remote claim proved on the desk door is not proved at all.
 
 A test that needs an argument is a defect: every argument is a chance to invoke it wrong and burn a
 whole browser run. If you add a behaviour, add its check here in the same commit.
@@ -133,6 +137,38 @@ Gate: each item works in the real app, measured (computed values), screenshot sh
       `≥1120px` full · `620–1120px` half (inactive tabs collapse to icons) · `<620px` phone
       (list of terminals, tap one to open it full screen, back button).
 
+## Phase 2 — Remote access that actually works
+
+Objective: the phone link is something Edward can genuinely use, not a feature that demos once.
+Gate: a real command runs on this PC from a phone-shaped browser over the Tailscale address, and the
+server is still there an hour later.
+
+Three defects stood between "the feature exists" and "he can use it":
+
+- [x] **The default port could never open the phone door.** Binding `127.0.0.1:8799` succeeds, which
+      says nothing about `100.120.237.49:8799` — and `tailscaled` permanently owns that one. So the
+      default gave a healthy-looking app whose phone switch could never turn on. With no `PORT` set the
+      server now checks **both faces** of each candidate and moves to the first port that can host both
+      doors, saying why it moved. An explicit `PORT` is still obeyed exactly — `verify.cjs` depends on
+      actually getting the busy port to test the polite failure.
+- [x] **Nothing stayed running.** Every server died with the shell that launched it, so a link never
+      survived long enough to be worth scanning. `winmux.ps1 start` launches node hidden and detached,
+      reads the port back out of its own log rather than assuming one, and records pid+port so `status`,
+      `link`, and `stop` work from any other shell. Proved by asking a shell that did *not* start it:
+      `pid 29392  http://127.0.0.1:9912`, `phone access: ON (bound to 100.120.237.49:9912)`.
+- [x] **No proof from the tailnet side.** The old checks drove the link but never tested a missing or
+      wrong key, so "it works remotely" rested on the happy path. The `remote` group now does the whole
+      matrix over the Tailscale address: 401 bare · 401 wrong key · 200 + HttpOnly, SameSite=Strict
+      cookie with the real one · cookie alone authenticates · 403 when the link tries to widen its own
+      access · QR served as real SVG · `tailnet says MINISFORUM` from a real PowerShell shell · the
+      address stops answering entirely once the switch is off.
+- [x] **The harness was photographing the key.** `phone-on.png` captured both the printed link and a
+      scannable QR. Both are blanked before the shutter and an assertion fails if anything key-shaped
+      survives — these images get shown to people.
+
+Left to @edward (not a task): starting WinMux automatically at logon needs a one-time elevated command,
+which cannot be self-granted. Until then it runs until the next reboot, or until `.\winmux.ps1 stop`.
+
 ## Decisions
 
 - Design contract (resolved: `public/cockpit.css` is the mockup verbatim and is never edited — all app-specific CSS lives in the `<style>` block in `index.html`)
@@ -145,6 +181,9 @@ Gate: each item works in the real app, measured (computed values), screenshot sh
 - Name (resolved: **WinMux** — @edward's call. A terminal multiplexer for Windows, in the tmux lineage. Renamed across the app, the package, the plan, and the repo)
 - Where the name shows on the desktop (resolved: the browser tab title and the `v1.0` chip only. The mockup reserves no brand slot in the sidebar footer — measured 51px of spare room against a ~50px word — so the in-app brand mark lives in the phone header, exactly as the design does it)
 - A failure the person can't see (resolved: any refusal to flip the phone switch renders its reason beside the switch, not only in the bell)
+- Default port (resolved: with no `PORT` set the server picks the first candidate free on **both** its faces, because a port whose Tailscale side is taken can host the desk door and never the phone one. An explicit `PORT` is obeyed exactly — the busy-port fixture depends on it. Order: 8799, 9912, 9911, 9913, 8800–8802)
+- Staying up (resolved: `winmux.ps1 start` runs node hidden and detached via `Start-Process`, so the link outlives the terminal that created it. Logon autostart is @edward's one-time elevated call — Claude cannot self-elevate, and until it is registered WinMux runs only until the next reboot)
+- Screenshots of the Phone tab (resolved: the link and the QR are blanked before every capture, and a check fails if a live key survives. A screenshot of that panel is a photograph of a working shell key)
 - Bell while you are watching the tab (resolved: logged to notifications only; the attention ring is reserved for a tab you are NOT watching, so it never nags about output you can already see)
 
 ## Risks
