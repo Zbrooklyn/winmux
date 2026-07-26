@@ -4,3 +4,4 @@ verify-out/
 .winmux-state.json
 winmux.log
 winmux.err.log
+.winmux-link.tmp

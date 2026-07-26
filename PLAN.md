@@ -62,7 +62,7 @@ killing the app." `9912` is the *free* one, where the phone flow is proven end t
 shell. `9911` belongs to the `remote` group alone, which really opens the phone door — sharing a port
 would have two groups fighting over one switch.
 
-**65/65 as of Phase 2.** The `remote` group is the one that talks to the Tailscale address rather than
+**67/67 as of Phase 2.** The `remote` group is the one that talks to the Tailscale address rather than
 `127.0.0.1`, because a remote claim proved on the desk door is not proved at all.
 
 A test that needs an argument is a defect: every argument is a chance to invoke it wrong and burn a
@@ -196,6 +196,7 @@ which cannot be self-granted. Until then it runs until the next reboot, or until
 - Staying up (resolved: `winmux.ps1 start` runs node hidden and detached via `Start-Process`, so the link outlives the terminal that created it. Logon autostart is @edward's one-time elevated call — Claude cannot self-elevate, and until it is registered WinMux runs only until the next reboot)
 - Screenshots of the Phone tab (resolved: the link and the QR are blanked before every capture, and a check fails if a live key survives. A screenshot of that panel is a photograph of a working shell key)
 - Arriving without the key (resolved: a refusal must name the fix, not just the problem. @edward typed the tailnet address by hand instead of scanning the QR and got a bare `WinMux: this link needs its access key.` — correct, and a dead end. The phone door now serves a self-contained branded page telling him where the key lives (Settings → Phone → scan the QR) when the request comes from a person (`Accept: text/html`), and keeps the one-line refusal for scripts, assets, and the websocket. Self-contained on purpose: every asset is behind the same door it is refusing. Measured on a 384px phone viewport — 3 steps, app accent, no sideways scroll)
+- The door's colour scheme (resolved: it follows the phone, because the app does. `cockpit.css:7` gives WinMux a `prefers-color-scheme: light` block, so the needs-key page hardcoding dark put a dark refusal in front of a light app — two different products. Found by opening the live link in a real browser, not by reading the CSS. Same four tokens, same values, switched on the media query; two checks measure the computed body background and colour in each scheme rather than trusting the stylesheet)
 - Bell while you are watching the tab (resolved: logged to notifications only; the attention ring is reserved for a tab you are NOT watching, so it never nags about output you can already see)
 
 ## Risks
