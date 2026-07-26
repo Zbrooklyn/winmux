@@ -5,6 +5,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { execFile } = require('child_process');
 const { WebSocketServer } = require('ws');
 const pty = require('node-pty');
 
@@ -47,6 +48,83 @@ function shellByKey(key) {
   return SHELLS[0];
 }
 
+// --- Changes panel: real `git` output for a folder -------------------------
+function git(args, cwd, cb) {
+  execFile('git', args, { cwd, maxBuffer: 12 * 1024 * 1024, windowsHide: true, timeout: 10000 },
+    (err, stdout) => cb(err, stdout || ''));
+}
+
+// Turn `git diff -U3` text into the file/hunk shape the diff panel renders.
+function parsePatch(patch) {
+  const files = [];
+  let f = null, h = null;
+  const lines = patch.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (ln.startsWith('diff --git ')) {
+      const m = ln.match(/ b\/(.+)$/);
+      f = { path: m ? m[1] : ln.slice(11), st: 'M', add: 0, del: 0, hunks: [] };
+      files.push(f); h = null;
+      continue;
+    }
+    if (!f) continue;
+    if (ln.startsWith('new file mode')) { f.st = 'A'; continue; }
+    if (ln.startsWith('deleted file mode')) { f.st = 'D'; continue; }
+    if (ln.startsWith('rename to ')) { f.st = 'R'; continue; }
+    if (ln.startsWith('Binary files')) { f.binary = true; continue; }
+    if (ln.startsWith('@@')) {
+      const m = ln.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/);
+      if (!m) continue;
+      h = { h: '@@ -' + m[1] + ' +' + m[2] + ' @@' + (m[3] || ''), ls: +m[1], rs: +m[2], lines: [] };
+      f.hunks.push(h);
+      continue;
+    }
+    if (!h || ln.startsWith('index ') || ln.startsWith('--- ') || ln.startsWith('+++ ')) continue;
+    if (ln[0] === '+') { h.lines.push(['a', ln.slice(1)]); f.add++; }
+    else if (ln[0] === '-') { h.lines.push(['d', ln.slice(1)]); f.del++; }
+    else if (ln[0] === ' ') h.lines.push(['c', ln.slice(1)]);
+  }
+  // Keep the payload sane on very large diffs.
+  files.forEach((x) => {
+    let budget = 600;
+    x.hunks = x.hunks.filter((hh) => { if (budget <= 0) return false; budget -= hh.lines.length; return true; });
+  });
+  return files;
+}
+
+function gitChanges(cwd, done) {
+  git(['rev-parse', '--show-toplevel'], cwd, (err, root) => {
+    if (err) return done({ ok: false, error: 'Not a git repository' });
+    root = root.trim();
+    git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd, (e2, branch) => {
+      git(['diff', 'HEAD', '-U3'], cwd, (e3, patch) => {
+        const files = e3 ? [] : parsePatch(patch);
+        git(['status', '--porcelain'], cwd, (e4, status) => {
+          if (!e4) {
+            status.split('\n').forEach((l) => {
+              if (l.slice(0, 2) !== '??') return;
+              const rel = l.slice(3).trim().replace(/^"|"$/g, '');
+              if (!rel || rel.endsWith('/')) { files.push({ path: rel, st: 'A', add: 0, del: 0, untracked: true, hunks: [] }); return; }
+              const abs = path.join(root, rel);
+              let body = [];
+              try {
+                const st = fs.statSync(abs);
+                if (st.size < 200 * 1024) {
+                  const txt = fs.readFileSync(abs, 'utf8');
+                  if (!/\u0000/.test(txt)) body = txt.split(String.fromCharCode(10)).slice(0, 400).map((t) => ['a', t]);
+                }
+              } catch (e) {}
+              files.push({ path: rel, st: 'A', add: body.length, del: 0, untracked: true,
+                hunks: body.length ? [{ h: '@@ new file @@', ls: 1, rs: 1, lines: body }] : [] });
+            });
+          }
+          done({ ok: true, root, branch: (branch || '').trim(), files });
+        });
+      });
+    });
+  });
+}
+
 // --- Static file server (locked to public/) --------------------------------
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -60,6 +138,29 @@ const server = http.createServer((req, res) => {
   if (urlPath === '/shells') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(SHELLS.map((s) => ({ key: s.key, label: s.label }))));
+    return;
+  }
+  // Changes panel: real `git` state for a folder.
+  if (urlPath === '/api/git') {
+    let q = {};
+    try { q = Object.fromEntries(new URL(req.url, 'http://x').searchParams); } catch (e) {}
+    const cwd = q.cwd && fs.existsSync(q.cwd) ? q.cwd : os.homedir();
+    gitChanges(cwd, (payload) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(Object.assign({ cwd }, payload)));
+    });
+    return;
+  }
+  // Diagnostics modal: what this server actually is right now.
+  if (urlPath === '/api/info') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      pid: process.pid, node: process.version, platform: process.platform,
+      arch: process.arch, uptime: Math.round(process.uptime()), host: HOST, port: PORT,
+      home: os.homedir(), cpus: os.cpus().length,
+      mem: Math.round(os.totalmem() / 1073741824) + ' GB',
+      shells: SHELLS.map((s) => s.label), sessions: wss ? wss.clients.size : 0,
+    }));
     return;
   }
   if (urlPath === '/') urlPath = '/index.html';
@@ -76,9 +177,16 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server, path: '/pty' });
 wss.on('connection', (ws, req) => {
   var key = 'powershell';
-  try { key = new URL(req.url, 'http://x').searchParams.get('shell') || 'powershell'; } catch (e) {}
+  var want = '';
+  try {
+    var qs = new URL(req.url, 'http://x').searchParams;
+    key = qs.get('shell') || 'powershell';
+    want = qs.get('cwd') || '';
+  } catch (e) {}
   var shell = shellByKey(key);
-  const cwd = os.homedir();
+  // Honour a requested start folder only when it really is one.
+  let cwd = os.homedir();
+  try { if (want && fs.statSync(want).isDirectory()) cwd = want; } catch (e) {}
   let term;
   try {
     term = pty.spawn(shell.exec, shell.args, { name: 'xterm-256color', cols: 80, rows: 24, cwd, env: process.env });

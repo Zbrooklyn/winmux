@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>wmux — PowerShell</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231e1e1e'/%3E%3Cpath d='M4 5l3 3-3 3M8.5 11H12' stroke='%238a5cf5' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/vendor/xterm.css">
 <link rel="stylesheet" href="/cockpit.css">
 <style>
@@ -23,6 +24,7 @@
   .findbar input { background: var(--bg0); border: 1px solid var(--border); border-radius: 6px; color: var(--text);
     font-size: 12px; padding: 4px 8px; width: 170px; outline: none; }
   .findbar input:focus { border-color: var(--accent); }
+  .findbar .fb-count { font-size: 11px; color: var(--faint); min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
   .findbar .fb-btn { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--faint); cursor: pointer; }
   .findbar .fb-btn:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
   .findbar .fb-btn svg { width: 14px; height: 14px; }
@@ -59,41 +61,126 @@
   .connpill .dot { width:8px; height:8px; border-radius:50%; background:var(--idle); }
   .connpill[data-state="open"] .dot { background:var(--ok); }
   .connpill[data-state="closed"] .dot { background:var(--err); }
+  /* In a narrow pane the tab name matters more than the word "connected", so the
+     pill collapses to its status dot and gives the label its width back. */
+  #wsrow .pane { container-type: inline-size; }
+  @container (max-width: 560px) {
+    .connpill .conntext { display:none; }
+    .connpill { padding:0 8px; }
+  }
+  /* The live counters belong on the desktop sidebar here (the mockup only showed
+     them in its narrow phone mode). */
+  .cockpit .sx-deck { display: flex; }
+  .sx-list { overflow-y: auto; }
+  /* Changes dock: folder bar on top, diff filling the rest. */
+  .dock .pbody { display: flex; flex-direction: column; background: var(--bg0); }
+  .dock .dwrap { position: relative; flex: 1; min-height: 0; }
+  .dock .bchrome .burl { flex: 1; min-width: 0; }
+  .diff-empty { padding: 18px; color: var(--faint); font-size: 12.5px; }
+  /* Diagnostics + save/load modal bodies (single-column mpane, no left tabs). */
+  .modal.sm { width: 520px; height: auto; max-height: 80vh; }
+  .modal.sm .mbody { display: block; overflow-y: auto; }
+  .modal.sm .mpane { padding: 18px 22px 22px; }
+  .dlg .din { width: 100%; margin-top: 12px; background: var(--bg0); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); font-size: 13px; padding: 8px 10px; outline: none; }
+  .dlg .din:focus { border-color: var(--accent); }
+  .dlg .llist { margin-top: 12px; max-height: 220px; overflow-y: auto; }
+  .dlg .lrow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+  .dlg .lrow:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
+  .dlg .lrow .lsub { margin-left: auto; font-size: 11px; color: var(--faint); }
+  .dlg .lrow .ldel { color: var(--faint); padding: 0 4px; }
+  .dlg .lrow .ldel:hover { color: var(--err); }
+  .kvrow { display: flex; gap: 14px; padding: 7px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); font-size: 12.5px; }
+  .kvrow .k { color: var(--faint); flex: 0 0 132px; }
+  .kvrow .v { color: var(--text); word-break: break-all; }
 </style>
 </head>
 <body>
 <div class="cockpit" id="root" data-mode="full" data-view="focus" data-dock="closed" data-sidebar="open">
 
   <aside class="sessions">
-    <div class="sx-head"><span>Projects</span><span class="n" id="sx-count">1</span>
-      <span class="sxbtn" id="collapse-sidebar" title="Collapse sidebar" role="button" aria-label="Collapse sidebar"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></span>
+    <div class="sx-head"><span>Terminals</span><span class="n" id="sx-count">1</span><span class="sxsp"></span>
+      <span class="upbadge on" id="version-chip" title="cockpit-terminal v1.0 — click for diagnostics" role="button">v1.0</span>
+      <span class="sxbtn" id="open-palette" title="Command palette (Ctrl+Shift+P)" role="button" aria-label="Command palette"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></span>
+      <span class="sxbtn" id="open-notif" title="Notifications (Ctrl+Alt+N)" role="button" aria-label="Notifications"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg><span class="nbadge" id="notif-badge" style="display:none">0</span></span>
+      <span class="sxbtn" id="collapse-sidebar" title="Collapse sidebar (Ctrl+B)" role="button" aria-label="Collapse sidebar"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></span>
     </div>
-    <div class="sx-list" id="sx-list">
-      <div class="prow" data-active>
-        <div class="pfolder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg></div>
-        <div class="pinfo">
-          <div class="pname" id="p-name">PowerShell</div>
-          <div class="psub" id="p-sub">connecting…</div>
-        </div>
-      </div>
+    <div class="sx-deck">
+      <div class="stat work"><div class="v" id="d-work">0</div><div class="l">Working</div></div>
+      <div class="stat need"><div class="v" id="d-need">0</div><div class="l">Needs you</div></div>
+      <div class="stat idle"><div class="v" id="d-idle">0</div><div class="l">Idle</div></div>
     </div>
+    <div class="sx-list" id="sx-list"></div>
     <div class="sx-foot">
-      <span class="sxbtn" id="open-settings" title="Settings — theme" role="button" aria-label="Settings">
+      <span class="sxbtn" id="open-new" title="New terminal (Alt+T)" role="button" aria-label="New terminal"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>
+      <span class="sxbtn" id="open-save" title="Save layout (Ctrl+Alt+S)" role="button" aria-label="Save layout"><svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg></span>
+      <span class="sxbtn" id="open-load" title="Load layout (Ctrl+Alt+O)" role="button" aria-label="Load layout"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg></span>
+      <span class="sxsp"></span>
+      <span class="sxbtn" id="open-diag" title="Diagnostics" role="button" aria-label="Diagnostics"><svg viewBox="0 0 24 24"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg></span>
+      <span class="sxbtn" id="open-help" title="Keyboard shortcuts (F1)" role="button" aria-label="Keyboard shortcuts"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 015.8 1c0 2-3 2.5-3 2.5"/><path d="M12 17h.01"/></svg></span>
+      <span class="sxbtn" id="open-settings" title="Settings (Ctrl+,)" role="button" aria-label="Settings">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
       </span>
-      <span class="sxsp"></span>
-      <span class="brand"><b>●</b> wmux</span>
     </div>
   </aside>
 
-  <div id="sidebar-reopen" title="Show sidebar" role="button" aria-label="Show sidebar"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></div>
+  <div id="sidebar-reopen" title="Show sidebar (Ctrl+B)" role="button" aria-label="Show sidebar"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></div>
 
   <div class="main">
     <div class="workspace">
+      <div class="bcast" id="bcast" style="display:none">
+        <svg viewBox="0 0 24 24"><path d="M3 11l18-5v12L3 14v-3zM11 18.5a2 2 0 01-4 0"/></svg>
+        <span id="bcast-text">Broadcasting input to all panes</span>
+        <span class="bc-x" id="bcast-stop">Stop (Ctrl+Alt+B)</span>
+      </div>
       <div class="wsrow" id="wsrow"></div>
+    </div>
+
+    <aside class="dock" id="dock">
+      <div class="pane">
+        <div class="ptabs">
+          <div class="tabscroll"><div class="ptab" data-active><span class="tfav"><span class="fav fav-d">±</span></span><span class="tt">Changes</span></div></div>
+          <div class="pctrls">
+            <span class="pc" id="dock-close" title="Hide changes panel" role="button"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+          </div>
+        </div>
+        <div class="pbody">
+          <div class="bchrome">
+            <span class="burl"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><input class="burl-in mono" id="dock-path" spellcheck="false" aria-label="Folder"></span>
+            <span class="bbtn" id="dock-refresh" title="Refresh changes" role="button"><svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 00-14-3M4 15a8 8 0 0014 3"/></svg></span>
+          </div>
+          <div class="dwrap" id="dock-diff"></div>
+        </div>
+      </div>
+    </aside>
+    <div class="dock-reopen" id="dock-reopen" title="Show changes panel"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></div>
+  </div>
+
+  <div class="palette-wrap" id="palette-wrap">
+    <div class="palette">
+      <input id="pl-input" placeholder="Run a command…" autocomplete="off" spellcheck="false">
+      <div class="pl-list" id="pl-list"></div>
     </div>
   </div>
 
+  <div class="npanel" id="npanel"></div>
+
+  <div class="ovl" id="settings-ovl">
+    <div class="modal">
+      <div class="mhead"><span class="mt">Settings</span><span class="mx" data-close-ovl="settings-ovl" role="button" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span></div>
+      <div class="mbody"><div class="mtabs" id="settings-tabs"></div><div class="mpane" id="settings-pane"></div></div>
+    </div>
+  </div>
+
+  <div class="ovl" id="diag-ovl">
+    <div class="modal sm">
+      <div class="mhead"><span class="mt">Diagnostics</span><span class="mx" data-close-ovl="diag-ovl" role="button" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span></div>
+      <div class="mbody"><div class="mpane" id="diag-pane"></div></div>
+    </div>
+  </div>
+
+  <div class="ovl" id="cheat-ovl"><div class="cheat" id="cheat-body"></div></div>
+  <div class="ovl" id="dlg-ovl"><div class="dlg" id="dlg-body"></div></div>
 </div>
 
 <script src="/vendor/xterm.js"></script>
