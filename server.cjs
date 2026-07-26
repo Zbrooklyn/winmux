@@ -1,17 +1,69 @@
 // cockpit-terminal — serves the cockpit UI and bridges real shell processes to
-// the browser terminals over websockets. Localhost only (it runs real shell
-// commands, so it is deliberately NOT exposed to the network).
+// the browser terminals over websockets.
+//
+// This server hands out a real shell, so reaching it IS full control of the
+// machine. Two modes, and nothing in between:
+//   default        — binds 127.0.0.1. Only this PC can reach it. No password
+//                    needed because nothing else can knock on the door.
+//   CT_REMOTE=1    — binds the Tailscale address only (never 0.0.0.0), and
+//                    every request must carry a token. Tailscale already
+//                    encrypts the traffic and only admits your own devices;
+//                    the token is the second lock, in case a device is lost.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { WebSocketServer } = require('ws');
 const pty = require('node-pty');
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8799;
-const HOST = '127.0.0.1';
 const PUBLIC = path.join(__dirname, 'public');
+
+// --- Where to listen -------------------------------------------------------
+const REMOTE = process.env.CT_REMOTE === '1';
+
+// Tailscale hands out addresses in 100.64.0.0/10. We bind that exact address
+// rather than 0.0.0.0 so the shell is never offered to a coffee-shop network.
+function tailscaleIP() {
+  const ifs = os.networkInterfaces();
+  for (const name in ifs) {
+    for (const a of ifs[name] || []) {
+      if (a.family !== 'IPv4' || a.internal) continue;
+      if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(a.address)) return a.address;
+    }
+  }
+  return null;
+}
+
+const HOST = REMOTE ? (process.env.CT_HOST || tailscaleIP()) : '127.0.0.1';
+if (REMOTE && !HOST) {
+  console.error('CT_REMOTE=1 but no Tailscale address was found on this machine.');
+  console.error('Start Tailscale first, or set CT_HOST to the exact address to bind.');
+  console.error('Refusing to fall back to 0.0.0.0 — that would offer a shell to the whole network.');
+  process.exit(1);
+}
+
+// --- Token (remote mode only) ----------------------------------------------
+const TOKEN = REMOTE ? (process.env.CT_TOKEN || crypto.randomBytes(16).toString('hex')) : '';
+
+function tokenFrom(req) {
+  try {
+    const k = new URL(req.url, 'http://x').searchParams.get('k');
+    if (k) return k;
+  } catch (e) {}
+  const m = (req.headers.cookie || '').match(/(?:^|;\s*)ct_k=([A-Za-z0-9]+)/);
+  return m ? m[1] : '';
+}
+
+function authed(req) {
+  if (!REMOTE) return true;
+  const got = tokenFrom(req);
+  const a = Buffer.from(got), b = Buffer.from(TOKEN);
+  if (a.length !== b.length) return false;          // length differs → no match
+  try { return crypto.timingSafeEqual(a, b); } catch (e) { return false; }
+}
 
 // --- Shell detection -------------------------------------------------------
 function onPath(exe) {
@@ -133,6 +185,21 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
 };
 const server = http.createServer((req, res) => {
+  // Remote mode: no token, no anything. Checked before the URL is even read.
+  if (!authed(req)) {
+    res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('cockpit-terminal: this link needs its access key.');
+    return;
+  }
+  // Arriving with a valid ?k= parks it in a cookie so the rest of the page
+  // (scripts, fonts, the websocket) authenticates without the key in every URL.
+  if (REMOTE) {
+    try {
+      if (new URL(req.url, 'http://x').searchParams.get('k')) {
+        res.setHeader('Set-Cookie', 'ct_k=' + TOKEN + '; Path=/; HttpOnly; SameSite=Strict');
+      }
+    } catch (e) {}
+  }
   let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
   // Small API: the list of shells the picker can offer.
   if (urlPath === '/shells') {
@@ -174,7 +241,12 @@ const server = http.createServer((req, res) => {
 });
 
 // --- One shell process per websocket connection ----------------------------
-const wss = new WebSocketServer({ server, path: '/pty' });
+// The websocket is the actual shell, so it gets the same lock as the page.
+const wss = new WebSocketServer({
+  server,
+  path: '/pty',
+  verifyClient: (info, cb) => (authed(info.req) ? cb(true) : cb(false, 401, 'Unauthorized')),
+});
 wss.on('connection', (ws, req) => {
   var key = 'powershell';
   var want = '';
@@ -210,6 +282,16 @@ wss.on('connection', (ws, req) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log('cockpit-terminal running at http://' + HOST + ':' + PORT);
+  if (REMOTE) {
+    console.log('cockpit-terminal — REMOTE mode (Tailscale only, token required)');
+    console.log('open on your phone:  http://' + HOST + ':' + PORT + '/?k=' + TOKEN);
+    console.log('');
+    console.log('That link is a shell on this PC. Anyone holding it, on your tailnet,');
+    console.log('has your machine. Keep it out of chats and screenshots.');
+    if (!process.env.CT_TOKEN) console.log('The key changes every restart. Set CT_TOKEN to pin it.');
+  } else {
+    console.log('cockpit-terminal running at http://' + HOST + ':' + PORT);
+    console.log('local only — set CT_REMOTE=1 to reach it from your phone over Tailscale');
+  }
   console.log('shells:', SHELLS.map((s) => s.label).join(', '));
 });

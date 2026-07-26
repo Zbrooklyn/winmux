@@ -5,7 +5,7 @@
 Status: Phase 1 verified — 22/22 checks pass in the real app
 Version: v1.0
 Goal: The cockpit mockup, made real, around actual PowerShell — every visible control does something.
-Constraint: The server runs real shell commands, so it binds 127.0.0.1 only and is never exposed to the network.
+Constraint: The server runs real shell commands. It binds 127.0.0.1 only by default; remote access is opt-in, Tailscale-only, and token-gated.
 
 ## What this project is
 
@@ -17,7 +17,7 @@ at `http://127.0.0.1:8799`.
 **The scope is the mockup's terminal chrome, made real.** Nothing else.
 
 - `server.cjs` — static files locked to `public/`, plus a WebSocket at `/pty` that spawns one `node-pty`
-  shell per connection. Binds `127.0.0.1` only, deliberately, because it executes real commands.
+  shell per connection. Binds `127.0.0.1` only by default, deliberately, because it executes real commands.
 - `public/cockpit.css` — lines 8–399 of the mockup, verbatim. **Never edited.** It is the design contract.
 - `public/index.html` + `public/app.js` — the real app: the mockup's markup, wired to live terminals.
 
@@ -40,6 +40,22 @@ find in scrollback (Ctrl+F) · copy/paste · rename tab · context menus · broa
 settings (theme/font/cursor/scrollback/behaviour) · keyboard cheat sheet (F1) · diagnostics · notifications
 with badge · changes dock (git diff) · save/load layout · sidebar terminal list with live status deck ·
 light/dark themes.
+
+## Using it from your phone (off by default)
+
+Opening this page gives you a shell on this PC, so reaching it *is* controlling the machine. Two modes,
+nothing in between:
+
+- **Default** — `node server.cjs`. Binds `127.0.0.1`. Only this PC can open it. No password, because
+  nothing else can knock on the door.
+- **Remote** — `CT_REMOTE=1 node server.cjs`. Binds the **Tailscale address only** (never `0.0.0.0`);
+  if Tailscale isn't running it refuses to start rather than fall back to the open network. Every
+  request must carry a key. The console prints the exact link to open on your phone, e.g.
+  `http://100.120.237.49:8799/?k=<key>`. The key rotates each restart — set `CT_TOKEN` to pin it.
+
+Tailscale already encrypts the traffic and only admits your own devices; the key is the second lock in
+case a device is lost. **Verified:** without the key the page returns 401 and the shell websocket is
+refused; with it, a real PowerShell command ran on this machine from a phone-sized browser.
 
 ## Phase 1 — Remaining UI parity
 
@@ -71,7 +87,8 @@ Gate: each item works in the real app, measured (computed values), screenshot sh
 ## Decisions
 
 - Design contract (resolved: `public/cockpit.css` is the mockup verbatim and is never edited — all app-specific CSS lives in the `<style>` block in `index.html`)
-- Network exposure (resolved: 127.0.0.1 only, permanently — it runs real shell commands)
+- Network exposure (resolved: 127.0.0.1 only by default — it runs real shell commands)
+- Remote access (resolved: opt-in `CT_REMOTE=1`, binds the Tailscale address only and requires a key on every request; never `0.0.0.0`. Built and verified; turning it on is @edward's call, because the link is a shell on his PC)
 - Agent-cockpit features (declined: out of scope, see above)
 - Mockup's auto-drop tab limit (declined: it kills a running shell without asking)
 - Bell while you are watching the tab (resolved: logged to notifications only; the attention ring is reserved for a tab you are NOT watching, so it never nags about output you can already see)
