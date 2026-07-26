@@ -28,6 +28,9 @@ const OUT = path.join(ROOT, 'verify-out');
 // politely instead of taking the app down with it.
 const PORT_BUSY = 8799;
 const PORT_FREE = 9912;
+// The remote group opens the phone door for real, so it gets its own port —
+// sharing PORT_FREE would have two groups fighting over one phone switch.
+const PORT_REMOTE = 9911;
 
 const argv = process.argv.slice(2);
 const HEADED = argv.includes('--headed');
@@ -51,9 +54,9 @@ function inUse(host, port) {
   });
 }
 
-function get(url) {
+function get(url, headers) {
   return new Promise((res, rej) => {
-    http.get(url, (r) => {
+    http.get(url, { headers: headers || {} }, (r) => {
       let b = '';
       r.on('data', (d) => { b += d; });
       r.on('end', () => res({ status: r.statusCode, headers: r.headers, body: b }));
@@ -141,6 +144,21 @@ async function phoneCtx(browser) {
     isMobile: true, hasTouch: true, colorScheme: 'dark',
   });
   return ctx.newPage();
+}
+
+// A screenshot of the Phone tab is a photograph of a working key — the printed
+// link AND a QR anyone can scan. These images get shown to people, so blank
+// both before the shutter, and report whether anything key-shaped survived.
+async function redact(p) {
+  return p.evaluate(() => {
+    const u = document.querySelector('#phone-url');
+    if (u) u.textContent = 'http://100.x.x.x:0000/?k=<redacted>';
+    document.querySelectorAll('.phone-qr img').forEach((i) => {
+      i.removeAttribute('src');
+      i.style.background = '#2a2a2a';
+    });
+    return !/\?k=[a-f0-9]{32}/.test(document.body.innerHTML);
+  });
 }
 
 const settings = async (p, tab) => {
@@ -335,6 +353,7 @@ check('phone', PORT_FREE, async ({ browser, base, t, shot, skip }) => {
   const url = (await p.locator('#phone-url').textContent()).trim();
   t('the link is a tailnet URL carrying a key', /^http:\/\/100\.\d+\.\d+\.\d+:\d+\/\?k=[a-f0-9]{32}$/.test(url),
     url.replace(/k=.*/, 'k=…'));
+  t('the shot of the Phone tab carries no live key', await redact(p));
   await shot(p, 'phone-on');
 
   // The point of the whole feature: that link opens a real shell.
@@ -378,6 +397,86 @@ check('phone', PORT_FREE, async ({ browser, base, t, shot, skip }) => {
   try { const r = await p3.goto(url, { waitUntil: 'domcontentloaded', timeout: 8000 }); dead = !r || r.status() >= 400; }
   catch (e) { dead = true; }
   t('the old link is dead', dead);
+});
+
+// --- remote: the link works FROM the tailnet, and only with its key -------
+// Everything else talks to 127.0.0.1. This group talks to the Tailscale
+// address the way Edward's phone does, because that is the thing being
+// claimed, and a claim proved on the desk door is not proved at all.
+check('remote', PORT_REMOTE, async ({ browser, base, t, shot, skip }) => {
+  const ip = tailscaleIp();
+  if (!ip) return skip('Tailscale is not running on this PC');
+  if (await inUse(ip, PORT_REMOTE)) return skip('something already holds ' + ip + ':' + PORT_REMOTE);
+
+  // Open the phone door from the desk door — the only place allowed to.
+  const opened = JSON.parse((await post(base + '/api/phone', JSON.stringify({ on: true }))).body);
+  t('the desk door opened the phone door', opened.ok === true && opened.on === true);
+  const url = opened.url || '';
+  t('it handed back a tailnet link with a key',
+    new RegExp('^http://' + ip.replace(/\./g, '\\.') + ':' + PORT_REMOTE + '/\\?k=[a-f0-9]{32}$').test(url),
+    url.replace(/k=.*/, 'k=…'));
+  const key = (url.match(/k=([a-f0-9]{32})/) || [])[1];
+  const origin = 'http://' + ip + ':' + PORT_REMOTE;
+
+  try {
+    // The door is shut to anyone without the key — tested over the tailnet.
+    const bare = await get(origin + '/');
+    t('no key over the tailnet is refused', bare.status === 401, bare.status);
+    t('the refusal is plain English, not a stack trace', /needs its access key/.test(bare.body), bare.body.slice(0, 60));
+
+    const wrong = await get(origin + '/?k=' + 'f'.repeat(32));
+    t('a wrong key of the right length is refused', wrong.status === 401, wrong.status);
+    t('a wrong key sets no cookie', !wrong.headers['set-cookie']);
+
+    const right = await get(origin + '/?k=' + key);
+    t('the real key is let in', right.status === 200, right.status);
+    const cookie = String((right.headers['set-cookie'] || [])[0] || '');
+    t('it parks the key in an HttpOnly cookie', /^ct_k=[a-f0-9]{32};/.test(cookie) && /HttpOnly/.test(cookie));
+    t('the cookie is SameSite=Strict', /SameSite=Strict/.test(cookie));
+
+    // The cookie alone must carry the rest of the page, or the app is broken
+    // the moment the URL loses its ?k=.
+    const viaCookie = await get(origin + '/api/phone', { cookie: 'ct_k=' + key });
+    t('the cookie alone authenticates', viaCookie.status === 200, viaCookie.status);
+    t('the phone is told it may not flip the switch',
+      JSON.parse(viaCookie.body).canChange === false);
+
+    // A holder of the link can never widen their own access.
+    const widen = await post(origin + '/api/phone?k=' + key, JSON.stringify({ on: false }));
+    t('the phone door refuses to change the switch', widen.status === 403, widen.status);
+    t('the door is still open after the attempt',
+      JSON.parse((await get(base + '/api/phone')).body).on === true);
+
+    const qr = await get(origin + '/api/phone/qr?k=' + key);
+    t('the QR is a real SVG over the link', qr.status === 200 && /^<svg/.test(qr.body.trim()));
+
+    // The whole point: a phone-shaped browser, over the tailnet, running a
+    // real PowerShell command on this PC.
+    const p = await phoneCtx(browser);
+    await p.goto(url, { waitUntil: 'domcontentloaded' });
+    await p.waitForTimeout(5500);
+    await p.locator('.xterm-helper-textarea').first().focus();
+    await p.keyboard.type('"tailnet says " + $env:COMPUTERNAME');
+    await p.keyboard.press('Enter');
+    await p.waitForTimeout(3000);
+    const said = await p.evaluate(() =>
+      [].map.call(document.querySelectorAll('.xterm-rows > div'), (d) => d.textContent.trim())
+        .filter((r) => /tailnet says/.test(r)));
+    t('a real shell answers over the tailnet', said.some((r) => /tailnet says \w/i.test(r)), said);
+
+    // This screenshot gets shown to people, so the key must not be in it.
+    const clean = await redact(p);
+    t('no live key survives in the shipped screenshot', clean);
+    await shot(p, 'phone');
+  } finally {
+    await post(base + '/api/phone', JSON.stringify({ on: false }));
+  }
+
+  const shut = JSON.parse((await get(base + '/api/phone')).body);
+  t('the door is shut again at the end', shut.on === false);
+  let dead = false;
+  try { await get(origin + '/?k=' + key); } catch (e) { dead = true; }
+  t('the tailnet address stops answering entirely', dead);
 });
 
 // -------------------------------------------------------------------- main
