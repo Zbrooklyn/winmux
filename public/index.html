@@ -93,10 +93,47 @@
   .kvrow { display: flex; gap: 14px; padding: 7px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); font-size: 12.5px; }
   .kvrow .k { color: var(--faint); flex: 0 0 132px; }
   .kvrow .v { color: var(--text); word-break: break-all; }
+  /* Copy mode: the hint bar sits above the terminal, so the terminal starts lower.
+     (The mockup styles .term; our real terminal lives in .term-host.) */
+  .term-host.cm-on { top: 28px; }
+  .pane .pc-pin.on { color: var(--accent); }
+  /* Trying to close a pinned pane points at the pin rather than just refusing. */
+  .pane .pc-pin.flash { animation: pinflash .7s ease-out; }
+  @keyframes pinflash {
+    0%, 100% { color: var(--accent); transform: scale(1); }
+    18% { color: var(--err); transform: scale(1.35); }
+    46% { color: var(--err); transform: scale(1); }
+    68% { color: var(--err); transform: scale(1.25); }
+  }
+  /* Drag a tab onto a pane: the preview shows which half it would land in. */
+  .split-preview.sp-left { left: 6px; right: 50%; }
+  .split-preview.sp-right { left: 50%; right: 6px; }
+  .split-preview.sp-up { left: 6px; right: 6px; bottom: 50%; }
+  .split-preview.sp-down { left: 6px; right: 6px; top: 50%; }
+  .split-preview.sp-center { left: 6px; right: 6px; }
+  /* Phone layout: one pane at a time, and the chrome that needs width steps aside. */
+  .cockpit[data-mode="narrow"] #wsrow { flex-direction: column; }
+  .cockpit[data-mode="narrow"] #wsrow .wsdiv { display: none; }
+  .cockpit[data-mode="narrow"] #wsrow .wscol { display: none; }
+  .cockpit[data-mode="narrow"] #wsrow .wscol:has(> .pane.focused) { display: flex; }
+  .cockpit[data-mode="narrow"] #wsrow .pane:not(.focused) { display: none; }
+  .cockpit[data-mode="narrow"] .pc-rail,
+  .cockpit[data-mode="narrow"] .pc-dock,
+  .cockpit[data-mode="narrow"] .pc-split,
+  .cockpit[data-mode="narrow"] .pc-splitmenu,
+  .cockpit[data-mode="narrow"] .pc-pin,
+  .cockpit[data-mode="narrow"] .connpill { display: none !important; }
+  .cockpit[data-mode="narrow"] .sx-head #collapse-sidebar { display: none; }
+  .nbar .nm { margin-left: 2px; }
 </style>
 </head>
 <body>
 <div class="cockpit" id="root" data-mode="full" data-view="focus" data-dock="closed" data-sidebar="open">
+
+  <div class="nhead">
+    <span class="brand">cockpit<b>·</b>terminal</span>
+    <span class="live"><span class="pulse"></span><span id="nhead-live">1 running</span></span>
+  </div>
 
   <aside class="sessions">
     <div class="sx-head"><span>Terminals</span><span class="n" id="sx-count">1</span><span class="sxsp"></span>
@@ -164,6 +201,15 @@
   </div>
 
   <div class="npanel" id="npanel"></div>
+
+  <div class="sessmenu" id="sessmenu">
+    <div class="sm-title">Layouts</div>
+    <div class="sm-save">
+      <input class="sm-in" id="sm-name" placeholder="Name this layout" spellcheck="false" autocomplete="off">
+      <button class="sm-btn" id="sm-save">Save</button>
+    </div>
+    <div class="sm-list" id="sm-list"></div>
+  </div>
 
   <div class="ovl" id="settings-ovl">
     <div class="modal">

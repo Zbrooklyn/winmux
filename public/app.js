@@ -92,7 +92,22 @@
   var DOCK_SVG = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>';
   var FOLDER_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>';
 
+  var PIN_SVG = '<svg viewBox="0 0 24 24"><path d="M9 3h6M12 3v7M7 10h10l-1.6 4H8.6zM12 14v7"/></svg>';
+  var BACK_SVG = '<svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>';
+  var PPIN_SVG = '<svg class="ppin" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M9 2h6l-1 6 4 4H6l4-4z"/><path d="M11 12h2v9h-2z"/></svg>';
+
   var STATUS_COLOR = { working: 'var(--work)', needsyou: 'var(--err)', closed: 'var(--faint)', idle: 'transparent' };
+
+  // Each shell type gets its own mark, using the mockup's favicon colour classes.
+  var SHELL_FAV = {
+    powershell: ['fav-b', 'PS'], pwsh: ['fav-b', 'PS'], cmd: ['fav-m', 'C:'],
+    gitbash: ['fav-t', '$'], bash: ['fav-t', '$'], wsl: ['fav-d', '~'],
+  };
+  function favHTML(shellKey) {
+    var f = SHELL_FAV[shellKey] || ['fav-t', '&gt;_'];
+    return '<span class="tfav"><span class="fav ' + f[0] + '">' + f[1] + '</span>' +
+      '<span class="fdot" style="display:none"></span></span>';
+  }
 
   // ------------------------------------------------------------------ menus
   var openMenu = null;
@@ -130,7 +145,7 @@
     SHELLS.forEach(function (s) {
       var item = document.createElement('div');
       item.className = 'ofmi';
-      item.innerHTML = '<span class="tfav"><span class="fav fav-t">&gt;_</span></span><span class="nm">' + s.label + '</span>';
+      item.innerHTML = favHTML(s.key) + '<span class="nm">' + s.label + '</span>';
       item.addEventListener('click', function (e) { e.stopPropagation(); closeMenu(); fn(s.key); });
       m.appendChild(item);
     });
@@ -246,7 +261,7 @@
         var name = t.tabEl ? t.tabEl.querySelector('.tt').textContent : labelFor(t.shell);
         html += '<div class="prow" data-term="' + t.id + '"' + (on ? ' data-active' : '') + '>' +
           '<span class="pfolder">' + FOLDER_SVG + '<span class="pdot" style="background:' + (STATUS_COLOR[st] || 'transparent') + '"></span></span>' +
-          '<div class="pinfo"><div class="pname">' + esc(name) + '</div><div class="psub">' + esc(t.cwd || (t.state === 'closed' ? 'session ended' : 'connecting…')) + '</div></div>' +
+          '<div class="pinfo"><div class="pname">' + (p.pinned ? PPIN_SVG : '') + esc(name) + '</div><div class="psub">' + esc(t.cwd || (t.state === 'closed' ? 'session ended' : 'connecting…')) + '</div></div>' +
           '<span class="ptrail"><span class="pexpand" data-close="' + t.id + '" title="Close terminal">' + CLOSE_SVG + '</span></span>' +
           '</div>';
       });
@@ -256,6 +271,8 @@
     document.getElementById('d-need').textContent = String(counts.needsyou);
     document.getElementById('d-idle').textContent = String(counts.idle);
     if (countEl) countEl.textContent = String(totalTerms());
+    var live = document.getElementById('nhead-live');
+    if (live) { var n = totalTerms(); live.textContent = n + ' running'; }
   }
   sxList.addEventListener('click', function (e) {
     var x = e.target.closest ? e.target.closest('[data-close]') : null;
@@ -284,6 +301,8 @@
     clearZoom();
     focusPane(p.id);
     activateTerm(p, id);
+    // On a phone the list and the terminal are two screens — picking one opens it.
+    if (currentMode === 'narrow') setView('focus');
   }
 
   // --------------------------------------------------------- pane machinery
@@ -361,7 +380,7 @@
   }
   function paneById(id) { for (var i = 0; i < panes.length; i++) if (panes[i].id === id) return panes[i]; return null; }
 
-  function activateTerm(p, termId) {
+  function activateTerm(p, termId, cycling) {
     p.activeTermId = termId;
     p.terms.forEach(function (t) {
       var on = t.id === termId;
@@ -369,8 +388,10 @@
       if (on) t.tabEl.setAttribute('data-active', ''); else t.tabEl.removeAttribute('data-active');
       if (on) { try { t.fit.fit(); } catch (e) {} sendResize(t); t.term.focus(); if (t.status === 'needsyou') setStatus(t, 'idle'); }
     });
+    if (!cycling) touchMru(p, termId);
     reflect(p);
     updateFindCount(p);
+    layoutTabs(p);
     renderSidebar();
   }
 
@@ -388,28 +409,148 @@
     var idx = -1; for (var i = 0; i < p.terms.length; i++) if (p.terms[i].id === termId) { idx = i; break; }
     if (idx < 0) return;
     var t = p.terms[idx];
+    recordClosed(p, t);
+    clearTimeout(t.busyTimer); stopProg(t);
     try { t.ws.close(); } catch (e) {}
     try { t.term.dispose(); } catch (e) {}
     t.host.remove(); t.tabEl.remove();
     p.terms.splice(idx, 1);
+    var mi = p.mru.indexOf(termId); if (mi >= 0) p.mru.splice(mi, 1);
     if (p.terms.length === 0) {
-      if (panes.length > 1) { closePane(p); return; }
+      // A pinned pane survives its last tab — it gets a fresh shell instead of disappearing.
+      if (panes.length > 1 && !p.pinned) { closePane(p); return; }
       newTerm(p, startShell()); updateChrome(); return;
     }
-    if (p.activeTermId === termId) activateTerm(p, p.terms[Math.max(0, idx - 1)].id);
+    if (p.activeTermId === termId) {
+      var nextId = p.mru.length ? p.mru[0] : p.terms[Math.max(0, idx - 1)].id;
+      activateTerm(p, nextId);
+    }
+    layoutTabs(p);
     updateChrome();
   }
 
   function setStatus(t, s) {
     if (t.status === s) return;
     t.status = s;
-    if (t.dotEl) t.dotEl.style.background = STATUS_COLOR[s] || 'transparent';
+    // The tab's corner dot: hidden while idle, coloured by the mockup's own classes otherwise.
+    if (t.dotEl) {
+      t.dotEl.className = 'fdot' + (s === 'working' ? ' working' : (s === 'needsyou' ? ' needsyou' : (s === 'closed' ? ' error' : '')));
+      t.dotEl.style.display = (s === 'idle') ? 'none' : 'block';
+    }
+    if (s !== 'working') stopProg(t);
+    updateRings();
+    layoutTabs(paneById(t.paneId));
     renderSidebar();
   }
+  // The busy underline: a progress line that creeps toward full while output keeps arriving,
+  // completes to 100% when the shell falls quiet, then clears.
+  function stopProg(t) { clearInterval(t.progTimer); t.progTimer = null; }
   function markWorking(t) {
+    if (t.progEl && !t.progTimer) {
+      t.prog = 8;
+      t.progEl.style.width = '8%';
+      t.progTimer = setInterval(function () {
+        t.prog += (92 - t.prog) * 0.12;
+        t.progEl.style.width = t.prog.toFixed(1) + '%';
+      }, 220);
+    }
     if (t.status !== 'needsyou') setStatus(t, 'working');
     clearTimeout(t.busyTimer);
-    t.busyTimer = setTimeout(function () { if (t.status === 'working') setStatus(t, 'idle'); }, 1200);
+    t.busyTimer = setTimeout(function () {
+      stopProg(t);
+      if (t.progEl) t.progEl.style.width = '100%';
+      setTimeout(function () { if (!t.progTimer && t.progEl) t.progEl.style.width = '0'; }, 320);
+      if (t.status === 'working') setStatus(t, 'idle');
+    }, 1200);
+  }
+
+  // ------------------------------------------------------------- tab layer
+  // Which tabs are scrolled out of sight in this pane's tab strip.
+  function hiddenTabs(p) {
+    var sc = p.tabscroll, out = [];
+    var l = sc.scrollLeft, r = l + sc.clientWidth;
+    p.terms.forEach(function (t) {
+      var a = t.tabEl.offsetLeft, b = a + t.tabEl.offsetWidth;
+      if (a < l - 1 || b > r + 1) out.push(t);
+    });
+    return out;
+  }
+  function layoutTabs(p) {
+    if (!p || !p.ofBtn) return;
+    var h = hiddenTabs(p);
+    p.ofBtn.style.display = h.length ? 'flex' : 'none';
+    p.ofCount.textContent = String(h.length);
+    var needs = h.some(function (t) { return t.status === 'needsyou'; });
+    p.ofDot.style.display = needs ? 'block' : 'none';
+  }
+  function layoutAllTabs() { panes.forEach(layoutTabs); }
+  function showOverflowMenu(p) {
+    var m = newMenu();
+    var head = document.createElement('div');
+    head.className = 'ctxlabel'; head.textContent = 'Hidden tabs';
+    m.appendChild(head);
+    hiddenTabs(p).forEach(function (t) {
+      var item = document.createElement('div');
+      item.className = 'ofmi';
+      var nm = t.tabEl.querySelector('.tt').textContent;
+      item.innerHTML = favHTML(t.shell) + '<span class="nm">' + esc(nm) + '</span>' +
+        (t.status === 'needsyou' ? '<span class="kbd sm">needs you</span>' : '');
+      item.addEventListener('click', function (e) { e.stopPropagation(); closeMenu(); activateTerm(p, t.id); scrollTabIntoView(p, t); });
+      m.appendChild(item);
+    });
+    var r = p.ofBtn.getBoundingClientRect();
+    placeMenu(m, r.right - 220, r.bottom + 4);
+  }
+  function scrollTabIntoView(p, t) {
+    try { t.tabEl.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
+    layoutTabs(p);
+  }
+
+  // Most-recently-used order, per pane — what Ctrl+Tab walks.
+  function touchMru(p, id) {
+    if (!p) return;
+    var i = p.mru.indexOf(id);
+    if (i >= 0) p.mru.splice(i, 1);
+    p.mru.unshift(id);
+  }
+  var cycleOrder = null, cycleIdx = -1;
+  function cycleTab(dir) {
+    var p = paneById(activePaneId);
+    if (!p || p.terms.length < 2) return;
+    if (!cycleOrder) {
+      cycleOrder = p.mru.filter(function (id) { return p.terms.some(function (t) { return t.id === id; }); });
+      p.terms.forEach(function (t) { if (cycleOrder.indexOf(t.id) < 0) cycleOrder.push(t.id); });
+      cycleIdx = 0;
+    }
+    cycleIdx = (cycleIdx + dir + cycleOrder.length) % cycleOrder.length;
+    activateTerm(p, cycleOrder[cycleIdx], true);
+    var t = termById(cycleOrder[cycleIdx]);
+    if (t) scrollTabIntoView(p, t);
+  }
+  function endCycle() {
+    if (!cycleOrder) return;
+    cycleOrder = null; cycleIdx = -1;
+    var p = paneById(activePaneId);
+    if (p && p.activeTermId != null) touchMru(p, p.activeTermId);
+  }
+
+  // Closing a tab is undoable: Ctrl+Shift+T brings the last one back.
+  var closedStack = [];
+  function recordClosed(p, t) {
+    closedStack.push({
+      paneId: p.id, shell: t.shell, cwd: t.cwd,
+      name: t.renamed ? t.tabEl.querySelector('.tt').textContent : null,
+    });
+    if (closedStack.length > 20) closedStack.shift();
+  }
+  function reopenClosed() {
+    var d = closedStack.pop();
+    if (!d) return;
+    var p = paneById(d.paneId) || paneById(activePaneId) || panes[0];
+    if (!p) return;
+    var t = newTerm(p, d.shell, d.cwd);
+    if (d.name) { t.tabEl.querySelector('.tt').textContent = d.name; t.renamed = true; renderSidebar(); }
+    focusPane(p.id);
   }
 
   function startRename(t) {
@@ -460,17 +601,18 @@
     term.open(host);
     host.addEventListener('contextmenu', function (e) {
       e.preventDefault();
-      focusPane(p.id);
+      focusPane(t.paneId);
       if (S.rightClickPaste) { pasteInto(t); return; }
-      showTermMenu(p, t, e.clientX, e.clientY);
+      showTermMenu(pn(), t, e.clientX, e.clientY);
     });
     host.addEventListener('wheel', function (e) { if (!(e.ctrlKey || e.metaKey)) return; e.preventDefault(); setFontSize(S.fontSize + (e.deltaY < 0 ? 1 : -1)); }, { passive: false });
 
     var tabEl = document.createElement('div');
     tabEl.className = 'ptab';
-    tabEl.innerHTML = '<span class="tfav"><span class="fav fav-t">&gt;_</span></span>' +
-      '<span class="tdot" style="width:7px;height:7px;border-radius:50%;flex:0 0 auto;background:transparent"></span>' +
-      '<span class="tt">' + esc(labelFor(shellKey)) + '</span><span class="x" title="Close tab (Alt+W)">×</span>';
+    tabEl.draggable = true;
+    tabEl.innerHTML = favHTML(shellKey) +
+      '<span class="tt">' + esc(labelFor(shellKey)) + '</span><span class="x" title="Close tab (Alt+W)">×</span>' +
+      '<i class="tprog" style="width:0"></i>';
     p.tabscroll.appendChild(tabEl);
     var ttEl = tabEl.querySelector('.tt');
 
@@ -483,11 +625,14 @@
 
     var t = {
       id: id, paneId: p.id, term: term, fit: fit, search: search, ws: ws, host: host,
-      tabEl: tabEl, dotEl: tabEl.querySelector('.tdot'), state: 'idle', status: 'idle',
-      cwd: null, shell: shellKey, renamed: false, results: null, busyTimer: null,
+      tabEl: tabEl, dotEl: tabEl.querySelector('.fdot'), progEl: tabEl.querySelector('.tprog'),
+      state: 'idle', status: 'idle',
+      cwd: null, shell: shellKey, renamed: false, results: null, busyTimer: null, progTimer: null,
     };
+    // A tab can be dragged into another pane, so never close over `p` — look the pane up live.
+    function pn() { return paneById(t.paneId) || p; }
 
-    ws.onopen = function () { t.state = 'open'; if (p.activeTermId === id) reflect(p); sendResize(t); };
+    ws.onopen = function () { t.state = 'open'; if (pn().activeTermId === id) reflect(pn()); sendResize(t); };
     ws.onmessage = function (ev) {
       if (typeof ev.data === 'string') {
         var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
@@ -495,7 +640,7 @@
           if (m.error) {
             term.write('\r\n\x1b[31m' + m.error + '\x1b[0m\r\n');
             t.state = 'closed'; setStatus(t, 'closed');
-            if (p.activeTermId === id) reflect(p);
+            if (pn().activeTermId === id) reflect(pn());
           } else {
             if (m.shell && ttEl && !t.renamed) ttEl.textContent = m.shell;
             if (m.cwd) { t.cwd = m.cwd; if (!dockPath.value) dockPath.value = m.cwd; }
@@ -509,11 +654,11 @@
     };
     ws.onclose = function () {
       t.state = 'closed'; setStatus(t, 'closed');
-      if (p.activeTermId === id) reflect(p);
+      if (pn().activeTermId === id) reflect(pn());
       term.write('\r\n\x1b[90m[session ended]\x1b[0m\r\n');
       notify('Session ended', ttEl.textContent, id);
     };
-    ws.onerror = function () { t.state = 'closed'; setStatus(t, 'closed'); if (p.activeTermId === id) reflect(p); };
+    ws.onerror = function () { t.state = 'closed'; setStatus(t, 'closed'); if (pn().activeTermId === id) reflect(pn()); };
     term.onData(function (d) {
       if (broadcastOn) {
         allTerms().forEach(function (x) { if (x.ws.readyState === WebSocket.OPEN) x.ws.send(JSON.stringify({ t: 'i', d: d })); });
@@ -524,7 +669,7 @@
     // A real terminal bell (\a) from the shell = this terminal wants attention.
     try {
       term.onBell(function () {
-        var focused = (p.id === activePaneId && p.activeTermId === id && document.hasFocus());
+        var focused = (t.paneId === activePaneId && pn().activeTermId === id && document.hasFocus());
         // Every bell is logged so the notification centre is a real record; only an
         // unfocused terminal is escalated to "needs you" in the sidebar.
         if (!focused) setStatus(t, 'needsyou');
@@ -534,26 +679,27 @@
     try {
       search.onDidChangeResults(function (r) {
         t.results = r ? { index: r.resultIndex, count: r.resultCount } : null;
-        if (p.activeTermId === id) updateFindCount(p);
+        if (pn().activeTermId === id) updateFindCount(pn());
       });
     } catch (e) {}
     if (term.textarea) {
-      term.textarea.addEventListener('focus', function () { focusPane(p.id); });
+      term.textarea.addEventListener('focus', function () { focusPane(t.paneId); });
       // Copy-on-select is a real preference, applied on mouse-up inside the terminal.
       host.addEventListener('mouseup', function () { if (S.copyOnSelect) copySel(t); });
     }
 
     tabEl.addEventListener('click', function (e) {
-      focusPane(p.id);
-      if (e.target && e.target.classList.contains('x')) { e.stopPropagation(); askCloseTerm(p, id); }
-      else activateTerm(p, id);
+      focusPane(t.paneId);
+      if (e.target && e.target.classList.contains('x')) { e.stopPropagation(); askCloseTerm(pn(), id); }
+      else activateTerm(pn(), id);
     });
-    tabEl.addEventListener('mousedown', function (e) { if (e.button === 1) { e.preventDefault(); askCloseTerm(p, id); } });
+    tabEl.addEventListener('mousedown', function (e) { if (e.button === 1) { e.preventDefault(); askCloseTerm(pn(), id); } });
     tabEl.addEventListener('dblclick', function (e) {
       if (e.target && e.target.classList.contains('x')) return;
       e.preventDefault(); e.stopPropagation();
-      focusPane(p.id); activateTerm(p, id); startRename(t);
+      focusPane(t.paneId); activateTerm(pn(), id); startRename(t);
     });
+    wireTabDrag(t);
 
     p.terms.push(t);
     updateChrome();
@@ -633,6 +779,8 @@
   }
   function askClosePane(p) {
     if (panes.length <= 1) return;
+    // A pinned pane refuses to close — that is the whole point of pinning it.
+    if (p.pinned) { notify('Pane is pinned', 'Unpin it (Alt+P) before closing.'); flashPin(p); return; }
     var live = p.terms.filter(function (t) { return t.state === 'open'; }).length;
     if (S.confirmClose && live) {
       confirmDialog('Close this pane?', live + ' running terminal' + (live > 1 ? 's' : '') + ' will be ended.', 'Close pane', function () { closePane(p); });
@@ -657,15 +805,17 @@
     return np;
   }
 
-  function makePane(col, afterPane) {
+  function makePane(col, afterPane, before) {
     var id = ++paneSeq;
     var el = document.createElement('div');
-    el.className = 'pane';
+    el.className = 'pane npane';
     el.style.flex = '1 1 0';
     el.innerHTML =
+      '<div class="nbar"><span class="back">' + BACK_SVG + '<span>Terminals</span></span><span class="nm"></span></div>' +
       '<div class="ptabs">' +
         '<div class="pctrls"><span class="pc pc-rail" title="Toggle left sidebar (Ctrl+B)" role="button">' + RAIL_SVG + '</span></div>' +
         '<div class="tabscroll"></div>' +
+        '<div class="tab-of" title="Tabs that don\'t fit" role="button" style="display:none"><span class="ofc">0</span>' + CARET_SVG + '<span class="ofdot" style="display:none"></span></div>' +
         '<div class="connpill" data-state="idle"><span class="dot"></span><span class="conntext">connecting…</span></div>' +
         '<div class="pctrls">' +
           '<span class="pgroup"><span class="pc pc-new" title="New tab (Alt+T)" role="button">' + NEW_SVG + '</span>' +
@@ -673,12 +823,17 @@
           '<span class="pc pc-find" title="Find (Ctrl+F)" role="button">' + FIND_SVG + '</span>' +
           '<span class="pgroup"><span class="pc pc-split" title="Split right (Ctrl+D)" role="button">' + SPLIT_SVG + '</span>' +
           '<span class="pc pcaret pc-splitmenu" title="Split…" role="button">' + CARET_SVG + '</span></span>' +
+          '<span class="pc pc-pin" title="Pin pane (Alt+P)" role="button">' + PIN_SVG + '</span>' +
           '<span class="pc pc-zoom" title="Zoom pane (Ctrl+Shift+Enter)" role="button" style="display:none">' + ZOOM_SVG + '</span>' +
           '<span class="pc pc-close" title="Close pane (Alt+Shift+W)" role="button" style="display:none">' + CLOSE_SVG + '</span>' +
           '<span class="pc pc-dock" title="Toggle changes panel" role="button">' + DOCK_SVG + '</span>' +
         '</div>' +
       '</div>' +
-      '<div class="pbody"><div class="term-area"></div>' +
+      '<div class="pbody">' +
+        '<div class="copymode" style="display:none"><span class="cm-tag">COPY MODE</span>' +
+        '<span class="cm-hint">↑↓ PgUp/PgDn move · Space starts a selection · Enter copies · Esc exits</span></div>' +
+        '<div class="term-area"></div>' +
+        '<div class="split-preview" style="display:none"></div>' +
         '<div class="findbar">' +
           '<input type="text" placeholder="Find" spellcheck="false" />' +
           '<span class="fb-count"></span>' +
@@ -688,7 +843,10 @@
         '</div>' +
       '</div>';
 
-    if (afterPane) {
+    if (afterPane && before) {
+      col.insertBefore(el, afterPane.el);
+      col.insertBefore(makeDivider(true), afterPane.el);
+    } else if (afterPane) {
       var ref = afterPane.el.nextSibling;
       col.insertBefore(makeDivider(true), ref);
       col.insertBefore(el, ref);
@@ -715,7 +873,15 @@
       findbar: el.querySelector('.findbar'),
       findInput: el.querySelector('.findbar input'),
       findCount: el.querySelector('.fb-count'),
-      terms: [], activeTermId: null,
+      pinBtn: el.querySelector('.pc-pin'),
+      ofBtn: el.querySelector('.tab-of'),
+      ofCount: el.querySelector('.tab-of .ofc'),
+      ofDot: el.querySelector('.tab-of .ofdot'),
+      copybar: el.querySelector('.copymode'),
+      preview: el.querySelector('.split-preview'),
+      nbar: el.querySelector('.nbar'),
+      nbarName: el.querySelector('.nbar .nm'),
+      terms: [], activeTermId: null, mru: [], pinned: false,
     };
     p.railBtn.addEventListener('click', function (e) { e.stopPropagation(); toggleSidebar(); });
     p.newBtn.addEventListener('click', function () { focusPane(p.id); newTerm(p, startShell()); });
@@ -739,10 +905,194 @@
     el.querySelector('.fb-prev').addEventListener('click', function () { doFind(p, 'prev'); });
     el.querySelector('.fb-next').addEventListener('click', function () { doFind(p, 'next'); });
     el.querySelector('.fb-close').addEventListener('click', function () { closeFind(p); });
+    p.pinBtn.addEventListener('click', function (e) { e.stopPropagation(); togglePin(p); });
+    p.ofBtn.addEventListener('click', function (e) { e.stopPropagation(); focusPane(p.id); showOverflowMenu(p); });
+    p.tabscroll.addEventListener('scroll', function () { layoutTabs(p); });
+    el.querySelector('.nbar .back').addEventListener('click', function () { setView('projects'); });
+    wirePaneDrop(p);
 
     panes.push(p);
     updateChrome();
     return p;
+  }
+
+  // ------------------------------------------------------------- pane layer
+  // A pane holding a terminal that rang the bell gets the attention ring; the rest dim.
+  function updateRings() {
+    var any = false;
+    panes.forEach(function (p) {
+      var need = p.terms.some(function (t) { return t.status === 'needsyou'; });
+      if (need) { p.el.classList.add('nring'); any = true; } else p.el.classList.remove('nring');
+    });
+    if (any) wsrow.classList.add('has-ring'); else wsrow.classList.remove('has-ring');
+  }
+
+  function flashPin(p) {
+    if (!p.pinBtn) return;
+    p.pinBtn.classList.add('flash');
+    setTimeout(function () { p.pinBtn.classList.remove('flash'); }, 700);
+  }
+  // Pinning: this pane is not closed by accident.
+  function togglePin(p) {
+    p.pinned = !p.pinned;
+    if (p.pinned) p.pinBtn.classList.add('on'); else p.pinBtn.classList.remove('on');
+    p.pinBtn.title = (p.pinned ? 'Unpin pane' : 'Pin pane') + ' (Alt+P)';
+    renderSidebar();
+  }
+
+  // A column inserted next to an existing one, rather than always at the end.
+  function makeColAt(refCol, before) {
+    var col = document.createElement('div');
+    col.className = 'wscol';
+    col.style.flex = '1 1 0';
+    var div = makeDivider(false);
+    if (before) { wsrow.insertBefore(col, refCol); wsrow.insertBefore(div, refCol); }
+    else { wsrow.insertBefore(div, refCol.nextSibling); wsrow.insertBefore(col, div.nextSibling); }
+    return col;
+  }
+
+  // Moving a tab between panes re-parents the live terminal — the shell keeps running.
+  function moveTermToPane(t, np) {
+    var op = paneById(t.paneId);
+    if (!op || op === np) return;
+    var idx = op.terms.indexOf(t);
+    if (idx >= 0) op.terms.splice(idx, 1);
+    var mi = op.mru.indexOf(t.id); if (mi >= 0) op.mru.splice(mi, 1);
+    np.termArea.appendChild(t.host);
+    np.tabscroll.appendChild(t.tabEl);
+    t.paneId = np.id;
+    np.terms.push(t);
+    if (op.terms.length === 0) {
+      if (panes.length > 1 && !op.pinned) closePane(op);
+      else newTerm(op, startShell());
+    } else if (op.activeTermId === t.id) {
+      activateTerm(op, op.mru.length ? op.mru[0] : op.terms[0].id);
+    }
+    activateTerm(np, t.id);
+    focusPane(np.id);
+    updateChrome();
+    resetFlex();
+    panes.forEach(fitActive);
+    layoutAllTabs();
+  }
+
+  // ---- drag a tab onto a pane -------------------------------------------
+  var dragTerm = null;
+  function wireTabDrag(t) {
+    t.tabEl.addEventListener('dragstart', function (e) {
+      dragTerm = t;
+      t.tabEl.classList.add('dragging');
+      try { e.dataTransfer.setData('text/plain', String(t.id)); e.dataTransfer.effectAllowed = 'move'; } catch (err) {}
+    });
+    t.tabEl.addEventListener('dragend', function () {
+      dragTerm = null;
+      t.tabEl.classList.remove('dragging');
+      panes.forEach(clearDropUI);
+    });
+  }
+  function clearDropUI(p) {
+    p.el.classList.remove('drop');
+    if (p.preview) { p.preview.style.display = 'none'; p.preview.className = 'split-preview'; }
+  }
+  var ZONE_LABEL = { left: 'Split left', right: 'Split right', up: 'Split up', down: 'Split down', center: 'Move here' };
+  function dropZone(p, e) {
+    var r = p.el.getBoundingClientRect();
+    var x = (e.clientX - r.left) / r.width;
+    var y = (e.clientY - r.top) / r.height;
+    if (x < 0.25) return 'left';
+    if (x > 0.75) return 'right';
+    if (y < 0.25) return 'up';
+    if (y > 0.75) return 'down';
+    return 'center';
+  }
+  function wirePaneDrop(p) {
+    p.el.addEventListener('dragover', function (e) {
+      if (!dragTerm) return;
+      e.preventDefault();
+      try { e.dataTransfer.dropEffect = 'move'; } catch (err) {}
+      var z = dropZone(p, e);
+      p.el.classList.add('drop');
+      p.preview.className = 'split-preview sp-' + z;
+      p.preview.textContent = ZONE_LABEL[z];
+      p.preview.style.display = 'flex';
+    });
+    p.el.addEventListener('dragleave', function (e) {
+      if (p.el.contains(e.relatedTarget)) return;
+      clearDropUI(p);
+    });
+    p.el.addEventListener('drop', function (e) {
+      if (!dragTerm) return;
+      e.preventDefault();
+      var t = dragTerm, z = dropZone(p, e);
+      clearDropUI(p);
+      dragTerm = null;
+      t.tabEl.classList.remove('dragging');
+      if (z === 'center') { moveTermToPane(t, p); return; }
+      // Same pane, only tab, nothing to split into — leave it alone.
+      if (t.paneId === p.id && p.terms.length === 1) return;
+      clearZoom();
+      var np;
+      if (z === 'left' || z === 'right') np = makePane(makeColAt(p.col, z === 'left'));
+      else np = makePane(p.col, p, z === 'up');
+      moveTermToPane(t, np);
+    });
+  }
+
+  // ---- copy mode ---------------------------------------------------------
+  var copyMode = null;
+  function copyLines(t) { try { return t.term.buffer.active.length; } catch (e) { return 0; } }
+  function enterCopyMode() {
+    var p = paneById(activePaneId); if (!p) return;
+    var t = activeTermOf(p); if (!t) return;
+    if (copyMode) exitCopyMode();
+    var b = t.term.buffer.active;
+    copyMode = { p: p, t: t, line: b.viewportY + b.cursorY, anchor: null };
+    p.copybar.style.display = 'flex';
+    t.host.classList.add('cm-on');
+    try { t.fit.fit(); sendResize(t); } catch (e) {}
+    paintCopy();
+  }
+  function exitCopyMode() {
+    if (!copyMode) return;
+    var c = copyMode; copyMode = null;
+    c.p.copybar.style.display = 'none';
+    c.t.host.classList.remove('cm-on');
+    try { c.t.term.clearSelection(); } catch (e) {}
+    try { c.t.fit.fit(); sendResize(c.t); c.t.term.focus(); } catch (e) {}
+  }
+  function paintCopy() {
+    if (!copyMode) return;
+    var c = copyMode;
+    var hint = c.p.copybar.querySelector('.cm-hint');
+    var max = copyLines(c.t) - 1;
+    c.line = Math.max(0, Math.min(c.line, max));
+    // Keep the cursor line on screen.
+    var b = c.t.term.buffer.active;
+    var rows = c.t.term.rows;
+    if (c.line < b.viewportY) { try { c.t.term.scrollToLine(c.line); } catch (e) {} }
+    else if (c.line > b.viewportY + rows - 1) { try { c.t.term.scrollToLine(c.line - rows + 1); } catch (e) {} }
+    if (c.anchor == null) {
+      try { c.t.term.selectLines(c.line, c.line); } catch (e) {}
+      hint.textContent = 'line ' + (c.line + 1) + ' of ' + (max + 1) + ' · ↑↓ PgUp/PgDn move · Space starts a selection · Esc exits';
+    } else {
+      var a = Math.min(c.anchor, c.line), z = Math.max(c.anchor, c.line);
+      try { c.t.term.selectLines(a, z); } catch (e) {}
+      hint.textContent = (z - a + 1) + ' line' + (z - a ? 's' : '') + ' selected · Enter copies · Esc cancels';
+    }
+  }
+  function copyModeKey(e) {
+    var c = copyMode, rows = c.t.term.rows;
+    var k = e.key;
+    if (k === 'Escape') { exitCopyMode(); return true; }
+    if (k === 'ArrowUp' || k === 'k') { c.line--; paintCopy(); return true; }
+    if (k === 'ArrowDown' || k === 'j') { c.line++; paintCopy(); return true; }
+    if (k === 'PageUp') { c.line -= rows; paintCopy(); return true; }
+    if (k === 'PageDown') { c.line += rows; paintCopy(); return true; }
+    if (k === 'Home') { c.line = 0; paintCopy(); return true; }
+    if (k === 'End') { c.line = copyLines(c.t) - 1; paintCopy(); return true; }
+    if (k === ' ' || k === 'v') { c.anchor = (c.anchor == null) ? c.line : null; paintCopy(); return true; }
+    if (k === 'Enter' || k === 'y') { copySel(c.t); exitCopyMode(); return true; }
+    return true; // swallow everything else so keys never reach the shell
   }
 
   // ------------------------------------------------------------- broadcast
@@ -902,56 +1252,76 @@
     if (panes[0]) focusPane(panes[0].id);
     setTimeout(function () { panes.forEach(fitActive); }, 60);
   }
-  function saveLayoutDialog() {
-    var body = document.getElementById('dlg-body');
-    var def = 'Layout ' + (layouts().length + 1);
-    body.innerHTML = '<h3>Save layout</h3><p>Stores the current panes, tabs, shells and folders so you can bring them back.</p>' +
-      '<input class="din" id="dlg-name" value="' + esc(def) + '" spellcheck="false">' +
-      '<div class="drow"><span class="btn" data-cancel>Cancel</span><span class="btn primary" data-ok>Save</span></div>';
-    openOvl('dlg-ovl');
-    var input = document.getElementById('dlg-name');
-    input.focus(); input.select();
-    input.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Enter') doSave(); });
-    body.querySelector('[data-cancel]').addEventListener('click', function () { closeOvl('dlg-ovl'); });
-    body.querySelector('[data-ok]').addEventListener('click', doSave);
-    function doSave() {
-      var name = (input.value || def).trim();
-      var list = layouts().filter(function (l) { return l.name !== name; });
-      list.unshift({ name: name, when: Date.now(), desc: snapshot() });
-      try { localStorage.setItem('ct-layouts', JSON.stringify(list.slice(0, 20))); } catch (e) {}
-      closeOvl('dlg-ovl');
-      notify('Layout saved', name);
-    }
-  }
-  function loadLayoutDialog() {
+  // Layouts live in a small popover anchored to the sidebar button — saving and
+  // loading are the same short list, so they are one surface, not two modals.
+  var sessmenu = document.getElementById('sessmenu');
+  var smName = document.getElementById('sm-name');
+  var smList = document.getElementById('sm-list');
+  function writeLayouts(list) { try { localStorage.setItem('ct-layouts', JSON.stringify(list.slice(0, 20))); } catch (e) {} }
+  function renderLayouts() {
     var list = layouts();
-    var body = document.getElementById('dlg-body');
-    var rows = list.length
-      ? '<div class="llist">' + list.map(function (l, i) {
-          var n = l.desc.cols.reduce(function (a, c) { return a + c.reduce(function (b, p) { return b + p.tabs.length; }, 0); }, 0);
-          return '<div class="lrow" data-i="' + i + '"><span>' + esc(l.name) + '</span><span class="lsub">' + n + ' tabs · ' + ago(l.when) + '</span><span class="ldel" data-del="' + i + '" title="Delete">×</span></div>';
-        }).join('') + '</div>'
-      : '<p style="margin-top:10px">No saved layouts yet — use Save layout (Ctrl+Alt+S) first.</p>';
-    body.innerHTML = '<h3>Load layout</h3><p>Rebuilds the panes and tabs. Terminals running now will be closed.</p>' + rows +
-      '<div class="drow"><span class="btn" data-cancel>Cancel</span></div>';
-    openOvl('dlg-ovl');
-    body.querySelector('[data-cancel]').addEventListener('click', function () { closeOvl('dlg-ovl'); });
-    body.addEventListener('click', function (e) {
-      var del = e.target.closest ? e.target.closest('[data-del]') : null;
-      if (del) {
-        e.stopPropagation();
-        var li = layouts(); li.splice(parseInt(del.getAttribute('data-del'), 10), 1);
-        try { localStorage.setItem('ct-layouts', JSON.stringify(li)); } catch (er) {}
-        loadLayoutDialog();
-        return;
-      }
-      var row = e.target.closest ? e.target.closest('[data-i]') : null;
-      if (!row) return;
-      var l = layouts()[parseInt(row.getAttribute('data-i'), 10)];
-      closeOvl('dlg-ovl');
-      if (l) restoreLayout(l.desc);
-    });
+    if (!list.length) { smList.innerHTML = '<div class="sm-empty">No saved layouts yet. Name this one and hit Save.</div>'; return; }
+    smList.innerHTML = list.map(function (l, i) {
+      var n = l.desc.cols.reduce(function (a, c) { return a + c.reduce(function (b, p) { return b + p.tabs.length; }, 0); }, 0);
+      return '<div class="sm-row" data-i="' + i + '" role="button" title="Restore this layout">' +
+        '<span class="sm-nm">' + esc(l.name) + '</span>' +
+        '<span class="sm-sub">' + n + ' tab' + (n === 1 ? '' : 's') + ' · ' + ago(l.when) + '</span>' +
+        '<span class="sm-del" data-del="' + i + '" title="Delete layout">×</span></div>';
+    }).join('');
   }
+  function openLayoutMenu(anchor) {
+    renderLayouts();
+    smName.value = 'Layout ' + (layouts().length + 1);
+    sessmenu.setAttribute('data-open', '');
+    if (anchor) {
+      var r = anchor.getBoundingClientRect();
+      sessmenu.style.left = Math.round(r.right + 8) + 'px';
+      sessmenu.style.top = Math.min(window.innerHeight - 320, Math.round(r.top)) + 'px';
+    }
+    smName.focus(); smName.select();
+  }
+  function closeLayoutMenu() { sessmenu.removeAttribute('data-open'); }
+  function toggleLayoutMenu(anchor) {
+    if (sessmenu.hasAttribute('data-open')) closeLayoutMenu(); else openLayoutMenu(anchor);
+  }
+  function doSaveLayout() {
+    var name = (smName.value || ('Layout ' + (layouts().length + 1))).trim();
+    if (!name) return;
+    var list = layouts().filter(function (l) { return l.name !== name; });
+    list.unshift({ name: name, when: Date.now(), desc: snapshot() });
+    writeLayouts(list);
+    renderLayouts();
+    smName.value = '';
+    notify('Layout saved', name);
+  }
+  document.getElementById('sm-save').addEventListener('click', doSaveLayout);
+  smName.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Enter') doSaveLayout(); if (e.key === 'Escape') closeLayoutMenu(); });
+  smList.addEventListener('click', function (e) {
+    var del = e.target.closest ? e.target.closest('[data-del]') : null;
+    if (del) {
+      e.stopPropagation();
+      var li = layouts(); li.splice(parseInt(del.getAttribute('data-del'), 10), 1);
+      writeLayouts(li); renderLayouts();
+      return;
+    }
+    var row = e.target.closest ? e.target.closest('[data-i]') : null;
+    if (!row) return;
+    var l = layouts()[parseInt(row.getAttribute('data-i'), 10)];
+    if (!l) return;
+    closeLayoutMenu();
+    // Restoring ends whatever is running now, so it asks first.
+    var live = allTerms().filter(function (t) { return t.state === 'open'; }).length;
+    if (S.confirmClose && live) {
+      confirmDialog('Restore “' + l.name + '”?', live + ' running terminal' + (live > 1 ? 's' : '') + ' will be ended and the saved panes rebuilt.', 'Restore layout', function () { restoreLayout(l.desc); });
+    } else restoreLayout(l.desc);
+  });
+  document.addEventListener('mousedown', function (e) {
+    if (!sessmenu.hasAttribute('data-open')) return;
+    if (sessmenu.contains(e.target) || (e.target.closest && e.target.closest('#open-save,#open-load'))) return;
+    closeLayoutMenu();
+  });
+  function saveLayoutDialog() { openLayoutMenu(document.getElementById('open-save')); }
+  function loadLayoutDialog() { openLayoutMenu(document.getElementById('open-load')); }
 
   // ------------------------------------------------------------- settings UI
   var SETTABS = ['Appearance', 'Terminal', 'Behaviour', 'Shortcuts', 'About'];
@@ -1041,15 +1411,17 @@
   // ------------------------------------------------------------ cheat sheet
   var KEYS = [
     ['New tab', 'Alt+T'], ['Close tab', 'Alt+W'], ['Select tab 1–9', 'Alt+1…9'],
+    ['Switch tabs (recent first)', 'Ctrl+Tab'], ['Reopen closed tab', 'Ctrl+Shift+T'],
     ['Split right', 'Ctrl+D'], ['Split down', 'Ctrl+Shift+D'], ['Zoom pane', 'Ctrl+Shift+Enter'],
-    ['Close pane', 'Alt+Shift+W'], ['Broadcast input', 'Ctrl+Alt+B'],
-    ['Find in terminal', 'Ctrl+F'], ['Copy / Paste', 'Ctrl+Shift+C / V'], ['Font size', 'Ctrl+= / − / 0'],
+    ['Pin pane', 'Alt+P'], ['Close pane', 'Alt+Shift+W'], ['Broadcast input', 'Ctrl+Alt+B'],
+    ['Find in terminal', 'Ctrl+F'], ['Copy mode (select with keys)', 'Ctrl+Shift+M'],
+    ['Copy / Paste', 'Ctrl+Shift+C / V'], ['Font size', 'Ctrl+= / − / 0'],
     ['Toggle sidebar', 'Ctrl+B'], ['Changes panel', 'Ctrl+Alt+D'], ['Notifications', 'Ctrl+Alt+N'],
     ['Command palette', 'Ctrl+Shift+P'], ['Settings', 'Ctrl+,'],
     ['Save layout', 'Ctrl+Alt+S'], ['Load layout', 'Ctrl+Alt+O'], ['Keyboard shortcuts', 'F1'],
   ];
   var CHEAT = {
-    Tabs: KEYS.slice(0, 3), Panes: KEYS.slice(3, 8), Terminal: KEYS.slice(8, 11), View: KEYS.slice(11),
+    Tabs: KEYS.slice(0, 5), Panes: KEYS.slice(5, 11), Terminal: KEYS.slice(11, 15), View: KEYS.slice(15),
   };
   function openCheat() {
     document.getElementById('cheat-body').innerHTML = '<h2>Keyboard shortcuts</h2>' +
@@ -1101,9 +1473,12 @@
       { cat: 'Terminal', name: 'Paste', kbd: 'Ctrl+Shift+V', run: function () { var t = activeTerm(); if (t) pasteInto(t); } },
       { cat: 'Terminal', name: 'Rename tab', run: function () { var t = activeTerm(); if (t) startRename(t); } },
       { cat: 'Terminal', name: 'Find in terminal', kbd: 'Ctrl+F', run: function () { var p = paneById(activePaneId); if (p) openFind(p); } },
+      { cat: 'Terminal', name: 'Copy mode — select scrollback with the keyboard', kbd: 'Ctrl+Shift+M', run: enterCopyMode },
+      { cat: 'Terminal', name: 'Reopen closed tab', kbd: 'Ctrl+Shift+T', run: reopenClosed },
       { cat: 'Pane', name: 'Split right', kbd: 'Ctrl+D', run: function () { var p = paneById(activePaneId); if (p) splitRight(p, startShell()); } },
       { cat: 'Pane', name: 'Split down', kbd: 'Ctrl+Shift+D', run: function () { var p = paneById(activePaneId); if (p) splitDown(p, startShell()); } },
       { cat: 'Pane', name: 'Zoom pane', kbd: 'Ctrl+Shift+Enter', run: function () { var p = paneById(activePaneId); if (p) toggleZoom(p); } },
+      { cat: 'Pane', name: (function () { var p = paneById(activePaneId); return p && p.pinned ? 'Unpin pane' : 'Pin pane (protect it from closing)'; })(), kbd: 'Alt+P', run: function () { var p = paneById(activePaneId); if (p) togglePin(p); } },
       { cat: 'Pane', name: 'Close pane', kbd: 'Alt+Shift+W', run: function () { var p = paneById(activePaneId); if (p) askClosePane(p); } },
       { cat: 'Pane', name: broadcastOn ? 'Stop broadcasting input' : 'Broadcast input to all terminals', kbd: 'Ctrl+Alt+B', run: function () { setBroadcast(!broadcastOn); } },
       { cat: 'View', name: 'Toggle sidebar', kbd: 'Ctrl+B', run: toggleSidebar },
@@ -1170,8 +1545,8 @@
   document.getElementById('open-palette').addEventListener('click', openPalette);
   document.getElementById('open-notif').addEventListener('click', function (e) { e.stopPropagation(); toggleNotif(e.currentTarget); });
   document.getElementById('open-new').addEventListener('click', function () { var p = paneById(activePaneId) || panes[0]; if (p) { newTerm(p, startShell()); focusPane(p.id); } });
-  document.getElementById('open-save').addEventListener('click', saveLayoutDialog);
-  document.getElementById('open-load').addEventListener('click', loadLayoutDialog);
+  document.getElementById('open-save').addEventListener('click', function (e) { toggleLayoutMenu(e.currentTarget); });
+  document.getElementById('open-load').addEventListener('click', function (e) { toggleLayoutMenu(e.currentTarget); });
   document.getElementById('open-diag').addEventListener('click', openDiag);
   document.getElementById('open-help').addEventListener('click', openCheat);
   document.getElementById('open-settings').addEventListener('click', function () { openSettings(); });
@@ -1187,6 +1562,8 @@
     var tgt = e.target;
     var inField = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'SELECT' || (tgt.tagName === 'TEXTAREA' && !tgt.classList.contains('xterm-helper-textarea')));
     if (e.key === 'Escape') {
+      if (copyMode) { exitCopyMode(); e.preventDefault(); return; }
+      if (sessmenu.hasAttribute('data-open')) { closeLayoutMenu(); e.preventDefault(); return; }
       if (openMenu) { closeMenu(); e.preventDefault(); return; }
       if (plWrap.hasAttribute('data-open')) { closePalette(); e.preventDefault(); return; }
       if (npanel.hasAttribute('data-open')) { npanel.removeAttribute('data-open'); e.preventDefault(); return; }
@@ -1199,6 +1576,14 @@
     var p = paneById(activePaneId);
     var ctrl = e.ctrlKey || e.metaKey;
     function stop() { e.preventDefault(); e.stopPropagation(); }
+
+    // Copy mode owns the keyboard entirely while it is on.
+    if (copyMode) { stop(); copyModeKey(e); return; }
+    // Ctrl+Tab walks the most-recently-used order until Ctrl is released.
+    if (ctrl && e.key === 'Tab') { stop(); cycleTab(e.shiftKey ? -1 : 1); return; }
+    if (ctrl && e.shiftKey && (e.key === 'T' || e.key === 't')) { stop(); reopenClosed(); return; }
+    if (ctrl && e.shiftKey && (e.key === 'M' || e.key === 'm')) { stop(); enterCopyMode(); return; }
+    if (e.altKey && !ctrl && !e.shiftKey && (e.key === 'p' || e.key === 'P')) { stop(); if (p) togglePin(p); return; }
 
     if (e.key === 'F1') { stop(); openCheat(); return; }
     if (ctrl && e.shiftKey && (e.key === 'P' || e.key === 'p')) { stop(); openPalette(); return; }
@@ -1227,11 +1612,49 @@
       return;
     }
   }, true);
+  // Releasing Ctrl commits whatever tab Ctrl+Tab landed on to the top of the MRU.
+  document.addEventListener('keyup', function (e) { if (e.key === 'Control' || e.key === 'Meta') endCycle(); }, true);
+  window.addEventListener('blur', endCycle);
 
+  // --------------------------------------------------------- responsive mode
+  // Three shapes, same app: full desktop · half-width (tabs collapse to icons) ·
+  // phone (one screen at a time — the terminal list, or one terminal full-screen).
+  var currentMode = null;
+  function modeFor(w) { return w <= 620 ? 'narrow' : (w < 1120 ? 'half' : 'full'); }
+  function setView(v) {
+    root.setAttribute('data-view', v);
+    if (v === 'focus') {
+      var p = paneById(activePaneId);
+      if (p) { paintNbar(p); setTimeout(function () { fitActive(p); }, 30); }
+    }
+  }
+  function paintNbar(p) {
+    if (!p || !p.nbarName) return;
+    var t = activeTermOf(p);
+    p.nbarName.textContent = t ? t.tabEl.querySelector('.tt').textContent : 'Terminal';
+  }
+  function applyMode() {
+    var m = modeFor(window.innerWidth);
+    if (m === currentMode) { if (m === 'narrow') paintNbar(paneById(activePaneId)); return; }
+    currentMode = m;
+    root.setAttribute('data-mode', m);
+    if (m === 'narrow') {
+      // One terminal open? Go straight to it — a list of one costs a pointless tap.
+      setView(totalTerms() > 1 ? 'projects' : 'focus');
+      // On a phone the changes dock and the split chrome have nowhere to live.
+      clearZoom();
+      if (copyMode) exitCopyMode();
+    } else {
+      root.removeAttribute('data-view');
+    }
+    layoutAllTabs();
+    setTimeout(function () { panes.forEach(fitActive); }, 40);
+  }
   var resizeTimer;
   window.addEventListener('resize', function () {
+    applyMode();
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(function () { panes.forEach(fitActive); }, 80);
+    resizeTimer = setTimeout(function () { panes.forEach(fitActive); layoutAllTabs(); }, 80);
   });
   if (window.matchMedia) {
     try { window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function () { if (S.theme === 'system') applyTheme('system'); }); } catch (e) {}
@@ -1249,4 +1672,6 @@
   var first = makePane(makeCol());
   newTerm(first, startShell());
   focusPane(first.id);
+  applyMode();
+  setTimeout(layoutAllTabs, 100);
 })();
