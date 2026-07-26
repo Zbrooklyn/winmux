@@ -1,4 +1,4 @@
-// Cockpit terminal — the mockup's full chrome, wired to real shells.
+// WinMux — the mockup's full chrome, wired to real shells.
 // Every control here does something real: no decorative buttons.
 (function () {
   var root = document.getElementById('root');
@@ -1358,8 +1358,8 @@
       return KEYS.map(function (k) { return frow(k[0], '', '<span class="kbd">' + k[1] + '</span>'); }).join('') +
         '<div style="margin-top:14px"><span class="btn" data-act="cheat">Open the full list (F1)</span></div>';
     }
-    return '<div style="font-size:13px;margin-bottom:6px">cockpit-terminal v1.0</div>' +
-      '<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:14px">Runs real shells on this machine. It always listens on 127.0.0.1, where only this PC can reach it. Reaching it from your phone is off until you switch it on in Settings → Phone.</div>' +
+    return '<div style="font-size:13px;margin-bottom:6px">WinMux v1.0</div>' +
+      '<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:14px">A terminal multiplexer for Windows. Runs real shells on this machine. It always listens on 127.0.0.1, where only this PC can reach it. Reaching it from your phone is off until you switch it on in Settings → Phone.</div>' +
       '<div><span class="btn" data-act="diag">Diagnostics</span> <span class="btn" data-act="reset">Reset settings</span></div>';
   }
 
@@ -1368,6 +1368,7 @@
   // plain words and the state always comes from the server, never a local guess.
   var phoneS = null;              // last state from /api/phone, or null while loading
   var phoneBusy = false;
+  var phoneErr = '';              // why the last flip failed, shown next to the switch
   function phonePane() {
     if (!phoneS) return '<div style="font-size:12.5px;color:var(--muted)">Checking…</div>';
     var p = phoneS;
@@ -1379,6 +1380,9 @@
       : 'Off — this window works on this PC only.';
     var out = frow('Use on my phone', hint,
       '<span class="sw ' + (p.on ? 'on' : '') + (canFlip ? '' : ' off-disabled') + '" data-phone-toggle role="button" aria-label="Use on my phone"></span>');
+    // A switch that refuses to move has to say why right here — the person is
+    // looking at this panel, not at the notification bell.
+    if (phoneErr) out += '<div class="phone-err" id="phone-err" role="alert">' + esc(phoneErr) + '</div>';
     if (p.on) {
       out += '<div class="phone-live">' +
         '<div class="phone-qr"><img alt="Scan to open on your phone" src="/api/phone/qr?t=' + Date.now() + '"></div>' +
@@ -1399,21 +1403,29 @@
       phoneS = j; if (then) then(); else if (curSet === 'Phone') renderSettings();
     }).catch(function () { phoneS = { on: false, canChange: true, tailscale: false }; if (curSet === 'Phone') renderSettings(); });
   }
+  // One place to fail: the reason goes on screen where the switch is, AND into the
+  // bell, so it is still there if the person has already walked away from the panel.
+  function phoneFail(msg) {
+    phoneErr = msg;
+    notify('Phone access did not change', msg);
+    if (curSet === 'Phone') renderSettings();
+  }
   function flipPhone() {
     if (phoneBusy || !phoneS || !phoneS.canChange) return;
-    if (!phoneS.on && !phoneS.tailscale) { notify('Tailscale is not running', 'Start Tailscale on this PC, then try again.'); return; }
+    if (!phoneS.on && !phoneS.tailscale) { phoneFail('Tailscale is not running on this PC. Start Tailscale, then try again.'); return; }
     phoneBusy = true;
+    phoneErr = '';
     fetch('/api/phone', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: !phoneS.on }) })
       .then(function (r) { return r.json(); })
       .then(function (j) {
         phoneBusy = false;
-        if (!j.ok) { notify('Could not turn phone access on', j.error || 'Unknown error'); return; }
+        if (!j.ok) { phoneFail(j.error || 'Unknown error'); return; }
         phoneS = j;
         renderSettings();
         notify(j.on ? 'Phone access is on' : 'Phone access is off',
           j.on ? 'Scan the square in Settings → Phone.' : 'The link no longer works.');
       })
-      .catch(function (e) { phoneBusy = false; notify('Could not change phone access', String(e.message || e)); });
+      .catch(function (e) { phoneBusy = false; phoneFail(String(e.message || e)); });
   }
   function renderSettings() {
     document.getElementById('settings-tabs').innerHTML = SETTABS.map(function (t) {
@@ -1422,7 +1434,9 @@
     document.getElementById('settings-pane').innerHTML = '<h3>' + curSet + '</h3>' + settingsPane(curSet);
   }
   function openSettings(tab) {
-    curSet = tab || curSet; renderSettings(); openOvl('settings-ovl');
+    curSet = tab || curSet;
+    if (curSet === 'Phone') phoneErr = '';
+    renderSettings(); openOvl('settings-ovl');
     if (curSet === 'Phone') loadPhone();
   }
   document.getElementById('settings-tabs').addEventListener('click', function (e) {
@@ -1430,7 +1444,7 @@
     if (!tab) return;
     curSet = tab.getAttribute('data-settab');
     // The switch must reflect the server, not whatever it looked like last time.
-    if (curSet === 'Phone') { phoneS = null; renderSettings(); loadPhone(); return; }
+    if (curSet === 'Phone') { phoneS = null; phoneErr = ''; renderSettings(); loadPhone(); return; }
     renderSettings();
   });
   document.getElementById('settings-pane').addEventListener('click', function (e) {

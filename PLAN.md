@@ -1,6 +1,6 @@
-# cockpit-terminal — PLAN
+# WinMux — PLAN
 
-> A real terminal for Windows that wears the wmux cockpit design.
+> A real terminal multiplexer for Windows that wears the wmux cockpit design.
 
 Status: Phase 1 verified — 22/22 checks pass in the real app
 Version: v1.0
@@ -9,7 +9,7 @@ Constraint: The server runs real shell commands. It binds 127.0.0.1 always; phon
 
 ## What this project is
 
-`cockpit-terminal` takes the design mockup at `wmux-amirlehmam/design-spec/cockpit.html` — which is a
+`WinMux` takes the design mockup at `wmux-amirlehmam/design-spec/cockpit.html` — which is a
 click-through demo with fake terminal rows — and makes it a working terminal. Real shells (PowerShell,
 Command Prompt, Git Bash, WSL) run behind xterm.js inside the mockup's chrome. You open it in a browser
 at `http://127.0.0.1:8799`.
@@ -67,6 +67,22 @@ disabled switch that explains why · the label never contradicts the switch · f
 link. Auth matrix separately verified: no key 401, wrong key 401, right key 200 + HttpOnly cookie,
 asset without cookie 401, path traversal 404, `/pty` without key 401, with key 101.
 
+**If the phone door can't open, the app says so and stays up.** Two defects found while verifying the
+rename, both fixed and re-verified:
+
+- **It used to kill the whole app.** If something else already held the Tailscale side of the port,
+  the failure went unhandled and the server exited — losing every open terminal. Now the failure is
+  caught on both listeners, the desk door keeps serving, and the switch stays off instead of lying.
+  Regression 6/6 under the real condition.
+- **The reason was invisible.** The failure only bumped the notification bell, while the person was
+  standing in Settings → Phone watching a switch that appeared to do nothing. The reason now renders
+  beside the switch in plain English, clears when you come back to the tab, and is still logged to the
+  bell. Measured 7/7 (renders 460×57 at the error colour, `role="alert"`, under the switch).
+
+On this machine `tailscaled` itself listens on `100.120.237.49:8799`, so phone access can't be turned
+on while WinMux runs on the default port — that is exactly the case the message above explains.
+Verified free for the tailnet listener: 9911, 9912, 9913.
+
 ## Phase 1 — Remaining UI parity
 
 Objective: close the last ten gaps between the mockup's terminal chrome and the app.
@@ -103,6 +119,9 @@ Gate: each item works in the real app, measured (computed values), screenshot sh
 - Who may open the phone door (resolved: the PC only. The phone link renders the switch disabled and the API returns 403, so a leaked link can never widen its own access)
 - Agent-cockpit features (declined: out of scope, see above)
 - Mockup's auto-drop tab limit (declined: it kills a running shell without asking)
+- Name (resolved: **WinMux** — @edward's call. A terminal multiplexer for Windows, in the tmux lineage. Renamed across the app, the package, the plan, and the repo)
+- Where the name shows on the desktop (resolved: the browser tab title and the `v1.0` chip only. The mockup reserves no brand slot in the sidebar footer — measured 51px of spare room against a ~50px word — so the in-app brand mark lives in the phone header, exactly as the design does it)
+- A failure the person can't see (resolved: any refusal to flip the phone switch renders its reason beside the switch, not only in the bell)
 - Bell while you are watching the tab (resolved: logged to notifications only; the attention ring is reserved for a tab you are NOT watching, so it never nags about output you can already see)
 
 ## Risks
@@ -113,4 +132,4 @@ Gate: each item works in the real app, measured (computed values), screenshot sh
 ## Resources
 
 - [Design mockup](../wmux-amirlehmam/design-spec/cockpit.html)
-- [Repo](https://github.com/Zbrooklyn/cockpit-terminal)
+- [Repo](https://github.com/Zbrooklyn/winmux)

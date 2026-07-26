@@ -1,4 +1,4 @@
-// cockpit-terminal — serves the cockpit UI and bridges real shell processes to
+// WinMux — serves the cockpit UI and bridges real shell processes to
 // the browser terminals over websockets.
 //
 // This server hands out a real shell, so reaching it IS full control of the
@@ -196,7 +196,7 @@ function handle(req, res, viaPhone) {
   // Phone door: no key, no anything. Checked before the URL is even read.
   if (viaPhone && !authed(req)) {
     res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('cockpit-terminal: this link needs its access key.');
+    res.end('WinMux: this link needs its access key.');
     return;
   }
   // Arriving with a valid ?k= parks it in a cookie so the rest of the page
@@ -323,11 +323,27 @@ function setPhone(want, done) {
     verifyClient: (info, cb) => (authed(info.req) ? cb(true) : cb(false, 401, 'Unauthorized')),
   });
   wssP.on('connection', onShellConnection);
-  srv.on('error', (e) => {
+  // A failed phone door must never take the desk door down with it. Both the
+  // http server and the socket server get a handler, because an unhandled
+  // 'error' on either one is a hard process exit — which would kill every
+  // terminal the person has open just because a port was busy.
+  let settled = false;
+  const fail = (e) => {
+    try { wssP.close(); } catch (x) {}
+    try { srv.close(); } catch (x) {}
     phone.on = false; phone.ip = null; phone.token = ''; phone.server = null; phone.wss = null;
-    done({ ok: false, error: 'Could not listen on ' + ip + ':' + PORT + ' — ' + e.message });
-  });
+    if (settled) { console.log('phone access: failed after start — ' + e.message); return; }
+    settled = true;
+    const busy = e && e.code === 'EADDRINUSE';
+    console.log('phone access: could not start — ' + e.message);
+    done({ ok: false, error: busy
+      ? 'Something else on this PC is already using port ' + PORT + ' on your Tailscale address. Close it, or start this app on a different port, then try again.'
+      : 'Could not listen on ' + ip + ':' + PORT + ' — ' + e.message });
+  };
+  srv.on('error', fail);
+  wssP.on('error', fail);
   srv.listen(PORT, ip, () => {
+    settled = true;
     phone.on = true; phone.ip = ip; phone.token = token; phone.server = srv; phone.wss = wssP;
     console.log('phone access: ON  →  ' + phoneURL());
     done(Object.assign({ ok: true }, phoneState(false)));
@@ -373,7 +389,7 @@ function onShellConnection(ws, req) {
 }
 
 server.listen(PORT, HOST, () => {
-  console.log('cockpit-terminal running at http://' + HOST + ':' + PORT);
+  console.log('WinMux running at http://' + HOST + ':' + PORT);
   console.log('shells:', SHELLS.map((s) => s.label).join(', '));
   // CT_REMOTE=1 just pre-opens the same door the Settings toggle opens.
   if (process.env.CT_REMOTE === '1') {
