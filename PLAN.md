@@ -41,6 +41,29 @@ settings (theme/font/cursor/scrollback/behaviour) · keyboard cheat sheet (F1) �
 with badge · changes dock (git diff) · save/load layout · sidebar terminal list with live status deck ·
 light/dark themes.
 
+## Proving it still works — `npm run verify`
+
+One command, **no arguments**:
+
+```
+npm run verify          # everything
+npm run verify -- phone # one group
+npm run verify -- --headed
+```
+
+`verify.cjs` starts its own servers (borrowing one that's already listening rather than killing it),
+picks the right port for each scenario, drives the real app in one shared browser, and writes
+screenshots to `verify-out/`. It exits non-zero if anything fails, and prints **SKIP with a reason**
+rather than a false pass when a scenario can't be reproduced on this machine.
+
+The two ports are deliberate. `8799` is the *busy* one — tailscaled already owns its Tailscale side,
+which is exactly what makes it the fixture for "turning phone access on must fail politely instead of
+killing the app." `9912` is the *free* one, where the phone flow is proven end to end against a real
+shell.
+
+A test that needs an argument is a defect: every argument is a chance to invoke it wrong and burn a
+whole browser run. If you add a behaviour, add its check here in the same commit.
+
 ## Using it from your phone — Settings → Phone (off by default)
 
 Opening this page gives you a shell on this PC, so reaching it *is* controlling the machine. It

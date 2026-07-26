@@ -5,7 +5,8 @@
   "description": "WinMux — a terminal multiplexer for Windows: the wmux cockpit mockup turned into a real, functional PowerShell terminal (standalone, no Electron).",
   "main": "server.cjs",
   "scripts": {
-    "start": "node server.cjs"
+    "start": "node server.cjs",
+    "verify": "node verify.cjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
