@@ -6,6 +6,10 @@
   "main": "server.cjs",
   "scripts": {
     "start": "node server.cjs",
+    "remote": "powershell -NoProfile -ExecutionPolicy Bypass -File winmux.ps1 start",
+    "stop": "powershell -NoProfile -ExecutionPolicy Bypass -File winmux.ps1 stop",
+    "status": "powershell -NoProfile -ExecutionPolicy Bypass -File winmux.ps1 status",
+    "link": "powershell -NoProfile -ExecutionPolicy Bypass -File winmux.ps1 link",
     "verify": "node verify.cjs"
   },
   "dependencies": {
