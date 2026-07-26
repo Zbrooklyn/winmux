@@ -138,10 +138,10 @@ const check = (id, port, run) => CHECKS.push({ id, port, run });
 const desktop = (browser) =>
   browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
 
-async function phoneCtx(browser) {
+async function phoneCtx(browser, colorScheme) {
   const ctx = await browser.newContext({
     viewport: { width: 384, height: 745 }, deviceScaleFactor: 2,
-    isMobile: true, hasTouch: true, colorScheme: 'dark',
+    isMobile: true, hasTouch: true, colorScheme: colorScheme || 'dark',
   });
   return ctx.newPage();
 }
@@ -475,6 +475,27 @@ check('remote', PORT_REMOTE, async ({ browser, base, t, shot, skip }) => {
     t('no sideways scroll at 384px', !!m && m.overflow === false);
     await shot(p0, 'needs-key');
     await p0.close();
+
+    // The app follows the device's light/dark setting (cockpit.css:7), so the
+    // door in front of it has to as well — a dark refusal ahead of a light app
+    // reads as two different products. Measured in both schemes, not asserted.
+    const scheme = async (which) => {
+      const q = await phoneCtx(browser, which);
+      await q.goto(origin + '/', { waitUntil: 'domcontentloaded' });
+      const v = await q.evaluate(() => ({
+        bg: getComputedStyle(document.body).backgroundColor,
+        text: getComputedStyle(document.body).color,
+      }));
+      await shot(q, 'needs-key-' + which);
+      await q.close();
+      return v;
+    };
+    const dark = await scheme('dark');
+    const light = await scheme('light');
+    t('the door is dark on a dark phone',
+      dark.bg === 'rgb(30, 30, 30)' && dark.text === 'rgb(218, 218, 218)', dark);
+    t('the door is light on a light phone',
+      light.bg === 'rgb(255, 255, 255)' && light.text === 'rgb(35, 35, 35)', light);
 
     // The whole point: a phone-shaped browser, over the tailnet, running a
     // real PowerShell command on this PC.

@@ -234,17 +234,21 @@ function keyNeededPage() {
   return '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
     '<meta name="viewport" content="width=device-width,initial-scale=1">' +
     '<title>WinMux — one step left</title><style>' +
-    ':root{color-scheme:dark}' +
+    // The app itself follows the device (cockpit.css:7), so the door must too —
+    // otherwise a light-mode phone gets a dark refusal in front of a light app.
+    // Same four tokens, same values as the stylesheet.
+    ':root{color-scheme:light dark;--bg:#1e1e1e;--text:#dadada;--muted:#a8a8a8;--line:#333}' +
+    '@media (prefers-color-scheme:light){:root{--bg:#ffffff;--text:#232323;--muted:#5c5c5c;--line:#e2e2e2}}' +
     'body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;' +
-    'background:#1e1e1e;color:#dadada;font:400 16px/1.55 "Segoe UI",system-ui,sans-serif;padding:28px}' +
+    'background:var(--bg);color:var(--text);font:400 16px/1.55 "Segoe UI",system-ui,sans-serif;padding:28px}' +
     '.card{max-width:23rem}' +
     '.brand{font-size:19px;font-weight:600;letter-spacing:-.01em;margin:0 0 26px}' +
     '.brand b{color:#8a5cf5;font-weight:600}' +
     'h1{font-size:21px;font-weight:600;margin:0 0 10px;letter-spacing:-.01em}' +
-    'p{margin:0 0 18px;color:#a8a8a8}' +
-    'ol{margin:0 0 22px;padding-left:1.25em;color:#dadada}' +
+    'p{margin:0 0 18px;color:var(--muted)}' +
+    'ol{margin:0 0 22px;padding-left:1.25em;color:var(--text)}' +
     'li{margin-bottom:9px}' +
-    '.note{font-size:13.5px;color:#8a8a8a;border-top:1px solid #333;padding-top:16px;margin:0}' +
+    '.note{font-size:13.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:16px;margin:0}' +
     '</style></head><body><main class="card">' +
     '<p class="brand">Win<b>Mux</b></p>' +
     '<h1>One step left</h1>' +
