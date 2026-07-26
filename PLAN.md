@@ -5,7 +5,7 @@
 Status: Phase 1 verified — 22/22 checks pass in the real app
 Version: v1.0
 Goal: The cockpit mockup, made real, around actual PowerShell — every visible control does something.
-Constraint: The server runs real shell commands. It binds 127.0.0.1 only by default; remote access is opt-in, Tailscale-only, and token-gated.
+Constraint: The server runs real shell commands. It binds 127.0.0.1 always; phone access is a switch in Settings, Tailscale-only, and key-gated.
 
 ## What this project is
 
@@ -41,21 +41,31 @@ settings (theme/font/cursor/scrollback/behaviour) · keyboard cheat sheet (F1) �
 with badge · changes dock (git diff) · save/load layout · sidebar terminal list with live status deck ·
 light/dark themes.
 
-## Using it from your phone (off by default)
+## Using it from your phone — Settings → Phone (off by default)
 
-Opening this page gives you a shell on this PC, so reaching it *is* controlling the machine. Two modes,
-nothing in between:
+Opening this page gives you a shell on this PC, so reaching it *is* controlling the machine. It
+therefore listens at **two separate doors**, never one merged one:
 
-- **Default** — `node server.cjs`. Binds `127.0.0.1`. Only this PC can open it. No password, because
-  nothing else can knock on the door.
-- **Remote** — `CT_REMOTE=1 node server.cjs`. Binds the **Tailscale address only** (never `0.0.0.0`);
-  if Tailscale isn't running it refuses to start rather than fall back to the open network. Every
-  request must carry a key. The console prints the exact link to open on your phone, e.g.
-  `http://100.120.237.49:8799/?k=<key>`. The key rotates each restart — set `CT_TOKEN` to pin it.
+- **The desk door** — always open, always `127.0.0.1`. No key, because only this PC can knock.
+- **The phone door** — closed until you flip **Settings → Phone → "Use on my phone."** It then binds
+  the **Tailscale address only** (never `0.0.0.0`), every request must carry a key, and the panel shows
+  a **QR code** you scan with your phone camera plus a Copy-link button. Flip it off and the link dies
+  immediately, dropping any phone terminals with it.
+
+**The phone door can only be opened or closed at the PC.** Loading the page over the phone link shows
+the switch greyed out and `POST /api/phone` returns 403 — so someone holding the link can never widen
+their own access.
 
 Tailscale already encrypts the traffic and only admits your own devices; the key is the second lock in
-case a device is lost. **Verified:** without the key the page returns 401 and the shell websocket is
-refused; with it, a real PowerShell command ran on this machine from a phone-sized browser.
+case a device is lost. The key is new every time you switch it on. `CT_REMOTE=1 node server.cjs` just
+pre-opens the same door at startup — it is a shortcut, not a separate mode.
+
+**Verified in the real app (12/12):** the switch starts off and says so · flipping it on renders a real
+152×152 QR and a `http://100.120.237.49:<port>/?k=<32-hex>` link · that link ran a real PowerShell
+command from a phone-sized browser (`phone says MINISFORUM`) · the phone got 403 on the toggle and a
+disabled switch that explains why · the label never contradicts the switch · flipping off killed the
+link. Auth matrix separately verified: no key 401, wrong key 401, right key 200 + HttpOnly cookie,
+asset without cookie 401, path traversal 404, `/pty` without key 401, with key 101.
 
 ## Phase 1 — Remaining UI parity
 
@@ -87,8 +97,10 @@ Gate: each item works in the real app, measured (computed values), screenshot sh
 ## Decisions
 
 - Design contract (resolved: `public/cockpit.css` is the mockup verbatim and is never edited — all app-specific CSS lives in the `<style>` block in `index.html`)
-- Network exposure (resolved: 127.0.0.1 only by default — it runs real shell commands)
-- Remote access (resolved: opt-in `CT_REMOTE=1`, binds the Tailscale address only and requires a key on every request; never `0.0.0.0`. Built and verified; turning it on is @edward's call, because the link is a shell on his PC)
+- Network exposure (resolved: 127.0.0.1 always — it runs real shell commands)
+- Phone access (resolved: a switch in Settings → Phone, not a startup flag — @edward expected a setting and he was right. Two separate listeners: the desk door always on 127.0.0.1, the phone door bound to the Tailscale address only and key-gated on every request; never `0.0.0.0`. Built and verified 12/12; turning it on is @edward's call, because the link is a shell on his PC)
+- Onboarding the phone (resolved: a scanned QR code, not a typed 32-character key — nobody types a key correctly on a phone)
+- Who may open the phone door (resolved: the PC only. The phone link renders the switch disabled and the API returns 403, so a leaked link can never widen its own access)
 - Agent-cockpit features (declined: out of scope, see above)
 - Mockup's auto-drop tab limit (declined: it kills a running shell without asking)
 - Bell while you are watching the tab (resolved: logged to notifications only; the attention ring is reserved for a tab you are NOT watching, so it never nags about output you can already see)

@@ -1324,7 +1324,7 @@
   function loadLayoutDialog() { openLayoutMenu(document.getElementById('open-load')); }
 
   // ------------------------------------------------------------- settings UI
-  var SETTABS = ['Appearance', 'Terminal', 'Behaviour', 'Shortcuts', 'About'];
+  var SETTABS = ['Appearance', 'Terminal', 'Behaviour', 'Phone', 'Shortcuts', 'About'];
   var curSet = 'Terminal';
   function sw(key, on) { return '<span class="sw ' + (on ? 'on' : '') + '" data-sw="' + key + '"></span>'; }
   function sel(key, opts, cur) {
@@ -1353,13 +1353,67 @@
         frow('Default shell', 'Used by new tabs and splits', sel('defaultShell', [['', 'First available (' + labelFor(DEFAULT_SHELL) + ')']].concat(SHELLS.map(function (s) { return [s.key, s.label]; })), S.defaultShell)) +
         frow('Start folder', 'Blank = your home folder', '<input class="ctl" type="text" value="' + esc(S.startFolder) + '" data-set="startFolder" placeholder="' + esc(HOME) + '" style="width:230px" spellcheck="false">');
     }
+    if (t === 'Phone') return phonePane();
     if (t === 'Shortcuts') {
       return KEYS.map(function (k) { return frow(k[0], '', '<span class="kbd">' + k[1] + '</span>'); }).join('') +
         '<div style="margin-top:14px"><span class="btn" data-act="cheat">Open the full list (F1)</span></div>';
     }
     return '<div style="font-size:13px;margin-bottom:6px">cockpit-terminal v1.0</div>' +
-      '<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:14px">Runs real shells on this machine and is bound to 127.0.0.1 only — it is deliberately not reachable from the network.</div>' +
+      '<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:14px">Runs real shells on this machine. It always listens on 127.0.0.1, where only this PC can reach it. Reaching it from your phone is off until you switch it on in Settings → Phone.</div>' +
       '<div><span class="btn" data-act="diag">Diagnostics</span> <span class="btn" data-act="reset">Reset settings</span></div>';
+  }
+
+  // ------------------------------------------------------------- phone access
+  // Opening this page is holding a shell on this PC, so the switch says so in
+  // plain words and the state always comes from the server, never a local guess.
+  var phoneS = null;              // last state from /api/phone, or null while loading
+  var phoneBusy = false;
+  function phonePane() {
+    if (!phoneS) return '<div style="font-size:12.5px;color:var(--muted)">Checking…</div>';
+    var p = phoneS;
+    var canFlip = p.canChange && (p.on || p.tailscale);
+    // The line under the switch must never contradict the switch itself.
+    var hint = !p.canChange ? 'You are already on the phone link. This switch only works at the PC itself.'
+      : p.on ? 'On — your phone can open these terminals over Tailscale.'
+      : !p.tailscale ? 'Tailscale is not running on this PC, so there is no private address to use.'
+      : 'Off — this window works on this PC only.';
+    var out = frow('Use on my phone', hint,
+      '<span class="sw ' + (p.on ? 'on' : '') + (canFlip ? '' : ' off-disabled') + '" data-phone-toggle role="button" aria-label="Use on my phone"></span>');
+    if (p.on) {
+      out += '<div class="phone-live">' +
+        '<div class="phone-qr"><img alt="Scan to open on your phone" src="/api/phone/qr?t=' + Date.now() + '"></div>' +
+        '<div class="phone-side">' +
+          '<div class="phone-lab">Scan this with your phone camera</div>' +
+          '<div class="phone-url" id="phone-url">' + esc(p.url) + '</div>' +
+          '<div><span class="btn" data-act="phone-copy">Copy link</span></div>' +
+          '<div class="phone-warn">Your phone must be signed in to the same Tailscale account. Anyone who gets this link gets your PC — don’t paste it into a chat, and switch this off when you’re done.</div>' +
+        '</div>' +
+      '</div>';
+    } else {
+      out += '<div class="phone-off">Switch this on and you’ll get a square to scan. Your phone opens the same terminals you see here, over Tailscale — nothing is exposed to the open internet, and the link stops working the moment you switch it back off.</div>';
+    }
+    return out;
+  }
+  function loadPhone(then) {
+    fetch('/api/phone').then(function (r) { return r.json(); }).then(function (j) {
+      phoneS = j; if (then) then(); else if (curSet === 'Phone') renderSettings();
+    }).catch(function () { phoneS = { on: false, canChange: true, tailscale: false }; if (curSet === 'Phone') renderSettings(); });
+  }
+  function flipPhone() {
+    if (phoneBusy || !phoneS || !phoneS.canChange) return;
+    if (!phoneS.on && !phoneS.tailscale) { notify('Tailscale is not running', 'Start Tailscale on this PC, then try again.'); return; }
+    phoneBusy = true;
+    fetch('/api/phone', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: !phoneS.on }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        phoneBusy = false;
+        if (!j.ok) { notify('Could not turn phone access on', j.error || 'Unknown error'); return; }
+        phoneS = j;
+        renderSettings();
+        notify(j.on ? 'Phone access is on' : 'Phone access is off',
+          j.on ? 'Scan the square in Settings → Phone.' : 'The link no longer works.');
+      })
+      .catch(function (e) { phoneBusy = false; notify('Could not change phone access', String(e.message || e)); });
   }
   function renderSettings() {
     document.getElementById('settings-tabs').innerHTML = SETTABS.map(function (t) {
@@ -1367,12 +1421,20 @@
     }).join('');
     document.getElementById('settings-pane').innerHTML = '<h3>' + curSet + '</h3>' + settingsPane(curSet);
   }
-  function openSettings(tab) { curSet = tab || curSet; renderSettings(); openOvl('settings-ovl'); }
+  function openSettings(tab) {
+    curSet = tab || curSet; renderSettings(); openOvl('settings-ovl');
+    if (curSet === 'Phone') loadPhone();
+  }
   document.getElementById('settings-tabs').addEventListener('click', function (e) {
     var tab = e.target.closest ? e.target.closest('[data-settab]') : null;
-    if (tab) { curSet = tab.getAttribute('data-settab'); renderSettings(); }
+    if (!tab) return;
+    curSet = tab.getAttribute('data-settab');
+    // The switch must reflect the server, not whatever it looked like last time.
+    if (curSet === 'Phone') { phoneS = null; renderSettings(); loadPhone(); return; }
+    renderSettings();
   });
   document.getElementById('settings-pane').addEventListener('click', function (e) {
+    if (e.target.closest && e.target.closest('[data-phone-toggle]')) { flipPhone(); return; }
     var s = e.target.closest ? e.target.closest('[data-sw]') : null;
     if (s) {
       var k = s.getAttribute('data-sw');
@@ -1386,6 +1448,12 @@
     var a = act.getAttribute('data-act');
     if (a === 'cheat') { closeOvl('settings-ovl'); openCheat(); }
     if (a === 'diag') { closeOvl('settings-ovl'); openDiag(); }
+    if (a === 'phone-copy' && phoneS && phoneS.url) {
+      try {
+        navigator.clipboard.writeText(phoneS.url);
+        notify('Link copied', 'Anyone holding it can reach this PC — paste it carefully.');
+      } catch (err) { notify('Could not copy', 'Select the link and copy it by hand.'); }
+    }
     if (a === 'reset') {
       confirmDialog('Reset settings?', 'Fonts, cursor, scrollback and behaviour go back to their defaults.', 'Reset', function () {
         for (var k in DEFAULTS) S[k] = DEFAULTS[k];

@@ -2,13 +2,18 @@
 // the browser terminals over websockets.
 //
 // This server hands out a real shell, so reaching it IS full control of the
-// machine. Two modes, and nothing in between:
-//   default        — binds 127.0.0.1. Only this PC can reach it. No password
-//                    needed because nothing else can knock on the door.
-//   CT_REMOTE=1    — binds the Tailscale address only (never 0.0.0.0), and
-//                    every request must carry a token. Tailscale already
-//                    encrypts the traffic and only admits your own devices;
-//                    the token is the second lock, in case a device is lost.
+// machine. It therefore listens in two separate places, never one merged one:
+//
+//   the desk door   — always open, always 127.0.0.1. Only this PC can knock,
+//                     so it needs no key.
+//   the phone door  — closed until you open it in Settings → Phone. When open
+//                     it binds the Tailscale address ONLY (never 0.0.0.0) and
+//                     every request must carry a key. Tailscale already
+//                     encrypts the traffic and only admits your own devices;
+//                     the key is the second lock, in case a device is lost.
+//
+// The phone door can only be opened or closed from the desk door, so someone
+// holding the link can never widen their own access.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -17,12 +22,11 @@ const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { WebSocketServer } = require('ws');
 const pty = require('node-pty');
+const qrcode = require('qrcode');
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8799;
 const PUBLIC = path.join(__dirname, 'public');
-
-// --- Where to listen -------------------------------------------------------
-const REMOTE = process.env.CT_REMOTE === '1';
+const HOST = '127.0.0.1';
 
 // Tailscale hands out addresses in 100.64.0.0/10. We bind that exact address
 // rather than 0.0.0.0 so the shell is never offered to a coffee-shop network.
@@ -37,16 +41,19 @@ function tailscaleIP() {
   return null;
 }
 
-const HOST = REMOTE ? (process.env.CT_HOST || tailscaleIP()) : '127.0.0.1';
-if (REMOTE && !HOST) {
-  console.error('CT_REMOTE=1 but no Tailscale address was found on this machine.');
-  console.error('Start Tailscale first, or set CT_HOST to the exact address to bind.');
-  console.error('Refusing to fall back to 0.0.0.0 — that would offer a shell to the whole network.');
-  process.exit(1);
+// --- The phone door --------------------------------------------------------
+// Held in one place so the toggle, the status readout and the auth check can
+// never disagree about whether it is open.
+const phone = {
+  on: false,
+  ip: null,          // the Tailscale address currently bound
+  token: '',
+  server: null,      // http.Server, or null while closed
+  wss: null,
+};
+function phoneURL() {
+  return phone.on ? 'http://' + phone.ip + ':' + PORT + '/?k=' + phone.token : '';
 }
-
-// --- Token (remote mode only) ----------------------------------------------
-const TOKEN = REMOTE ? (process.env.CT_TOKEN || crypto.randomBytes(16).toString('hex')) : '';
 
 function tokenFrom(req) {
   try {
@@ -57,10 +64,11 @@ function tokenFrom(req) {
   return m ? m[1] : '';
 }
 
+// Only ever called for requests arriving at the phone door.
 function authed(req) {
-  if (!REMOTE) return true;
+  if (!phone.on) return false;
   const got = tokenFrom(req);
-  const a = Buffer.from(got), b = Buffer.from(TOKEN);
+  const a = Buffer.from(got), b = Buffer.from(phone.token);
   if (a.length !== b.length) return false;          // length differs → no match
   try { return crypto.timingSafeEqual(a, b); } catch (e) { return false; }
 }
@@ -184,23 +192,57 @@ const MIME = {
   '.map': 'application/json', '.woff2': 'font/woff2', '.svg': 'image/svg+xml',
   '.json': 'application/json; charset=utf-8',
 };
-const server = http.createServer((req, res) => {
-  // Remote mode: no token, no anything. Checked before the URL is even read.
-  if (!authed(req)) {
+function handle(req, res, viaPhone) {
+  // Phone door: no key, no anything. Checked before the URL is even read.
+  if (viaPhone && !authed(req)) {
     res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('cockpit-terminal: this link needs its access key.');
     return;
   }
   // Arriving with a valid ?k= parks it in a cookie so the rest of the page
   // (scripts, fonts, the websocket) authenticates without the key in every URL.
-  if (REMOTE) {
+  if (viaPhone) {
     try {
       if (new URL(req.url, 'http://x').searchParams.get('k')) {
-        res.setHeader('Set-Cookie', 'ct_k=' + TOKEN + '; Path=/; HttpOnly; SameSite=Strict');
+        res.setHeader('Set-Cookie', 'ct_k=' + phone.token + '; Path=/; HttpOnly; SameSite=Strict');
       }
     } catch (e) {}
   }
   let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  // Phone access: read the state from anywhere, change it only from this PC.
+  if (urlPath === '/api/phone') {
+    if (req.method === 'POST') {
+      if (viaPhone) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'Phone access can only be changed at the PC itself.' }));
+        return;
+      }
+      let body = '';
+      req.on('data', (c) => { body += c; if (body.length > 2000) req.destroy(); });
+      req.on('end', () => {
+        let want = false;
+        try { want = !!JSON.parse(body || '{}').on; } catch (e) {}
+        setPhone(want, (r) => {
+          res.writeHead(r.ok ? 200 : 409, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(r));
+        });
+      });
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(phoneState(viaPhone)));
+    return;
+  }
+  // The link as a scannable square, so nobody types a 32-character key.
+  if (urlPath === '/api/phone/qr') {
+    if (!phone.on) { res.writeHead(404); res.end('off'); return; }
+    qrcode.toString(phoneURL(), { type: 'svg', margin: 1, width: 190 }, (err, svg) => {
+      if (err) { res.writeHead(500); res.end('qr failed'); return; }
+      res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-store' });
+      res.end(svg);
+    });
+    return;
+  }
   // Small API: the list of shells the picker can offer.
   if (urlPath === '/shells') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -226,7 +268,9 @@ const server = http.createServer((req, res) => {
       arch: process.arch, uptime: Math.round(process.uptime()), host: HOST, port: PORT,
       home: os.homedir(), cpus: os.cpus().length,
       mem: Math.round(os.totalmem() / 1073741824) + ' GB',
-      shells: SHELLS.map((s) => s.label), sessions: wss ? wss.clients.size : 0,
+      shells: SHELLS.map((s) => s.label),
+      sessions: wss.clients.size + (phone.wss ? phone.wss.clients.size : 0),
+      phone: phone.on ? 'on (' + phone.ip + ')' : 'off',
     }));
     return;
   }
@@ -238,16 +282,63 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' });
     res.end(data);
   });
-});
+}
+
+// The desk door. Bound to 127.0.0.1, so it needs no key.
+const server = http.createServer((req, res) => handle(req, res, false));
+
+// --- Opening and closing the phone door ------------------------------------
+function phoneState(viaPhone) {
+  return {
+    on: phone.on,
+    ip: phone.ip,
+    port: PORT,
+    url: phoneURL(),
+    // Whether THIS browser is allowed to flip the switch.
+    canChange: !viaPhone,
+    tailscale: !!tailscaleIP(),
+  };
+}
+
+function setPhone(want, done) {
+  if (want === phone.on) return done(Object.assign({ ok: true }, phoneState(false)));
+  if (!want) {
+    // Closing drops every phone terminal with it — that is the point of an off switch.
+    try { if (phone.wss) phone.wss.close(); } catch (e) {}
+    const s = phone.server;
+    phone.on = false; phone.ip = null; phone.token = ''; phone.wss = null; phone.server = null;
+    if (s) { try { s.closeAllConnections(); } catch (e) {} s.close(() => {}); }
+    console.log('phone access: OFF');
+    return done(Object.assign({ ok: true }, phoneState(false)));
+  }
+  const ip = process.env.CT_HOST || tailscaleIP();
+  if (!ip) {
+    return done({ ok: false, error: 'Tailscale is not running on this PC, so there is no private address to listen on. Start Tailscale and try again.' });
+  }
+  const token = crypto.randomBytes(16).toString('hex');
+  const srv = http.createServer((req, res) => handle(req, res, true));
+  const wssP = new WebSocketServer({
+    server: srv,
+    path: '/pty',
+    verifyClient: (info, cb) => (authed(info.req) ? cb(true) : cb(false, 401, 'Unauthorized')),
+  });
+  wssP.on('connection', onShellConnection);
+  srv.on('error', (e) => {
+    phone.on = false; phone.ip = null; phone.token = ''; phone.server = null; phone.wss = null;
+    done({ ok: false, error: 'Could not listen on ' + ip + ':' + PORT + ' — ' + e.message });
+  });
+  srv.listen(PORT, ip, () => {
+    phone.on = true; phone.ip = ip; phone.token = token; phone.server = srv; phone.wss = wssP;
+    console.log('phone access: ON  →  ' + phoneURL());
+    done(Object.assign({ ok: true }, phoneState(false)));
+  });
+}
 
 // --- One shell process per websocket connection ----------------------------
-// The websocket is the actual shell, so it gets the same lock as the page.
-const wss = new WebSocketServer({
-  server,
-  path: '/pty',
-  verifyClient: (info, cb) => (authed(info.req) ? cb(true) : cb(false, 401, 'Unauthorized')),
-});
-wss.on('connection', (ws, req) => {
+// The desk door's socket. The phone door gets its own, key-checked, in setPhone.
+const wss = new WebSocketServer({ server, path: '/pty' });
+wss.on('connection', onShellConnection);
+function onShellConnection(ws, req) {
   var key = 'powershell';
   var want = '';
   try {
@@ -279,19 +370,20 @@ wss.on('connection', (ws, req) => {
     else if (msg.t === 'r' && msg.c > 0 && msg.r > 0) { try { term.resize(msg.c, msg.r); } catch {} }
   });
   ws.on('close', () => { try { term.kill(); } catch {} });
-});
+}
 
 server.listen(PORT, HOST, () => {
-  if (REMOTE) {
-    console.log('cockpit-terminal — REMOTE mode (Tailscale only, token required)');
-    console.log('open on your phone:  http://' + HOST + ':' + PORT + '/?k=' + TOKEN);
-    console.log('');
-    console.log('That link is a shell on this PC. Anyone holding it, on your tailnet,');
-    console.log('has your machine. Keep it out of chats and screenshots.');
-    if (!process.env.CT_TOKEN) console.log('The key changes every restart. Set CT_TOKEN to pin it.');
-  } else {
-    console.log('cockpit-terminal running at http://' + HOST + ':' + PORT);
-    console.log('local only — set CT_REMOTE=1 to reach it from your phone over Tailscale');
-  }
+  console.log('cockpit-terminal running at http://' + HOST + ':' + PORT);
   console.log('shells:', SHELLS.map((s) => s.label).join(', '));
+  // CT_REMOTE=1 just pre-opens the same door the Settings toggle opens.
+  if (process.env.CT_REMOTE === '1') {
+    setPhone(true, (r) => {
+      if (!r.ok) { console.error('phone access could not start: ' + r.error); return; }
+      console.log('');
+      console.log('That link is a shell on this PC. Anyone holding it, on your tailnet,');
+      console.log('has your machine. Keep it out of chats and screenshots.');
+    });
+  } else {
+    console.log('phone access: off — turn it on in Settings → Phone');
+  }
 });
