@@ -226,9 +226,47 @@ const MIME = {
   '.map': 'application/json', '.woff2': 'font/woff2', '.svg': 'image/svg+xml',
   '.json': 'application/json; charset=utf-8',
 };
+// Someone typed the tailnet address by hand instead of scanning the QR. That
+// is the common way to arrive here, and "needs its access key" is a dead end —
+// it names the problem and hides the fix. This page is self-contained on
+// purpose: every asset is behind the same door, so it can load nothing.
+function keyNeededPage() {
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>WinMux — one step left</title><style>' +
+    ':root{color-scheme:dark}' +
+    'body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;' +
+    'background:#1e1e1e;color:#dadada;font:400 16px/1.55 "Segoe UI",system-ui,sans-serif;padding:28px}' +
+    '.card{max-width:23rem}' +
+    '.brand{font-size:19px;font-weight:600;letter-spacing:-.01em;margin:0 0 26px}' +
+    '.brand b{color:#8a5cf5;font-weight:600}' +
+    'h1{font-size:21px;font-weight:600;margin:0 0 10px;letter-spacing:-.01em}' +
+    'p{margin:0 0 18px;color:#a8a8a8}' +
+    'ol{margin:0 0 22px;padding-left:1.25em;color:#dadada}' +
+    'li{margin-bottom:9px}' +
+    '.note{font-size:13.5px;color:#8a8a8a;border-top:1px solid #333;padding-top:16px;margin:0}' +
+    '</style></head><body><main class="card">' +
+    '<p class="brand">Win<b>Mux</b></p>' +
+    '<h1>One step left</h1>' +
+    '<p>WinMux: this link needs its access key. The address on its own can&rsquo;t open a ' +
+    'terminal &mdash; the key is what proves it&rsquo;s your phone.</p>' +
+    '<ol><li>On your PC, open WinMux.</li>' +
+    '<li>Go to <strong>Settings &rarr; Phone</strong>.</li>' +
+    '<li>Scan the QR code with your phone&rsquo;s camera.</li></ol>' +
+    '<p class="note">The key changes every time phone access is switched on, so a saved ' +
+    'bookmark stops working. Scan the QR again rather than editing the address.</p>' +
+    '</main></body></html>';
+}
+
 function handle(req, res, viaPhone) {
   // Phone door: no key, no anything. Checked before the URL is even read.
   if (viaPhone && !authed(req)) {
+    // A person gets the page; a script, an asset, or the websocket gets the line.
+    if (/text\/html/.test(req.headers.accept || '')) {
+      res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(keyNeededPage());
+      return;
+    }
     res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('WinMux: this link needs its access key.');
     return;

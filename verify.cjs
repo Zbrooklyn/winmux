@@ -424,6 +424,14 @@ check('remote', PORT_REMOTE, async ({ browser, base, t, shot, skip }) => {
     t('no key over the tailnet is refused', bare.status === 401, bare.status);
     t('the refusal is plain English, not a stack trace', /needs its access key/.test(bare.body), bare.body.slice(0, 60));
 
+    // Typing the address by hand is how people actually arrive here, so the
+    // refusal has to name the fix, not just the problem.
+    const asPerson = await get(origin + '/', { accept: 'text/html' });
+    t('a person gets a page, not a bare line', asPerson.status === 401 && /^<!doctype html>/i.test(asPerson.body.trim()));
+    t('it says where to get the key', /Settings/.test(asPerson.body) && /scan the QR/i.test(asPerson.body.replace(/&\w+;/g, ' ')));
+    t('it still carries the original sentence', /needs its access key/.test(asPerson.body));
+    t('the page leaks no key', !/[a-f0-9]{32}/.test(asPerson.body));
+
     const wrong = await get(origin + '/?k=' + 'f'.repeat(32));
     t('a wrong key of the right length is refused', wrong.status === 401, wrong.status);
     t('a wrong key sets no cookie', !wrong.headers['set-cookie']);
@@ -449,6 +457,24 @@ check('remote', PORT_REMOTE, async ({ browser, base, t, shot, skip }) => {
 
     const qr = await get(origin + '/api/phone/qr?k=' + key);
     t('the QR is a real SVG over the link', qr.status === 200 && /^<svg/.test(qr.body.trim()));
+
+    // What Edward saw when he typed the address by hand — measured, on a phone.
+    const p0 = await phoneCtx(browser);
+    await p0.goto(origin + '/', { waitUntil: 'domcontentloaded' });
+    const m = await p0.evaluate(() => {
+      const h = document.querySelector('h1'), b = document.querySelector('.brand b');
+      const steps = document.querySelectorAll('ol li');
+      return h && b ? {
+        head: h.textContent, accent: getComputedStyle(b).color, steps: steps.length,
+        overflow: document.documentElement.scrollWidth > window.innerWidth,
+        size: getComputedStyle(document.body).fontSize,
+      } : null;
+    });
+    t('the page really renders on a phone', !!m && m.steps === 3, m);
+    t('it is branded in the app accent', !!m && m.accent === 'rgb(138, 92, 245)', m && m.accent);
+    t('no sideways scroll at 384px', !!m && m.overflow === false);
+    await shot(p0, 'needs-key');
+    await p0.close();
 
     // The whole point: a phone-shaped browser, over the tailnet, running a
     // real PowerShell command on this PC.

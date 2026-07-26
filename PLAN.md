@@ -62,7 +62,7 @@ killing the app." `9912` is the *free* one, where the phone flow is proven end t
 shell. `9911` belongs to the `remote` group alone, which really opens the phone door — sharing a port
 would have two groups fighting over one switch.
 
-**58/58 as of Phase 2.** The `remote` group is the one that talks to the Tailscale address rather than
+**65/65 as of Phase 2.** The `remote` group is the one that talks to the Tailscale address rather than
 `127.0.0.1`, because a remote claim proved on the desk door is not proved at all.
 
 A test that needs an argument is a defect: every argument is a chance to invoke it wrong and burn a
@@ -166,6 +166,17 @@ Three defects stood between "the feature exists" and "he can use it":
       scannable QR. Both are blanked before the shutter and an assertion fails if anything key-shaped
       survives — these images get shown to people.
 
+A fourth surfaced the moment @edward actually used it:
+
+- [x] **The refusal was a dead end.** He typed the tailnet address by hand rather than scanning the QR
+      and got `WinMux: this link needs its access key.` — correct security, useless instruction: it
+      names the problem and hides the fix. A person (`Accept: text/html`) now gets a branded page that
+      says where the key lives — Settings → Phone → scan the QR — and warns that the key rotates every
+      time the switch is flipped, so a saved bookmark stops working. Scripts, assets, and the websocket
+      still get the one-line refusal, so nothing downstream changed. The page loads no external asset
+      on purpose: everything is behind the same door it is refusing. Measured on a 384px phone —
+      3 steps, accent `rgb(138, 92, 245)`, no sideways scroll. (proof: `verify-out/remote-needs-key.png`)
+
 Left to @edward (not a task): starting WinMux automatically at logon needs a one-time elevated command,
 which cannot be self-granted. Until then it runs until the next reboot, or until `.\winmux.ps1 stop`.
 
@@ -184,6 +195,7 @@ which cannot be self-granted. Until then it runs until the next reboot, or until
 - Default port (resolved: with no `PORT` set the server picks the first candidate free on **both** its faces, because a port whose Tailscale side is taken can host the desk door and never the phone one. An explicit `PORT` is obeyed exactly — the busy-port fixture depends on it. Order: 8799, 9912, 9911, 9913, 8800–8802)
 - Staying up (resolved: `winmux.ps1 start` runs node hidden and detached via `Start-Process`, so the link outlives the terminal that created it. Logon autostart is @edward's one-time elevated call — Claude cannot self-elevate, and until it is registered WinMux runs only until the next reboot)
 - Screenshots of the Phone tab (resolved: the link and the QR are blanked before every capture, and a check fails if a live key survives. A screenshot of that panel is a photograph of a working shell key)
+- Arriving without the key (resolved: a refusal must name the fix, not just the problem. @edward typed the tailnet address by hand instead of scanning the QR and got a bare `WinMux: this link needs its access key.` — correct, and a dead end. The phone door now serves a self-contained branded page telling him where the key lives (Settings → Phone → scan the QR) when the request comes from a person (`Accept: text/html`), and keeps the one-line refusal for scripts, assets, and the websocket. Self-contained on purpose: every asset is behind the same door it is refusing. Measured on a 384px phone viewport — 3 steps, app accent, no sideways scroll)
 - Bell while you are watching the tab (resolved: logged to notifications only; the attention ring is reserved for a tab you are NOT watching, so it never nags about output you can already see)
 
 ## Risks
