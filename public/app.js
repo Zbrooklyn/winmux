@@ -591,7 +591,7 @@
           '<span class="nm mono">' + esc(nm) + '</span>' +
           (kind === nm ? '' : '<span class="tm">' + esc(kind) + '</span>') + '</div>' +
           '<div class="preview">' + statusLine(t) + (t.cwd ? ' · ' + esc(t.cwd) : '') + '</div>' +
-          '</div></div>';
+          '</div><span class="nchev">' + CARET_RIGHT_SVG + '</span></div>';
       }).join('')
       : '<div class="ncard"><div class="sb"><div class="preview">No terminals in this group yet.</div></div></div>';
   }

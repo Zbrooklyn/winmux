@@ -172,6 +172,11 @@
   .cockpit[data-mode="narrow"] .pctrls .pc:active,
   .cockpit[data-mode="narrow"] .tab-of:active { background: transparent; color: var(--text); }
 
+  /* Session cards drill into the terminal on tap — give them the same "tap to open"
+     chevron the group rows carry, so the affordance reads the same at both levels. */
+  .ncard .nchev { display: flex; align-items: center; align-self: center; flex: 0 0 auto; color: var(--faint); }
+  .ncard .nchev svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; }
+
   /* Every menu on the phone is a bottom sheet that slides up from the edge. */
   .sheet-backdrop { position: fixed; inset: 0; z-index: 79; background: rgba(0,0,0,.45); }
   .ofmenu.sheet {
