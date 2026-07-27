@@ -598,7 +598,9 @@
     panes.forEach(function (p, i) {
       p.closeBtn.style.display = multi ? 'flex' : 'none';
       p.zoomBtn.style.display = multi ? 'flex' : 'none';
-      p.railBtn.style.display = i === 0 ? 'flex' : 'none';
+      // Pinning protects a pane from closing — meaningless with only one pane,
+      // where close is itself a no-op. Hide it until there is something to protect.
+      p.pinBtn.style.display = multi ? 'flex' : 'none';
       p.dockBtn.style.display = i === panes.length - 1 ? 'flex' : 'none';
     });
     renderSidebar();
@@ -1177,7 +1179,6 @@
     el.innerHTML =
       '<div class="nbar"><span class="back">' + BACK_SVG + '<span>Sessions</span></span><span class="nm"></span></div>' +
       '<div class="ptabs">' +
-        '<div class="pctrls"><span class="pc pc-rail" title="Toggle left sidebar (Ctrl+B)" role="button">' + RAIL_SVG + '</span></div>' +
         '<div class="tabscroll"></div>' +
         '<div class="tab-of" title="Tabs that don\'t fit" role="button" style="display:none"><span class="ofc">0</span>' + CARET_SVG + '<span class="ofdot" style="display:none"></span></div>' +
         '<div class="connpill" role="status" aria-live="polite" data-state="idle"><span class="dot"></span><span class="conntext">connecting…</span></div>' +
@@ -1225,7 +1226,6 @@
       termArea: el.querySelector('.term-area'),
       pill: el.querySelector('.connpill'),
       connText: el.querySelector('.conntext'),
-      railBtn: el.querySelector('.pc-rail'),
       newBtn: el.querySelector('.pc-new'),
       newMenuBtn: el.querySelector('.pc-newmenu'),
       findBtn: el.querySelector('.pc-find'),
@@ -1247,7 +1247,6 @@
       nbarName: el.querySelector('.nbar .nm'),
       terms: [], activeTermId: null, mru: [], pinned: false,
     };
-    p.railBtn.addEventListener('click', function (e) { e.stopPropagation(); toggleSidebar(); });
     p.newBtn.addEventListener('click', function () { focusPane(p.id); newTerm(p, startShell()); });
     p.newMenuBtn.addEventListener('click', function (e) {
       e.stopPropagation(); focusPane(p.id);
@@ -1810,11 +1809,11 @@
   });
   document.addEventListener('mousedown', function (e) {
     if (!sessmenu.hasAttribute('data-open')) return;
-    if (sessmenu.contains(e.target) || (e.target.closest && e.target.closest('#open-save,#open-load'))) return;
+    if (sessmenu.contains(e.target) || (e.target.closest && e.target.closest('#open-layouts'))) return;
     closeLayoutMenu();
   });
-  function saveLayoutDialog() { openLayoutMenu(document.getElementById('open-save')); }
-  function loadLayoutDialog() { openLayoutMenu(document.getElementById('open-load')); }
+  function saveLayoutDialog() { openLayoutMenu(document.getElementById('open-layouts')); }
+  function loadLayoutDialog() { openLayoutMenu(document.getElementById('open-layouts')); }
 
   // ------------------------------------------------------------- settings UI
   var SETTABS = ['Appearance', 'Terminal', 'Behaviour', 'Phone', 'Shortcuts', 'About'];
@@ -2218,9 +2217,10 @@
     var card = e.target.closest ? e.target.closest('.ncard[data-open]') : null;
     if (card) focusTerm(parseInt(card.getAttribute('data-open'), 10));
   });
-  document.getElementById('open-save').addEventListener('click', function (e) { toggleLayoutMenu(e.currentTarget); });
-  document.getElementById('open-load').addEventListener('click', function (e) { toggleLayoutMenu(e.currentTarget); });
-  document.getElementById('open-diag').addEventListener('click', openDiag);
+  // Save and Load were two footer buttons opening the same popover, which already
+  // holds both the save field and the load list; one button carries it. Diagnostics
+  // lost its footer button too — the always-visible version chip already opens it.
+  document.getElementById('open-layouts').addEventListener('click', function (e) { toggleLayoutMenu(e.currentTarget); });
   document.getElementById('open-help').addEventListener('click', openCheat);
   document.getElementById('open-settings').addEventListener('click', function () { openSettings(); });
   document.getElementById('version-chip').addEventListener('click', openDiag);
@@ -2373,8 +2373,8 @@
   // the observer means a control added later is covered without a second edit.
   var EXPANDERS = [
     ['open-palette', 'palette-wrap'], ['open-notif', 'npanel'],
-    ['open-save', 'sessmenu'], ['open-load', 'sessmenu'],
-    ['open-diag', 'diag-ovl'], ['open-help', 'cheat-ovl'],
+    ['open-layouts', 'sessmenu'], ['version-chip', 'diag-ovl'],
+    ['open-help', 'cheat-ovl'],
     ['open-settings', 'settings-ovl']
   ];
   // setAttribute fires a mutation even when the value is unchanged, which would
