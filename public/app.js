@@ -163,10 +163,29 @@
   }
 
   // ------------------------------------------------------------------ menus
-  var openMenu = null;
-  function closeMenu() { if (openMenu) { openMenu.remove(); openMenu = null; document.removeEventListener('mousedown', onDocDown); } }
+  var openMenu = null, openBackdrop = null;
+  function closeMenu() {
+    if (openBackdrop) { openBackdrop.remove(); openBackdrop = null; }
+    if (openMenu) { openMenu.remove(); openMenu = null; document.removeEventListener('mousedown', onDocDown); }
+  }
   function onDocDown(e) { if (openMenu && !openMenu.contains(e.target)) closeMenu(); }
   function placeMenu(menu, x, y) {
+    // On the phone every menu is a bottom sheet that slides up, not a desktop
+    // popover anchored to a cursor — one shared path so all menus stay consistent.
+    if (currentMode === 'narrow') {
+      var bd = document.createElement('div');
+      bd.className = 'sheet-backdrop';
+      bd.addEventListener('click', closeMenu);
+      document.body.appendChild(bd);
+      openBackdrop = bd;
+      menu.classList.add('sheet');
+      document.body.appendChild(menu);
+      void menu.offsetHeight; // reflow so the slide-up transition runs
+      menu.classList.add('in');
+      openMenu = menu;
+      setTimeout(function () { document.addEventListener('mousedown', onDocDown); }, 0);
+      return;
+    }
     document.body.appendChild(menu);
     menu.style.left = Math.max(6, Math.min(x, window.innerWidth - menu.offsetWidth - 8)) + 'px';
     menu.style.top = Math.max(6, Math.min(y, window.innerHeight - menu.offsetHeight - 8)) + 'px';

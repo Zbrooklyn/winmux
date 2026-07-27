@@ -112,6 +112,16 @@ Edward decides instantly from **rendered options**, not from words. So:
   `.pctrls` holder kept its `0 8px` padding — dead space before the first tab. The empty holder is
   now collapsed (`:has(.pc-rail)`), so tabs (and the back-arrow) sit flush left. (Live.)
 
+- **Phone menus = bottom sheets.** Every menu (tab overflow, tab/session/group context menus)
+  slides up from the bottom edge as a full-width sheet with a drag handle and a dimmed backdrop,
+  instead of a desktop popover anchored to a cursor. One shared path: `placeMenu()` routes to the
+  sheet whenever `currentMode === 'narrow'`, so all menus stay consistent. (Live.)
+- **Phone controls stay flat on touch.** The mockup's icon-button hover is a 7px-rounded grey fill —
+  a *desktop* affordance. Phones tap, not hover, so that fill flashed a rounded grey box on every
+  touch and fought the flat language. On narrow, the `.pc` / `.tab-of` / tab-`×` controls drop the
+  filled-box hover/active state; press feedback is a colour shift only. Controls read flat during
+  interaction, consistently. (Live.)
+
 ## Pending visual review
 
 - **North star:** principles-first vs. strict mockup-parity for the whole app — Edward wants
