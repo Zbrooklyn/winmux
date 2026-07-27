@@ -697,7 +697,20 @@
       p.railBtn.style.display = i === 0 ? 'flex' : 'none';
       p.dockBtn.style.display = i === panes.length - 1 ? 'flex' : 'none';
     });
+    placeWinctl();
     renderSidebar();
+  }
+  // The window frame's min/max/close sit at the extreme top-right of the title row —
+  // that's the dock's controls when the dock is open, else the last pane's controls.
+  // Relocating the one .wc element keeps it there without a fixed overlay covering
+  // anything (the #127 inline-on-rightmost-pane pattern).
+  function placeWinctl() {
+    var wc = document.getElementById('winctl');
+    if (!wc || !panes.length) return;
+    var host = dockOpen()
+      ? document.querySelector('#dock .pctrls')
+      : (panes[panes.length - 1].dockBtn ? panes[panes.length - 1].dockBtn.parentNode : null);
+    if (host && wc.parentNode !== host) host.appendChild(wc);
   }
   function clearZoom() {
     wsrow.classList.remove('zoomed');
@@ -1708,9 +1721,20 @@
       if (!dockPath.value) dockPath.value = (t && t.cwd) || HOME || '';
       refreshChanges();
     }
+    placeWinctl();
     setTimeout(function () { panes.forEach(fitActive); }, 40);
   }
-  document.getElementById('dock-close').addEventListener('click', function () { root.setAttribute('data-dock', 'closed'); setTimeout(function () { panes.forEach(fitActive); }, 40); });
+  document.getElementById('dock-close').addEventListener('click', function () { root.setAttribute('data-dock', 'closed'); placeWinctl(); setTimeout(function () { panes.forEach(fitActive); }, 40); });
+  // Window frame controls. Forward-wired to a window.winmux bridge (present under Electron/
+  // app-mode); in a plain browser, Maximize toggles fullscreen and Close calls window.close().
+  // Minimize activates once WinMux runs as a real desktop window.
+  function winBridge() { return window.winmux || null; }
+  document.getElementById('wc-min').addEventListener('click', function () { var b = winBridge(); if (b && b.minimize) b.minimize(); });
+  document.getElementById('wc-max').addEventListener('click', function () {
+    var b = winBridge(); if (b && b.maximize) { b.maximize(); return; }
+    try { if (!document.fullscreenElement) document.documentElement.requestFullscreen(); else document.exitFullscreen(); } catch (e) {}
+  });
+  document.getElementById('wc-close').addEventListener('click', function () { var b = winBridge(); if (b && b.close) { b.close(); return; } window.close(); });
   // The dock's single toggle is the pane-header panel icon (.pc-dock), which reopens it
   // when closed — same one-button pattern as the sidebar. The floating edge reopen-strip
   // was the same stray chrome we dropped from the sidebar, so it's gone.

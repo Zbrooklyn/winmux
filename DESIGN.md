@@ -81,6 +81,14 @@ Edward decides instantly from **rendered options**, not from words. So:
   The "connected" pill is hidden while connected — it appears (red/amber) only on a problem.
   Principle: nothing session-specific is in your face until you ask the tab for it; the bar
   stays global. cockpit.css frozen; bar hidden + menu built in index.html/app.js. (Live.)
+- **Window-frame controls = present as design language.** Minimize · maximize · close (the
+  `.wc` trio) live at the far right of the tab bar, behind a hairline, right of the global
+  cluster (`+` / dock toggle). They are the desktop-app frame for the eventual Electron / app-mode
+  target — added now so the design language is settled before the shell is wired. Forward-wired to
+  a `window.winmux` bridge (Electron injects it); until then maximize falls back to fullscreen and
+  close to `window.close()`, minimize is inert (no web API). `placeWinctl()` relocates the trio into
+  the dock header when the dock opens so it always pins the window's right edge. Hidden on the phone
+  (`data-mode="narrow"`) — mobile is a PWA, not a framed window. Close hover = red. (Live in markup.)
 - **Header row = no version chip.** The `GROUPS n` label sits left; search + notifications
   sit right; nothing between. The old bordered `v1.0` pill is removed — it was the only boxed
   element in the flat sidebar and a second colour highlight. Version + diagnostics stay

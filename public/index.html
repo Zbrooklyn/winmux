@@ -149,6 +149,15 @@
      fill, so the folder path reads as a calm line instead of the one bordered box
      in an otherwise flat panel. Shared with the in-app browser (consistent). */
   .burl { border-color: transparent; background: var(--bg1); }
+  /* Desktop window-frame controls (min / max / close). Native-Windows titlebar styling;
+     app.js relocates them into the rightmost tab bar. Hidden on phone (that's the PWA). */
+  .wc .wcbtn { width: 44px; height: 100%; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); cursor: pointer; }
+  .wc .wcbtn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; }
+  .wc .wcbtn.wc-max svg { stroke-width: 1.7; }
+  .wc .wcbtn:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+  .wc .wcbtn.wc-close:hover { background: #e5484d; color: #fff; }
+  .cockpit[data-mode="narrow"] .wc { display: none !important; }
   .sx-list { overflow-y: auto; }
   /* Every icon control in this app is a <span role="button">, which the browser
      does NOT put in the tab order. Tab skipped all fifteen of them, so the only
@@ -262,6 +271,17 @@
   <div class="nhead">
     <span class="brand">Win<b>Mux</b></span>
     <span class="live"><span class="pulse"></span><span id="nhead-live">1 running</span></span>
+  </div>
+
+  <!-- Desktop window frame controls. WinMux's target is an Electron / app-mode desktop
+       window, so the min / max / close frame belongs in the design language now. app.js
+       relocates this into the rightmost tab bar each chrome update, and forward-wires the
+       buttons to a window.winmux bridge (present under Electron); in a plain browser,
+       maximize toggles fullscreen and close calls window.close(). -->
+  <div class="wc" id="winctl" aria-label="Window controls">
+    <span class="wcbtn wc-min" id="wc-min" title="Minimize" role="button" aria-label="Minimize"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span>
+    <span class="wcbtn wc-max" id="wc-max" title="Maximize" role="button" aria-label="Maximize"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1.5"/></svg></span>
+    <span class="wcbtn wc-close" id="wc-close" title="Close" role="button" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
   </div>
 
   <aside class="sessions" aria-label="Groups">
