@@ -1166,7 +1166,10 @@
       });
     } catch (e) {}
     if (term.textarea) {
-      term.textarea.addEventListener('focus', function () { focusPane(t.paneId); });
+      term.textarea.addEventListener('focus', function () { focusPane(t.paneId); root.setAttribute('data-typing', ''); });
+      // On the phone the soft keyboard is up while the terminal has focus; drop the
+      // flag on blur so the "tap to type" hint comes back when the keyboard closes.
+      term.textarea.addEventListener('blur', function () { root.removeAttribute('data-typing'); });
       // Copy-on-select is a real preference, applied on mouse-up inside the terminal.
       host.addEventListener('mouseup', function () { if (S.copyOnSelect) copySel(t); });
     }
@@ -2359,6 +2362,16 @@
     if (p) focusPane(p.id);
   });
   document.getElementById('ns-back').addEventListener('click', function () { setView('projects'); });
+  // Phone: the pill focuses the open terminal from inside a user gesture, which is
+  // what actually raises the soft keyboard on iOS/Android.
+  (function () {
+    var mkbd = document.getElementById('mkbd');
+    if (!mkbd) return;
+    mkbd.addEventListener('click', function () {
+      var t = activeTerm();
+      if (t) { try { (t.term.textarea || t.term).focus(); } catch (e) {} }
+    });
+  })();
   document.getElementById('ns-list').addEventListener('click', function (e) {
     var card = e.target.closest ? e.target.closest('.ncard[data-open]') : null;
     if (card) focusTerm(parseInt(card.getAttribute('data-open'), 10));

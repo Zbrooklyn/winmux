@@ -158,6 +158,23 @@
   .wc .wcbtn:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
   .wc .wcbtn.wc-close:hover { background: #e5484d; color: #fff; }
   .cockpit[data-mode="narrow"] .wc { display: none !important; }
+
+  /* Phone tap-to-type: a floating pill in the terminal view that raises the soft
+     keyboard. Discoverability — a phone terminal gives no cue you can type into it.
+     Shown only in narrow focus, and hidden the moment the terminal has focus. */
+  .mkbd { display: none; }
+  .cockpit[data-mode="narrow"][data-view="focus"] .mkbd {
+    display: flex; align-items: center; gap: 8px;
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    z-index: 6; padding: 13px 18px; min-height: 44px; box-sizing: border-box; border-radius: 24px;
+    background: var(--accent); color: #fff; border: none;
+    font-size: 13px; font-weight: 600; letter-spacing: .01em;
+    box-shadow: 0 6px 20px rgba(0,0,0,.35); cursor: pointer;
+  }
+  .cockpit[data-mode="narrow"][data-view="focus"][data-typing] .mkbd { display: none; }
+  .mkbd svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+  .mkbd:active { filter: brightness(.94); }
+  @media (prefers-reduced-motion: reduce) { .mkbd { transition: none; } }
   .sx-list { overflow-y: auto; }
   /* Every icon control in this app is a <span role="button">, which the browser
      does NOT put in the tab order. Tab skipped all fifteen of them, so the only
@@ -319,6 +336,12 @@
     </div>
     <div class="ns-list" id="ns-list"></div>
   </section>
+
+  <!-- Phone only: raises the soft keyboard for the open terminal. Hides while typing. -->
+  <button class="mkbd" id="mkbd" type="button" aria-label="Show keyboard">
+    <svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M6 13.5h9"/></svg>
+    <span>Tap to type</span>
+  </button>
 
   <div class="main">
     <div class="workspace" role="main" aria-label="Terminals">
