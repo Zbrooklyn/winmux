@@ -407,9 +407,15 @@
       }
     });
     sxList.innerHTML = html;
-    document.getElementById('d-work').textContent = String(counts.working);
-    document.getElementById('d-need').textContent = String(counts.needsyou);
-    document.getElementById('d-idle').textContent = String(counts.idle);
+    // A zero counter still reads as loud as a three, so the eye lands on nothing
+    // in particular. Mark the empty ones and let the CSS quiet them down.
+    [['d-work', counts.working], ['d-need', counts.needsyou], ['d-idle', counts.idle]]
+      .forEach(function (pair) {
+        var el = document.getElementById(pair[0]);
+        el.textContent = String(pair[1]);
+        var box = el.parentElement;
+        if (pair[1]) box.removeAttribute('data-zero'); else box.setAttribute('data-zero', '');
+      });
     if (countEl) countEl.textContent = String(groups.length);
     var live = document.getElementById('nhead-live');
     if (live) { var n2 = totalTerms(); live.textContent = n2 + ' running'; }
@@ -457,11 +463,14 @@
     list.innerHTML = ts.length
       ? ts.map(function (t) {
         var attn = t.status === 'needsyou' || t.status === 'closed';
+        // An unrenamed terminal is already named after its shell, so printing the
+        // shell again on the same line just reads "PowerShell   PowerShell".
+        var nm = termName(t), kind = labelFor(t.shell);
         return '<div class="ncard' + (attn ? ' attn' : '') + '" data-open="' + t.id + '">' +
           '<span class="dot ' + dotClass(t) + ' sd"></span>' +
           '<div class="sb"><div class="r1">' +
-          '<span class="nm mono">' + esc(termName(t)) + '</span>' +
-          '<span class="tm">' + esc(labelFor(t.shell)) + '</span></div>' +
+          '<span class="nm mono">' + esc(nm) + '</span>' +
+          (kind === nm ? '' : '<span class="tm">' + esc(kind) + '</span>') + '</div>' +
           '<div class="preview">' + statusLine(t) + (t.cwd ? ' · ' + esc(t.cwd) : '') + '</div>' +
           '</div></div>';
       }).join('')

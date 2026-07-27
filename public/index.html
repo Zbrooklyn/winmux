@@ -77,6 +77,14 @@
   /* The live counters belong on the desktop sidebar here (the mockup only showed
      them in its narrow phone mode). */
   .cockpit .sx-deck { display: flex; }
+  /* Nothing happening is not news. A counter at zero steps back so the two that
+     are actually counting something carry the eye. */
+  .stat[data-zero] { opacity: .48; }
+  .stat[data-zero] .v { color: var(--faint); }
+  /* The version chip is the loudest thing in the sidebar and says the least —
+     it wears the accent only on hover, when it is actually a button. */
+  #version-chip { background: var(--bg1); color: var(--muted); font-weight: 560; border: 1px solid var(--border); }
+  #version-chip:hover { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
   .sx-list { overflow-y: auto; }
   /* Changes dock: folder bar on top, diff filling the rest. */
   .dock .pbody { display: flex; flex-direction: column; background: var(--bg0); }
