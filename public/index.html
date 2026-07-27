@@ -127,6 +127,21 @@
      it wears the accent only on hover, when it is actually a button. */
   #version-chip { background: var(--bg1); color: var(--muted); font-weight: 560; border: 1px solid var(--border); }
   #version-chip:hover { background: var(--accent-soft); color: var(--accent-ink); border-color: transparent; }
+  /* Control-placement model (Edward): the tab toolbar keeps only GLOBAL controls —
+     new tab (+) and the dock toggle. Every session-scoped control (find, split, pin,
+     the shell-type caret) moves into the tab's right-click menu, so nothing is in
+     your face until you ask that tab for it. cockpit.css frozen; hidden here. */
+  .pc-find, .pc-pin, .pc-split, .pc-splitmenu, .pc-newmenu { display: none !important; }
+  /* "connected" is the expected state, not news — the pill shows only when there is
+     a problem (reconnecting / disconnected), reclaiming its width the rest of the time. */
+  .connpill[data-state="open"] { display: none !important; }
+  /* A coloured tab tints its name + icon; the corner dot still carries live status. */
+  .ptab[data-tab-color] .tt, .ptab[data-tab-color] .fav { color: var(--tab-color); }
+  /* Tab-menu separator + colour swatches. */
+  .ofmenu .ofsep { height: 1px; background: var(--border); margin: 4px 6px; }
+  .ctxsw { width: 18px; height: 18px; border-radius: 50%; cursor: pointer; border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--faint); line-height: 1; }
+  .ctxsw[data-on] { outline: 2px solid var(--text); outline-offset: 1px; }
   .sx-list { overflow-y: auto; }
   /* Every icon control in this app is a <span role="button">, which the browser
      does NOT put in the tab order. Tab skipped all fifteen of them, so the only

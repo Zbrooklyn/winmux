@@ -247,6 +247,102 @@
     placeMenu(m, x, y);
   }
 
+  // Right-click a top TAB — the full session menu. Every action that acts on one
+  // session lives here, not permanently on the toolbar (Edward's control-placement
+  // model: the bar stays global; session controls appear when you ask the tab).
+  var TAB_COLORS = [
+    ['Default', ''], ['Purple', 'var(--accent)'], ['Red', '#e5484d'], ['Amber', '#d9822b'],
+    ['Green', '#46a758'], ['Blue', '#3b82f6'], ['Pink', '#e93d82'], ['Teal', '#12a594'],
+  ];
+  function setTabColor(t, color) {
+    t.color = color || null;
+    if (t.color) { t.tabEl.style.setProperty('--tab-color', t.color); t.tabEl.setAttribute('data-tab-color', ''); }
+    else { t.tabEl.style.removeProperty('--tab-color'); t.tabEl.removeAttribute('data-tab-color'); }
+  }
+  function showTabColorMenu(t, x, y) {
+    var m = newMenu();
+    var head = document.createElement('div'); head.className = 'ctxlabel'; head.textContent = 'Tab color';
+    m.appendChild(head);
+    var row = document.createElement('div'); row.className = 'ctxswatches';
+    TAB_COLORS.forEach(function (c) {
+      var sw = document.createElement('span');
+      sw.className = 'ctxsw'; sw.title = c[0];
+      sw.style.background = c[1] || 'transparent';
+      if (!c[1]) sw.textContent = '×';
+      if ((t.color || '') === c[1]) sw.setAttribute('data-on', '');
+      sw.addEventListener('click', function (e) { e.stopPropagation(); closeMenu(); setTabColor(t, c[1]); });
+      row.appendChild(sw);
+    });
+    m.appendChild(row);
+    placeMenu(m, x, y);
+  }
+  function showMoveToGroupMenu(t, x, y) {
+    var m = newMenu();
+    var head = document.createElement('div'); head.className = 'ctxlabel'; head.textContent = 'Move to group';
+    m.appendChild(head);
+    var others = groups.filter(function (g) { return g.id !== t.groupId; });
+    if (!others.length) { addMenuItem(m, 'No other groups', '', function () {}); }
+    else others.forEach(function (g) {
+      addMenuItem(m, g.name, '', function () { t.groupId = g.id; switchGroup(g.id); });
+    });
+    placeMenu(m, x, y);
+  }
+  function exportTermText(t) {
+    var text = '';
+    try {
+      var buf = t.term.buffer.active, lines = [];
+      for (var i = 0; i < buf.length; i++) { var ln = buf.getLine(i); lines.push(ln ? ln.translateToString(true) : ''); }
+      while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+      text = lines.join('\r\n');
+    } catch (e) {}
+    var name = (t.tabEl.querySelector('.tt').textContent || 'session').replace(/[^\w.-]+/g, '_');
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+    a.download = name + '.txt';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+  // Visual (left-to-right) tab order within a group, walking each pane's strip.
+  function groupTabsInOrder(gid) {
+    var out = [];
+    panes.forEach(function (p) {
+      Array.prototype.forEach.call(p.tabscroll.querySelectorAll('.ptab'), function (el) {
+        for (var i = 0; i < p.terms.length; i++) {
+          if (p.terms[i].tabEl === el && p.terms[i].groupId === gid) { out.push(p.terms[i]); break; }
+        }
+      });
+    });
+    return out;
+  }
+  function bulkCloseTerms(list, label) {
+    if (!list.length) return;
+    var open = list.filter(function (x) { return x.state === 'open'; }).length;
+    var run = function () { list.slice().forEach(function (x) { var pp = paneById(x.paneId); if (pp) closeTerm(pp, x.id); }); };
+    if (S.confirmClose && open) confirmDialog(label, open + ' shell process' + (open === 1 ? '' : 'es') + ' will be ended.', 'Close', run);
+    else run();
+  }
+  function showTabMenu(t, x, y) {
+    var p = paneById(t.paneId);
+    var m = newMenu();
+    addMenuItem(m, 'Change tab color…', '', function () { showTabColorMenu(t, x, y); });
+    addMenuItem(m, 'Rename…', '', function () { focusTerm(t.id); startRename(t); });
+    addMenuItem(m, 'Duplicate', '', function () { if (p) { newTerm(p, t.shell, t.cwd); focusPane(p.id); } });
+    addMenuItem(m, 'Split tab', 'Ctrl+D', function () { if (p) splitRight(p, t.shell, t.cwd); });
+    addMenuItem(m, 'Move to group…', '', function () { showMoveToGroupMenu(t, x, y); });
+    addMenuItem(m, 'Export text…', '', function () { exportTermText(t); });
+    addMenuItem(m, 'Find…', 'Ctrl+F', function () { focusTerm(t.id); if (p) openFind(p); });
+    var sep = document.createElement('div'); sep.className = 'ofsep'; m.appendChild(sep);
+    addMenuItem(m, 'Close', 'Alt+W', function () { if (p) askCloseTerm(p, t.id); });
+    var ordered = groupTabsInOrder(t.groupId);
+    var idx = ordered.indexOf(t);
+    var toRight = idx >= 0 ? ordered.slice(idx + 1) : [];
+    var others = ordered.filter(function (x) { return x !== t; });
+    if (toRight.length) addMenuItem(m, 'Close tabs to the right', '', function () { bulkCloseTerms(toRight, 'Close ' + toRight.length + ' tab' + (toRight.length === 1 ? '' : 's') + ' to the right?'); });
+    if (others.length) addMenuItem(m, 'Close other tabs', '', function () { bulkCloseTerms(others, 'Close ' + others.length + ' other tab' + (others.length === 1 ? '' : 's') + '?'); });
+    addMenuItem(m, 'Close all tabs', '', function () { bulkCloseTerms(ordered.slice(), 'Close all ' + ordered.length + ' tab' + (ordered.length === 1 ? '' : 's') + ' in this group?'); });
+    placeMenu(m, x, y);
+  }
+
   // ---------------------------------------------------------- notifications
   var notifs = [];
   var notifSeq = 0;
@@ -931,6 +1027,10 @@
     };
     // A tab can be dragged into another pane, so never close over `p` — look the pane up live.
     function pn() { return paneById(t.paneId) || p; }
+
+    // Right-click the tab opens its full session menu (rename, colour, split, move,
+    // export, find, the close family). Session controls live here, not on the toolbar.
+    tabEl.addEventListener('contextmenu', function (e) { e.preventDefault(); e.stopPropagation(); showTabMenu(t, e.clientX, e.clientY); });
 
     // One shell, but possibly several sockets over its life. Losing the socket
     // is not the shell ending — a phone sleeping, a lid closing, a wifi hop and

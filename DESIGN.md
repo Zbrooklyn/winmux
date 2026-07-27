@@ -62,6 +62,14 @@ Edward decides instantly from **rendered options**, not from words. So:
   The status dot's hollow ring is gone, so an idle group shows no dot — but a working (amber)
   or needs-you (red) group still fills its dot, and needs-you still shows red subtext. Loudness
   tracks signal: the dot appears only when a group wants attention. (Live.)
+- **Control-placement model (top bar + tabs).** The tab toolbar carries ONLY global
+  controls — new tab (`+`) and the dock toggle. Every action that acts on one session
+  moved into that tab's **right-click menu**: Change tab color · Rename · Duplicate · Split ·
+  Move to group · Export text · Find · — · Close · Close tabs to the right · Close others ·
+  Close all. (The "to the right / others" items appear only when there's more than one tab.)
+  The "connected" pill is hidden while connected — it appears (red/amber) only on a problem.
+  Principle: nothing session-specific is in your face until you ask the tab for it; the bar
+  stays global. cockpit.css frozen; bar hidden + menu built in index.html/app.js. (Live.)
 - **Header row = no version chip.** The `GROUPS n` label sits left; search + notifications
   sit right; nothing between. The old bordered `v1.0` pill is removed — it was the only boxed
   element in the flat sidebar and a second colour highlight. Version + diagnostics stay
