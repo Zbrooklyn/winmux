@@ -77,7 +77,19 @@
      in-progress rather than as a second flavour of broken. */
   .connpill[data-state="reconnecting"] .dot { background:var(--work); animation:connpulse 1.2s ease-in-out infinite; }
   @keyframes connpulse { 0%,100% { opacity:1 } 50% { opacity:.35 } }
-  @media (prefers-reduced-motion: reduce) { .connpill[data-state="reconnecting"] .dot { animation:none; } }
+  /* Reduce means remove, not shorten. cockpit.css opts its two keyframe animations
+     out, but nothing covered the fifteen transitions, so asking for reduced motion
+     measurably changed nothing. Duration is near-zero rather than `none` so any code
+     waiting on a transitionend still gets its event instead of hanging. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      transition-duration: .01ms !important;
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+    }
+    .connpill[data-state="reconnecting"] .dot { animation: none; }
+  }
   /* In a narrow pane the tab name matters more than the word "connected", so the
      pill collapses to its status dot and gives the label its width back. */
   #wsrow .pane { container-type: inline-size; }
@@ -214,14 +226,16 @@
     <span class="live"><span class="pulse"></span><span id="nhead-live">1 running</span></span>
   </div>
 
-  <aside class="sessions">
+  <aside class="sessions" aria-label="Groups">
     <div class="sx-head"><span>Groups</span><span class="n" id="sx-count">1</span><span class="sxsp"></span>
       <span class="upbadge on" id="version-chip" title="WinMux v1.0 — click for diagnostics" role="button">v1.0</span>
       <span class="sxbtn" id="open-palette" title="Command palette (Ctrl+Shift+P)" role="button" aria-label="Command palette"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></span>
       <span class="sxbtn" id="open-notif" title="Notifications (Ctrl+Alt+N)" role="button" aria-label="Notifications"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg><span class="nbadge" id="notif-badge" style="display:none">0</span></span>
       <span class="sxbtn" id="collapse-sidebar" title="Collapse sidebar (Ctrl+B)" role="button" aria-label="Collapse sidebar"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></span>
     </div>
-    <div class="sx-deck">
+    <!-- The deck is the product's core claim, so it has to reach a screen reader too:
+         "needs you" going 0 -> 1 is exactly the moment you must not miss. -->
+    <div class="sx-deck" role="status" aria-live="polite" aria-label="Fleet status">
       <div class="stat work"><div class="v" id="d-work">0</div><div class="l">Working</div></div>
       <div class="stat need"><div class="v" id="d-need">0</div><div class="l">Needs you</div></div>
       <div class="stat idle"><div class="v" id="d-idle">0</div><div class="l">Idle</div></div>
@@ -253,7 +267,7 @@
   </section>
 
   <div class="main">
-    <div class="workspace">
+    <div class="workspace" role="main" aria-label="Terminals">
       <div class="bcast" id="bcast" style="display:none">
         <svg viewBox="0 0 24 24"><path d="M3 11l18-5v12L3 14v-3zM11 18.5a2 2 0 01-4 0"/></svg>
         <span id="bcast-text">Broadcasting input to all panes</span>
@@ -262,7 +276,7 @@
       <div class="wsrow" id="wsrow"></div>
     </div>
 
-    <aside class="dock" id="dock">
+    <aside class="dock" id="dock" aria-label="Activity dock">
       <div class="pane">
         <div class="ptabs">
           <div class="tabscroll"><div class="ptab" data-active><span class="tfav"><span class="fav fav-d">±</span></span><span class="tt">Changes</span></div></div>

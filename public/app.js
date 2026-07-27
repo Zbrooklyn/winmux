@@ -1180,7 +1180,7 @@
         '<div class="pctrls"><span class="pc pc-rail" title="Toggle left sidebar (Ctrl+B)" role="button">' + RAIL_SVG + '</span></div>' +
         '<div class="tabscroll"></div>' +
         '<div class="tab-of" title="Tabs that don\'t fit" role="button" style="display:none"><span class="ofc">0</span>' + CARET_SVG + '<span class="ofdot" style="display:none"></span></div>' +
-        '<div class="connpill" data-state="idle"><span class="dot"></span><span class="conntext">connecting…</span></div>' +
+        '<div class="connpill" role="status" aria-live="polite" data-state="idle"><span class="dot"></span><span class="conntext">connecting…</span></div>' +
         '<div class="pctrls">' +
           '<span class="pgroup"><span class="pc pc-new" title="New tab (Alt+T)" role="button">' + NEW_SVG + '</span>' +
           '<span class="pc pcaret pc-newmenu" title="New tab type…" role="button">' + CARET_SVG + '</span></span>' +
@@ -2367,15 +2367,42 @@
     var list = document.querySelectorAll(FOCUSABLE);
     for (var i = 0; i < list.length; i++) if (!list[i].hasAttribute('tabindex')) list[i].tabIndex = 0;
   }
+  // Same problem one layer up: the panels announce nothing. `data-open` on a
+  // panel and `data-active` on a row are the truth; aria-expanded and
+  // aria-current are how that truth reaches a screen reader. Driving both off
+  // the observer means a control added later is covered without a second edit.
+  var EXPANDERS = [
+    ['open-palette', 'palette-wrap'], ['open-notif', 'npanel'],
+    ['open-save', 'sessmenu'], ['open-load', 'sessmenu'],
+    ['open-diag', 'diag-ovl'], ['open-help', 'cheat-ovl'],
+    ['open-settings', 'settings-ovl']
+  ];
+  // setAttribute fires a mutation even when the value is unchanged, which would
+  // make the observer feed itself. Only write on a real difference.
+  function setAria(el, name, val) { if (el && el.getAttribute(name) !== val) el.setAttribute(name, val); }
+  function syncAria() {
+    for (var i = 0; i < EXPANDERS.length; i++) {
+      var btn = document.getElementById(EXPANDERS[i][0]);
+      var panel = document.getElementById(EXPANDERS[i][1]);
+      if (btn && panel) setAria(btn, 'aria-expanded', panel.hasAttribute('data-open') ? 'true' : 'false');
+    }
+    setAria(document.getElementById('collapse-sidebar'), 'aria-expanded',
+      root.getAttribute('data-sidebar') === 'open' ? 'true' : 'false');
+    var sel = document.querySelectorAll('.prow, .ptab, .srow');
+    for (var j = 0; j < sel.length; j++) setAria(sel[j], 'aria-current', sel[j].hasAttribute('data-active') ? 'true' : 'false');
+  }
   wireFocusable();
+  syncAria();
   new MutationObserver(function (muts) {
     for (var i = 0; i < muts.length; i++) {
       var t = muts[i].target;
       if (t && t.closest && t.closest('.xterm')) continue; // terminal output, not chrome
       wireFocusable();
+      syncAria();
       return;
     }
-  }).observe(document.body, { childList: true, subtree: true });
+  }).observe(document.body, { childList: true, subtree: true, attributes: true,
+    attributeFilter: ['data-open', 'data-active', 'data-sidebar'] });
 
   var first = makePane(makeCol());
   newTerm(first, startShell());
