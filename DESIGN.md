@@ -72,7 +72,8 @@ Edward decides instantly from **rendered options**, not from words. So:
 - **Dock toggle = one button, like the sidebar.** The pane-header panel icon (`.pc-dock`)
   is the single dock toggle, both directions. The floating right-edge reopen-strip is gone —
   it was the same stray chrome we removed from the sidebar, and `.pc-dock` already reopens.
-  (The in-panel × still closes from inside the dock.) (Live.)
+  (The in-panel control still hides the dock from inside — it uses the panel glyph, not an ×,
+  so it reads as a panel toggle and never collides with the window-close × sitting beside it.) (Live.)
 - **Control-placement model (top bar + tabs).** The tab toolbar carries ONLY global
   controls — new tab (`+`) and the dock toggle. Every action that acts on one session
   moved into that tab's **right-click menu**: Change tab color · Rename · Duplicate · Split ·
