@@ -49,6 +49,27 @@ function tailscaleIP() {
   return null;
 }
 
+// How many other machines are on the tailnet right now. Only ever a label: the
+// tailnet-trust switch says "any of these N devices gets in with no key", and a
+// switch that cannot tell you how many is a switch nobody can judge. On this
+// tailnet the count is not 1 — one of the peers belongs to someone else.
+const tailnet = { peers: null, at: 0 };
+function refreshTailnetPeers() {
+  execFile('tailscale', ['status', '--json'], { timeout: 4000, windowsHide: true }, (err, out) => {
+    tailnet.at = Date.now();
+    if (err) return;                                   // no CLI, no tailnet, no claim
+    try {
+      const j = JSON.parse(out);
+      tailnet.peers = Object.keys(j.Peer || {}).length;
+    } catch (e) {}
+  });
+}
+function tailnetPeers() {
+  if (Date.now() - tailnet.at > 60000) refreshTailnetPeers();  // refreshes for NEXT read
+  return tailnet.peers;
+}
+refreshTailnetPeers();
+
 // Can we actually bind this exact host:port right now?
 function bindable(host, port) {
   return new Promise((resolve) => {
@@ -59,13 +80,47 @@ function bindable(host, port) {
   });
 }
 
-// A port is only usable if BOTH doors can open on it. Checking just the desk
-// door is how you end up with an app that looks fine and a phone switch that
-// can never turn on — on this machine tailscaled itself holds the Tailscale
-// side of the old default.
+// Ports that `tailscale serve` / `funnel` already forwards into 127.0.0.1.
+// These are the dangerous ones: a serve rule proxies the whole tailnet — or, with
+// funnel, the open internet — into loopback, so the request ARRIVES looking like
+// it came from this PC. The desk door needs no key precisely because only this PC
+// can knock, and a serve rule quietly makes that untrue. It cannot be detected by
+// checking who is calling; it can only be stepped around, so we step around it.
+// Other rules belong to @edward's other projects — we move, we never rewrite his
+// config.
+function tunnelledPorts() {
+  return new Promise((resolve) => {
+    const found = new Set();
+    let left = 2;
+    const done = () => { if (--left === 0) resolve(found); };
+    for (const sub of ['serve', 'funnel']) {
+      execFile('tailscale', [sub, 'status'], { timeout: 4000, windowsHide: true }, (err, out) => {
+        // No tailscale, no rules, an old CLI without the subcommand: all mean
+        // "nothing proven tunnelled". Never guess a port is unsafe.
+        if (!err && out) {
+          const re = /https?:\/\/(?:127\.0\.0\.1|localhost):(\d{1,5})/g;
+          let m;
+          while ((m = re.exec(out))) found.add(parseInt(m[1], 10));
+        }
+        done();
+      });
+    }
+  });
+}
+
+// A port is only usable if BOTH doors can open on it, and if nothing is already
+// tunnelling the tailnet into its loopback side. Checking just the desk door is
+// how you end up with an app that looks fine and a phone switch that can never
+// turn on — on this machine tailscaled itself holds the Tailscale side of the
+// old default.
 async function pickPort() {
   const ip = tailscaleIP();
+  const tunnelled = await tunnelledPorts();
   for (const p of PORT_CANDIDATES) {
+    if (tunnelled.has(p)) {
+      console.log('port ' + p + ' is already forwarded to this PC by a tailscale serve rule — skipping it, so the keyless door stays local');
+      continue;
+    }
     if (!(await bindable(HOST, p))) continue;
     if (ip && !(await bindable(ip, p))) continue;
     return p;
@@ -98,13 +153,107 @@ function tokenFrom(req) {
   return m ? m[1] : '';
 }
 
-// Only ever called for requests arriving at the phone door.
-function authed(req) {
-  if (!phone.on) return false;
+// --- Who we already trust ---------------------------------------------------
+// The access key rotates every time the switch is flipped, which is right for a
+// link that might leak and wrong for the phone in @edward's pocket — it made a
+// scanned QR die at the next restart. A device that has proved it holds the key
+// once gets its own long-lived id here, so the key stays disposable and the
+// phone stays remembered. This file outlives the process on purpose.
+// Overridable so the verification harness can run against a scratch guest list
+// instead of @edward's real one. Nothing else sets it; the default is the only
+// path the app itself ever uses.
+const TRUST_FILE = process.env.WINMUX_TRUST_FILE || path.join(__dirname, '.winmux-devices.json');
+const trust = { trustTailnet: false, devices: [] };
+function loadTrust() {
+  try {
+    const t = JSON.parse(fs.readFileSync(TRUST_FILE, 'utf8'));
+    trust.trustTailnet = !!t.trustTailnet;
+    trust.devices = Array.isArray(t.devices) ? t.devices.filter((d) => d && /^[a-f0-9]{32}$/.test(d.id)) : [];
+  } catch (e) { /* no file yet, or unreadable — start closed, never open */ }
+}
+function saveTrust() {
+  try { fs.writeFileSync(TRUST_FILE, JSON.stringify(trust, null, 2)); } catch (e) {}
+}
+loadTrust();
+
+function deviceIdFrom(req) {
+  const m = (req.headers.cookie || '').match(/(?:^|;\s*)ct_dev=([a-f0-9]{32})/);
+  return m ? m[1] : '';
+}
+function knownDevice(req) {
+  const id = deviceIdFrom(req);
+  if (!id) return null;
+  for (const d of trust.devices) {
+    const a = Buffer.from(id), b = Buffer.from(d.id);
+    if (a.length !== b.length) continue;
+    try { if (crypto.timingSafeEqual(a, b)) return d; } catch (e) {}
+  }
+  return null;
+}
+// A label for the Settings list only. Never load-bearing for auth — it comes
+// straight from a header the caller controls.
+function describeDevice(req) {
+  const ua = String(req.headers['user-agent'] || '');
+  const os = /Android/i.test(ua) ? 'Android' : /iPhone|iPad|iOS/i.test(ua) ? 'iPhone/iPad'
+    : /Windows/i.test(ua) ? 'Windows' : /Mac OS X/i.test(ua) ? 'Mac' : /Linux/i.test(ua) ? 'Linux' : 'Unknown device';
+  const br = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome'
+    : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'browser';
+  return os + ' · ' + br;
+}
+function rememberDevice(req, ip) {
+  const existing = knownDevice(req);
+  const now = new Date().toISOString();
+  if (existing) { existing.last = now; existing.ip = ip || existing.ip; saveTrust(); return existing.id; }
+  const id = crypto.randomBytes(16).toString('hex');
+  trust.devices.push({ id, name: describeDevice(req), first: now, last: now, ip: ip || '' });
+  saveTrust();
+  console.log('phone access: remembered a new device — ' + describeDevice(req));
+  return id;
+}
+function forgetDevice(id) {
+  const before = trust.devices.length;
+  trust.devices = trust.devices.filter((d) => d.id !== id);
+  const gone = before !== trust.devices.length;
+  if (gone) saveTrust();
+  // Forgetting has to mean something to a terminal that is open right now,
+  // otherwise a revoked device keeps its shell until it feels like leaving.
+  if (gone && phone.wss) {
+    for (const ws of phone.wss.clients) {
+      if (ws._ctDev === id) { try { ws.close(4003, 'device forgotten'); } catch (e) {} }
+    }
+  }
+  return gone;
+}
+function forgetAllDevices() {
+  trust.devices = [];
+  saveTrust();
+  if (phone.wss) for (const ws of phone.wss.clients) { try { ws.close(4003, 'devices forgotten'); } catch (e) {} }
+}
+// What Settings is allowed to see. The id is a credential — it goes to the PC,
+// which is the only place that can revoke anything, and never back out over the
+// phone door, where it would hand one guest the keys of every other.
+function deviceList(viaPhone) {
+  return trust.devices.map((d) => (viaPhone
+    ? { name: d.name, first: d.first, last: d.last }
+    : { id: d.id, name: d.name, first: d.first, last: d.last, ip: d.ip }));
+}
+
+function keyMatches(req) {
   const got = tokenFrom(req);
   const a = Buffer.from(got), b = Buffer.from(phone.token);
   if (a.length !== b.length) return false;          // length differs → no match
   try { return crypto.timingSafeEqual(a, b); } catch (e) { return false; }
+}
+
+// Only ever called for requests arriving at the phone door. Three ways in, in
+// descending order of how deliberate they are: this device already proved it
+// holds the key, the request carries the key right now, or @edward has decided
+// the whole tailnet counts (off unless he says otherwise).
+function authed(req) {
+  if (!phone.on) return false;
+  if (trust.trustTailnet) return true;
+  if (keyMatches(req)) return true;
+  return !!knownDevice(req);
 }
 
 // --- Shell detection -------------------------------------------------------
@@ -257,8 +406,9 @@ function keyNeededPage() {
     '<ol><li>On your PC, open WinMux.</li>' +
     '<li>Go to <strong>Settings &rarr; Phone</strong>.</li>' +
     '<li>Scan the QR code with your phone&rsquo;s camera.</li></ol>' +
-    '<p class="note">The key changes every time phone access is switched on, so a saved ' +
-    'bookmark stops working. Scan the QR again rather than editing the address.</p>' +
+    '<p class="note">Scan it once and this phone is remembered &mdash; it keeps working after ' +
+    'restarts, without scanning again. Typing the address by hand never works: the key is the ' +
+    'part that&rsquo;s missing.</p>' +
     '</main></body></html>';
 }
 
@@ -276,11 +426,24 @@ function handle(req, res, viaPhone) {
     return;
   }
   // Arriving with a valid ?k= parks it in a cookie so the rest of the page
-  // (scripts, fonts, the websocket) authenticates without the key in every URL.
+  // (scripts, fonts, the websocket) authenticates without the key in every URL,
+  // and mints the device id that lets this phone skip the QR next time. Both
+  // only ever on a real key match — never because trustTailnet waved it in, or
+  // switching the tailnet on and off again would silently trust the room.
   if (viaPhone) {
     try {
-      if (new URL(req.url, 'http://x').searchParams.get('k')) {
-        res.setHeader('Set-Cookie', 'ct_k=' + phone.token + '; Path=/; HttpOnly; SameSite=Strict');
+      if (new URL(req.url, 'http://x').searchParams.get('k') && keyMatches(req)) {
+        const dev = rememberDevice(req, req.socket.remoteAddress);
+        res.setHeader('Set-Cookie', [
+          'ct_k=' + phone.token + '; Path=/; HttpOnly; SameSite=Strict',
+          // A year, because the point is to outlive restarts and key rotation.
+          'ct_dev=' + dev + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000',
+        ]);
+      } else if (/text\/html/.test(req.headers.accept || '')) {
+        // Page loads only — refreshing "last seen" on every asset would rewrite
+        // the file dozens of times per screen.
+        const d = knownDevice(req);
+        if (d) { d.last = new Date().toISOString(); saveTrust(); }
       }
     } catch (e) {}
   }
@@ -296,9 +459,22 @@ function handle(req, res, viaPhone) {
       let body = '';
       req.on('data', (c) => { body += c; if (body.length > 2000) req.destroy(); });
       req.on('end', () => {
-        let want = false;
-        try { want = !!JSON.parse(body || '{}').on; } catch (e) {}
-        setPhone(want, (r) => {
+        let msg = {};
+        try { msg = JSON.parse(body || '{}'); } catch (e) {}
+        // Trusting the whole tailnet is a separate decision from opening the
+        // door at all, so it is a separate field — and it persists, because
+        // re-deciding it every restart is the chore we are removing.
+        if (Object.prototype.hasOwnProperty.call(msg, 'trustTailnet')) {
+          trust.trustTailnet = !!msg.trustTailnet;
+          saveTrust();
+          console.log('phone access: tailnet trust ' + (trust.trustTailnet ? 'ON — any device on the tailnet, no key' : 'OFF'));
+        }
+        if (!Object.prototype.hasOwnProperty.call(msg, 'on')) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(Object.assign({ ok: true }, phoneState(false))));
+          return;
+        }
+        setPhone(!!msg.on, (r) => {
           res.writeHead(r.ok ? 200 : 409, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(r));
         });
@@ -307,6 +483,32 @@ function handle(req, res, viaPhone) {
     }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(phoneState(viaPhone)));
+    return;
+  }
+  // Remembered devices: readable anywhere, revocable only at the PC. Same rule
+  // as the switch itself — a leaked link must never be able to edit the guest
+  // list, and never learns another device's id (only its own, which it holds).
+  if (urlPath === '/api/phone/devices') {
+    if (req.method === 'POST') {
+      if (viaPhone) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'Remembered devices can only be changed at the PC itself.' }));
+        return;
+      }
+      let body = '';
+      req.on('data', (c) => { body += c; if (body.length > 2000) req.destroy(); });
+      req.on('end', () => {
+        let msg = {};
+        try { msg = JSON.parse(body || '{}'); } catch (e) {}
+        if (msg.all) forgetAllDevices();
+        else if (typeof msg.forget === 'string') forgetDevice(msg.forget);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, devices: deviceList(viaPhone) }));
+      });
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ devices: deviceList(viaPhone), canChange: !viaPhone }));
     return;
   }
   // The link as a scannable square, so nobody types a 32-character key.
@@ -373,6 +575,11 @@ function phoneState(viaPhone) {
     // Whether THIS browser is allowed to flip the switch.
     canChange: !viaPhone,
     tailscale: !!tailscaleIP(),
+    trustTailnet: trust.trustTailnet,
+    // null when we could not ask tailscale — the UI must then say so rather
+    // than print a confident number it does not have.
+    tailnetPeers: tailnetPeers(),
+    devices: deviceList(viaPhone),
   };
 }
 
@@ -431,6 +638,9 @@ function setPhone(want, done) {
 const wss = new WebSocketServer({ server, path: '/pty' });
 wss.on('connection', onShellConnection);
 function onShellConnection(ws, req) {
+  // Which remembered device this terminal belongs to, so that forgetting a
+  // device closes the shell it is holding right now rather than at its leisure.
+  ws._ctDev = deviceIdFrom(req);
   var key = 'powershell';
   var want = '';
   try {
@@ -486,6 +696,16 @@ function announce() {
     if (PORT !== PORT_REQUESTED) {
       console.log('port ' + PORT_REQUESTED + ' was busy on your Tailscale address — using ' + PORT + ' instead');
     }
+  } else if ((await tunnelledPorts()).has(PORT)) {
+    // An explicit PORT is otherwise obeyed exactly. Not this one: serving the
+    // keyless desk door on a port the whole tailnet is already forwarded into
+    // would hand out a shell with no key at all. Refuse loudly instead.
+    console.error('WinMux will not start on port ' + PORT + '.');
+    console.error('A "tailscale serve" rule already forwards that port to this PC, so anything on your Tailscale');
+    console.error('network would reach WinMux without a key. Start it on a different port, or run');
+    console.error('  tailscale serve status');
+    console.error('to find the rule that points at 127.0.0.1:' + PORT + ' and turn that one off.');
+    process.exit(2);
   }
   server.listen(PORT, HOST, announce);
 })();

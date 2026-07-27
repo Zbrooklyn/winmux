@@ -180,6 +180,98 @@ A fourth surfaced the moment @edward actually used it:
 Left to @edward (not a task): starting WinMux automatically at logon needs a one-time elevated command,
 which cannot be self-granted. Until then it runs until the next reboot, or until `.\winmux.ps1 stop`.
 
+## Phase 3 — Who gets in, and on whose word
+
+Objective: @edward stops re-scanning a QR after every restart, without quietly handing a shell to every
+device on his tailnet.
+Gate: a device that has scanned once still gets in after a restart and a key rotation; a device that
+never scanned still gets the "One step left" page; the tailnet-trust switch is OFF on a fresh install,
+can only be flipped at the PC, and says plainly what it does.
+
+The question that started it: *"If you're using Tailscale, it's always secure because it only works if
+you're on that network — so we should have a switch that it always works on the Tailscale network."*
+Half right, and the half that is wrong is measurable. `tailscale status` on this machine lists **seven**
+devices, and one of them — `rugking-pad-pro-1`, `100.104.238.81` — belongs to `davidshamosh16@`, not to
+@edward. A personal tailnet is a room he shares, not a room he owns. So "no key on the tailnet" is not
+"only me"; it is "me, David, and every device either of us adds later."
+
+The real complaint underneath was never about keys. It was that the key **rotates on every start**, so a
+scanned QR dies with the next restart. That is fixable without widening anything.
+
+- [x] **Trusted devices — scan once, not once per restart.** @claude
+      A phone that presents a valid key gets a second, longer-lived cookie identifying the *device*
+      (`ct_dev`), recorded in `.winmux-devices.json`. Auth becomes: key, **or** a known device, **or**
+      tailnet-trust. Device ids survive restarts and key rotation — that is the entire point — so the QR
+      is a one-time act per phone rather than a ritual. Devices are listed in Settings → Phone with when
+      they were first and last seen, and can be forgotten individually or all at once; forgetting closes
+      that device's live terminals rather than leaving a session running behind a revoked trust.
+      Files: `server.cjs` (`trust` store + `authed()` + `/api/phone/devices`), `public/index.html`
+      (device list + Forget), `.gitignore`.
+      (need: nothing from @edward — the default behaviour is unchanged for a device that never scanned)
+      (proof: `verify.cjs` group `trust` — the scan mints `ct_dev` with `Max-Age=31536000`, the same
+      phone is still admitted after a key rotation *and* after the server process is really killed and
+      restarted, and forgetting it closes its live terminal and sends its next request back to 401)
+
+- [x] **The tailnet-trust switch, off by default.** @claude
+      A second switch in Settings → Phone: *any device on your Tailscale network gets in without a key*.
+      Persisted, so flipping it is a decision and not a chore, but **OFF on a fresh install** and only
+      changeable from the desk door — the phone door returns 403 exactly as it already does for the phone
+      switch, so a leaked link can never widen its own access. The label names the consequence in the
+      owner's words, including the count of devices currently on the tailnet, because "7 devices" is the
+      fact that makes the choice real. Turning it back off must not evict devices that scanned properly.
+      Files: `server.cjs` (`trustTailnet` in the trust store + POST handler), `public/index.html`.
+      (need: @edward decided — build both, tailnet switch ships OFF)
+      (proof: `verify.cjs` group `trust` — OFF on a fresh trust store, 403 from the phone door, and the
+      rendered line counts the tailnet ("all 6 other devices … without scanning anything") and warns
+      rather than reassures. **Not proved: a keyless request actually being admitted with the switch ON.**
+      It was flipped with the phone door shut on purpose — the tailnet holds a device that is not
+      @edward's, and no test is worth opening a real keyless shell to a stranger's iPad)
+
+- [x] **Refuse a port that Tailscale already tunnels into.** @claude
+      Found while answering the question, and worse than the thing being asked about: an existing
+      `tailscale serve` rule maps `talkos.tail9f5d16.ts.net:8810` → `127.0.0.1:8799`. Port 8799 is
+      WinMux's **default desk-door port** — the door with no key that can flip the phone switch. Bound
+      there, the desk door is reachable by the whole tailnet, David's iPad included, and the
+      `bindable()` check cannot see it because the proxy terminates on loopback. Proved rather than
+      assumed: a probe server on `127.0.0.1:8799` answered `PROBE-REACHED-LOOPBACK` through
+      `https://talkos.tail9f5d16.ts.net:8810/`. WinMux dodged it today only by accident. `pickPort()`
+      must skip any port that `tailscale serve`/`funnel status` names as a proxy target, and an explicit
+      `PORT` that is tunnelled must refuse to start — the one case where an explicit port is not obeyed,
+      because obeying it hands out a keyless shell.
+      Files: `server.cjs` (`tunnelledPorts()` + `pickPort()` + startup refusal), `verify.cjs` (fixture).
+      (need: nothing — @edward's other `tailscale serve` rules belong to other projects and are not
+      touched; WinMux moves out of their way rather than rewriting his config)
+      (proof: `verify.cjs` groups `port` and `reason` — a tunnelled port is skipped by `pickPort()`, an
+      explicit tunnelled `PORT` refuses to start, and the refusal renders next to the switch in words)
+
+- [x] **The harness stops depending on tailscaled's accidents.** @claude
+      `PORT_BUSY = 8799` works only because `tailscaled` happens to hold that tailnet address, which is
+      why the `busyport` and `reason` groups *skip* on a machine where it does not — and a skip is not a
+      pass. The harness will bind the tailnet face of an otherwise-free port itself, making the collision
+      deterministic, removing two conditional skips, and freeing the fixture from the same serve rule
+      Phase 3 now refuses.
+      Files: `verify.cjs` (`PORT_BUSY` → self-made collision).
+      (need: nothing)
+      (proof: `node verify.cjs` finishes **118/118, zero skips, exit 0**. The three groups that mutate
+      real state — `remote`, `phone`, `trust` — each own a port now, so none of them can borrow
+      @edward's live WinMux and skip instead of testing)
+
+- [x] **Prove it, in the states that matter.** @claude
+      New checks, measured not asserted: a device that scanned once is still admitted after the token is
+      rotated · a device with no cookie and no key still gets 401 + the "One step left" page · the
+      tailnet switch defaults OFF on a fresh trust store · POSTing `trustTailnet` from the phone door
+      returns 403 · with it ON a bare request gets 200 · forgetting a device makes its next request 401 ·
+      a tunnelled port is refused at startup with a readable reason. Plus screenshots of the new Settings
+      panel in both colour schemes, shipped to @edward.
+      (need: nothing)
+      (proof: the `trust` group, 48 checks over ten stages — fresh install · the scan · the guest list ·
+      the phone door's read-only guardrails · a key rotation · a real process kill and restart · a
+      stranger turned away · a second phone getting a working shell · the rendered panel · forgetting as
+      revocation · the tailnet switch. The panel screenshots were measured, not eyeballed: the settings
+      pane is `overflow-y:auto`, the last remembered phone scrolls fully into view, its Forget button is
+      a real target, and the "dark"/"light" shots are the resolved themes (`#1e1e1e` / `#ffffff`), not an
+      emulated OS hint that the app's attribute override would have beaten. Shipped to @edward)
+
 ## Decisions
 
 - Design contract (resolved: `public/cockpit.css` is the mockup verbatim and is never edited — all app-specific CSS lives in the `<style>` block in `index.html`)
@@ -196,6 +288,8 @@ which cannot be self-granted. Until then it runs until the next reboot, or until
 - Staying up (resolved: `winmux.ps1 start` runs node hidden and detached via `Start-Process`, so the link outlives the terminal that created it. Logon autostart is @edward's one-time elevated call — Claude cannot self-elevate, and until it is registered WinMux runs only until the next reboot)
 - Screenshots of the Phone tab (resolved: the link and the QR are blanked before every capture, and a check fails if a live key survives. A screenshot of that panel is a photograph of a working shell key)
 - Arriving without the key (resolved: a refusal must name the fix, not just the problem. @edward typed the tailnet address by hand instead of scanning the QR and got a bare `WinMux: this link needs its access key.` — correct, and a dead end. The phone door now serves a self-contained branded page telling him where the key lives (Settings → Phone → scan the QR) when the request comes from a person (`Accept: text/html`), and keeps the one-line refusal for scripts, assets, and the websocket. Self-contained on purpose: every asset is behind the same door it is refusing. Measured on a 384px phone viewport — 3 steps, app accent, no sideways scroll)
+- Trusting the tailnet instead of the key (resolved: **both, with the tailnet switch OFF by default** — @edward's call. His premise was that Tailscale is already the lock, which is true but not sufficient: `tailscale status` shows seven devices on this tailnet and one of them, `rugking-pad-pro-1`, belongs to `davidshamosh16@`. Keyless-on-tailnet therefore means keyless for David. The pain he actually described — re-scanning after every restart — is solved by remembering devices, which does not widen anything. The switch he asked for exists anyway, defaults off, and is flippable only at the PC)
+- A `tailscale serve` rule pointed at our own default port (resolved: WinMux moves, @edward's config is not rewritten. `:8810 → 127.0.0.1:8799` already tunnels the whole tailnet into the desk-door default port; proved with a probe server, not assumed. Other serve rules belong to other projects, so the fix is ours to absorb: skip tunnelled ports when choosing, and refuse to start on an explicitly-requested one)
 - The door's colour scheme (resolved: it follows the phone, because the app does. `cockpit.css:7` gives WinMux a `prefers-color-scheme: light` block, so the needs-key page hardcoding dark put a dark refusal in front of a light app — two different products. Found by opening the live link in a real browser, not by reading the CSS. Same four tokens, same values, switched on the media query; two checks measure the computed body background and colour in each scheme rather than trusting the stylesheet)
 - Bell while you are watching the tab (resolved: logged to notifications only; the attention ring is reserved for a tab you are NOT watching, so it never nags about output you can already see)
 

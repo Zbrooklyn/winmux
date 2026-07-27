@@ -1396,7 +1396,52 @@
     } else {
       out += '<div class="phone-off">Switch this on and you’ll get a square to scan. Your phone opens the same terminals you see here, over Tailscale — nothing is exposed to the open internet, and the link stops working the moment you switch it back off.</div>';
     }
+    out += trustRow(p) + deviceSection(p);
     return out;
+  }
+  // The second switch. It is a genuine widening of who gets in, so the hint
+  // counts the devices out loud rather than saying a comfortable "your devices".
+  function trustRow(p) {
+    var n = p.tailnetPeers;
+    var others = (typeof n === 'number')
+      ? (n === 1 ? 'the 1 other device' : 'all ' + n + ' other devices')
+      : 'every other device';
+    var hint = !p.canChange ? 'Only the PC can change this.'
+      : p.trustTailnet
+        ? 'On — ' + others + ' on your Tailscale network can open a terminal here without scanning anything.'
+        : 'Off — a device gets in only after it has scanned the QR once. Recommended.';
+    var out = frow('Skip the key on my Tailscale network', hint,
+      '<span class="sw ' + (p.trustTailnet ? 'on' : '') + (p.canChange ? '' : ' off-disabled') + '" data-trust-toggle role="button" aria-label="Skip the key on my Tailscale network"></span>');
+    if (p.trustTailnet) {
+      out += '<div class="phone-warn" style="margin:-4px 0 12px">A Tailscale network is not always only yours — a device someone else owns can be on it. With this on, any of them reaches this PC.</div>';
+    }
+    return out;
+  }
+  function when(iso) {
+    try {
+      var d = new Date(iso);
+      var today = new Date();
+      var sameDay = d.toDateString() === today.toDateString();
+      var t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      return sameDay ? t : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + t;
+    } catch (e) { return ''; }
+  }
+  function deviceSection(p) {
+    var ds = p.devices || [];
+    if (!ds.length) return '';
+    var rows = ds.map(function (d) {
+      return '<div class="devrow">' +
+        '<div class="devmain"><div class="devname">' + esc(d.name || 'Unknown device') + '</div>' +
+        '<div class="devmeta">last used ' + esc(when(d.last)) + ' · first scanned ' + esc(when(d.first)) + '</div></div>' +
+        (p.canChange ? '<span class="btn" data-act="forget" data-dev="' + esc(d.id) + '">Forget</span>' : '') +
+      '</div>';
+    }).join('');
+    return '<div class="devs">' +
+      '<div class="devhead">Remembered phones</div>' +
+      '<div class="devnote">These skip the QR. Forgetting one closes its terminals straight away and it has to scan again.</div>' +
+      rows +
+      (p.canChange && ds.length > 1 ? '<div style="margin-top:10px"><span class="btn" data-act="forget-all">Forget all</span></div>' : '') +
+    '</div>';
   }
   function loadPhone(then) {
     fetch('/api/phone').then(function (r) { return r.json(); }).then(function (j) {
@@ -1427,6 +1472,35 @@
       })
       .catch(function (e) { phoneBusy = false; phoneFail(String(e.message || e)); });
   }
+  // Trusting the tailnet is its own POST field, so flipping it never disturbs
+  // whether the door is open — those are two separate decisions.
+  function flipTrust() {
+    if (phoneBusy || !phoneS || !phoneS.canChange) return;
+    phoneBusy = true;
+    phoneErr = '';
+    var want = !phoneS.trustTailnet;
+    fetch('/api/phone', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trustTailnet: want }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        phoneBusy = false;
+        if (!j.ok) { phoneFail(j.error || 'Unknown error'); return; }
+        phoneS = j;
+        renderSettings();
+        notify(want ? 'Key no longer needed on your Tailscale network' : 'The key is required again',
+          want ? 'Any device on your Tailscale network can now open a terminal here.' : 'A device has to scan the QR once before it gets in.');
+      })
+      .catch(function (e) { phoneBusy = false; phoneFail(String(e.message || e)); });
+  }
+  function forgetDev(body, msg) {
+    fetch('/api/phone/devices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (phoneS) phoneS.devices = j.devices || [];
+        renderSettings();
+        notify('Forgotten', msg);
+      })
+      .catch(function (e) { phoneFail(String(e.message || e)); });
+  }
   function renderSettings() {
     document.getElementById('settings-tabs').innerHTML = SETTABS.map(function (t) {
       return '<div class="mtab" data-settab="' + t + '"' + (t === curSet ? ' data-active' : '') + '>' + t + '</div>';
@@ -1449,6 +1523,7 @@
   });
   document.getElementById('settings-pane').addEventListener('click', function (e) {
     if (e.target.closest && e.target.closest('[data-phone-toggle]')) { flipPhone(); return; }
+    if (e.target.closest && e.target.closest('[data-trust-toggle]')) { flipTrust(); return; }
     var s = e.target.closest ? e.target.closest('[data-sw]') : null;
     if (s) {
       var k = s.getAttribute('data-sw');
@@ -1467,6 +1542,15 @@
         navigator.clipboard.writeText(phoneS.url);
         notify('Link copied', 'Anyone holding it can reach this PC — paste it carefully.');
       } catch (err) { notify('Could not copy', 'Select the link and copy it by hand.'); }
+    }
+    if (a === 'forget') {
+      var id = act.getAttribute('data-dev');
+      forgetDev({ forget: id }, 'That phone has to scan the QR again before it gets back in.');
+    }
+    if (a === 'forget-all') {
+      confirmDialog('Forget every remembered phone?', 'Their terminals close now, and each one has to scan the QR again.', 'Forget all', function () {
+        forgetDev({ all: true }, 'Every phone has to scan the QR again.');
+      });
     }
     if (a === 'reset') {
       confirmDialog('Reset settings?', 'Fonts, cursor, scrollback and behaviour go back to their defaults.', 'Reset', function () {

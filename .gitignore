@@ -2,6 +2,7 @@ node_modules/
 install.log
 verify-out/
 .winmux-state.json
+.winmux-devices*.json
 winmux.log
 winmux.err.log
 .winmux-link.tmp
