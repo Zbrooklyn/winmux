@@ -18,8 +18,47 @@
     'JetBrains Mono': "'JetBrains Mono','Cascadia Code',Consolas,monospace",
     'System monospace': 'ui-monospace,monospace',
   };
+  // --- The sixteen colours a terminal actually speaks in -------------------
+  // Nobody ever chose the old ones. A theme that names no ANSI colours makes
+  // xterm.js fall back to Tango — GNOME Terminal's 2006 default — and Tango was
+  // drawn for a mid-grey background, not for ours. Two of its slots do most of
+  // the damage on a PowerShell prompt, because PSReadLine paints every command
+  // you type in brightYellow and every parameter in brightBlack: #fce94f is a
+  // 14:1 shout on our near-black and a 1.2:1 ghost on our near-white, and
+  // #555753 is 2.4:1 mud on the dark. Eleven of the sixteen failed outright in
+  // light mode. One palette cannot serve both grounds, so each mode gets its own.
+  //
+  // Every colour below is measured against the background it is drawn on and
+  // clears 4.5:1. Slot 0 is exempt: it is the ground for inverse video, not type.
+  var PALETTES = {
+    aurora: {
+      label: 'Aurora — cool, keyed to the app accent',
+      dark: ['#31313a', '#e8646d', '#78c98a', '#d6ac62', '#7aa2f7', '#b98cf2', '#5cc3c9', '#c3c3ca',
+        '#8f8f9b', '#ff8f96', '#9ce0a8', '#f2cf88', '#a2c0ff', '#d0a8ff', '#8ce2e6', '#f2f2f5'],
+      light: ['#2b2b31', '#b01f28', '#286b34', '#7d5310', '#2748a3', '#743597', '#186064', '#4f4f57',
+        '#6d6d76', '#c9282f', '#337a41', '#96620f', '#3059bd', '#8a41b2', '#1e7076', '#1f1f24'],
+    },
+    ash: {
+      label: 'Ash — muted, lowest glare',
+      dark: ['#33333a', '#d4838a', '#93bd97', '#c8ae7d', '#8aa8d6', '#b39ad4', '#7fbcbf', '#c0c0c4',
+        '#909096', '#e79ba2', '#a9d3ad', '#dcc491', '#a3bfe8', '#c8b0e6', '#98d0d3', '#eeeef0'],
+      light: ['#2e2e33', '#9c3a41', '#3b6741', '#75581f', '#3a5590', '#6b4788', '#2a6165', '#525258',
+        '#6e6e75', '#b24851', '#48784f', '#8a6a29', '#48659f', '#7d5599', '#357176', '#232328'],
+    },
+    ember: {
+      label: 'Ember — warm, classic terminal',
+      dark: ['#3a332e', '#f0736b', '#9dc06a', '#e0ac5c', '#7fb0e0', '#d089c4', '#63c4b4', '#c9c2b8',
+        '#98908a', '#ff8f88', '#b6d685', '#f5c87c', '#9fc8f2', '#e6a3da', '#8adacb', '#f5efe6'],
+      light: ['#33291f', '#ad3325', '#4e6a1c', '#8a5a12', '#2a5590', '#94357f', '#1d6a5e', '#57503f',
+        '#6f685e', '#c4402f', '#5c7d22', '#96620f', '#3565a8', '#a94494', '#237c6e', '#2b241b'],
+    },
+  };
+  var ANSI_KEYS = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+    'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue',
+    'brightMagenta', 'brightCyan', 'brightWhite'];
+
   var DEFAULTS = {
-    theme: 'system', fontFamily: 'Cascadia Code', fontSize: 13, lineHeight: 1.2,
+    theme: 'system', palette: 'aurora', fontFamily: 'Cascadia Code', fontSize: 13, lineHeight: 1.2,
     cursorStyle: 'block', cursorBlink: true, scrollback: 5000,
     copyOnSelect: false, rightClickPaste: false, confirmClose: true,
     defaultShell: '', startFolder: '',
@@ -42,9 +81,15 @@
     return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
   }
   function themeColors() {
-    return isLightNow()
+    var light = isLightNow();
+    var t = light
       ? { background: '#fbfbfb', foreground: '#232323', cursor: '#8a5cf5', selectionBackground: 'rgba(138,92,245,.25)' }
       : { background: '#1a1a1a', foreground: '#dadada', cursor: '#8a5cf5', selectionBackground: 'rgba(138,92,245,.30)' };
+    // The cursor keeps the app's own accent in every palette on purpose — it is
+    // the one thing that ties the terminal to the chrome around it.
+    var set = (PALETTES[S.palette] || PALETTES.aurora)[light ? 'light' : 'dark'];
+    for (var i = 0; i < ANSI_KEYS.length; i++) t[ANSI_KEYS[i]] = set[i];
+    return t;
   }
   function applyTheme(mode) {
     S.theme = mode;
@@ -1511,6 +1556,8 @@
   function settingsPane(t) {
     if (t === 'Appearance') {
       return frow('Theme', 'Dark, light, or follow Windows', sel('theme', [['system', 'Match system'], ['dark', 'Dark'], ['light', 'Light']], S.theme)) +
+        frow('Colours', 'The sixteen colours the shell paints with', sel('palette',
+          Object.keys(PALETTES).map(function (k) { return [k, PALETTES[k].label]; }), S.palette)) +
         frow('Font', 'Applied to every open terminal', sel('fontFamily', Object.keys(FONTS), S.fontFamily)) +
         frow('Font size', 'Also Ctrl + / Ctrl − / Ctrl+wheel', '<input class="ctl" type="number" min="8" max="28" value="' + S.fontSize + '" data-set="fontSize" style="width:70px">') +
         frow('Line height', '', '<input class="ctl" type="number" min="1" max="2" step="0.05" value="' + S.lineHeight + '" data-set="lineHeight" style="width:70px">');

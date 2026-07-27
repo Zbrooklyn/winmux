@@ -51,6 +51,9 @@ const PORT_SURVIVE = 9916;
 // The drop group makes twin folders on disk and asks the server to tell them
 // apart, so it wants a server whose answers nobody else is racing.
 const PORT_DROP = 9917;
+// The colour group types into a real shell and reads the painted result back,
+// so it needs a server whose terminals nobody else is writing to.
+const PORT_COLOUR = 9918;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1061,6 +1064,119 @@ check('drop', PORT_DROP, async ({ browser, base, t }) => {
   } finally {
     await page.close();
   }
+});
+
+// --- colour: the shell's sixteen colours are ours, and are readable ---------
+// This one refuses to take the app's word for it. It runs a real PowerShell
+// command that emits real ANSI escapes, then reads the colour off the span
+// xterm actually painted — because "we set the option" and "the character on
+// screen is that colour" are different claims, and only the second one is what
+// @edward looks at.
+const rgbToHex = (s) => {
+  const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(s || '');
+  return m ? '#' + [1, 2, 3].map((i) => (+m[i]).toString(16).padStart(2, '0')).join('') : null;
+};
+const relLum = (hex) => {
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+};
+const contrast = (a, b) => {
+  const x = relLum(a), y = relLum(b);
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+};
+
+// PSReadLine paints every command you type in bright yellow (SGR 93) and every
+// parameter in bright black (SGR 90) — the exact two slots @edward is looking
+// at all day, so those are the two this check reads back off the screen.
+const MARKED = 'Write-Host ("{0}[93mQQAQQ{0}[90mQQBQQ{0}[0m" -f [char]27)';
+
+// Walk the row's spans accumulating text, so it does not matter whether xterm
+// emitted one span for the run or one per character.
+const READ_MARKS = () => {
+  const pick = (marker) => {
+    for (const row of document.querySelectorAll('.xterm-rows > div')) {
+      const spans = [...row.querySelectorAll('span')];
+      let acc = '';
+      const map = [];
+      for (const s of spans) {
+        map.push([acc.length, acc.length + s.textContent.length, s]);
+        acc += s.textContent;
+      }
+      // The echoed input line contains the markers too — it is not the output.
+      if (acc.includes('Write-Host')) continue;
+      const i = acc.indexOf(marker);
+      if (i < 0) continue;
+      for (const [a, b, s] of map) if (i >= a && i < b) return getComputedStyle(s).color;
+    }
+    return null;
+  };
+  const vp = document.querySelector('.xterm-viewport') || document.querySelector('.xterm');
+  return { yellow: pick('QQAQQ'), dim: pick('QQBQQ'), bg: getComputedStyle(vp).backgroundColor };
+};
+
+async function paintMarks(page, base) {
+  await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(5000);
+  await page.click('.xterm-screen');
+  await page.keyboard.type(MARKED);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(2500);
+  const m = await page.evaluate(READ_MARKS);
+  return { yellow: rgbToHex(m.yellow), dim: rgbToHex(m.dim), bg: rgbToHex(m.bg) };
+}
+
+check('colour', PORT_COLOUR, async ({ browser, base, t, shot }) => {
+  // The palette that used to ship. Nobody chose it: naming no ANSI colours makes
+  // xterm.js fall back to Tango, and Tango was drawn for a different background.
+  const TANGO_BRIGHT_YELLOW = '#fce94f';
+  const TANGO_BRIGHT_BLACK = '#555753';
+
+  const dark = await desktop(browser);
+  try {
+    const d = await paintMarks(dark, base);
+    t('dark: the shell is drawn on the near-black we designed against', d.bg === '#1a1a1a', d);
+    t('dark: what you type is no longer Tango\'s #fce94f',
+      d.yellow && d.yellow !== TANGO_BRIGHT_YELLOW, d.yellow);
+    t('dark: bright yellow is the Aurora sand we chose', d.yellow === '#f2cf88', d.yellow);
+    t('dark: parameters are no longer Tango\'s 2.4:1 mud',
+      d.dim && d.dim !== TANGO_BRIGHT_BLACK, d.dim);
+    t('dark: both clear 4.5:1 against the real background',
+      contrast(d.yellow, d.bg) >= 4.5 && contrast(d.dim, d.bg) >= 4.5,
+      { yellow: contrast(d.yellow, d.bg).toFixed(2), dim: contrast(d.dim, d.bg).toFixed(2) });
+    // The old yellow was not too dim — it was a 14:1 shout. Prove we came down.
+    t('dark: the glare is gone (was 14.01:1, a pure saturated yellow)',
+      contrast(d.yellow, d.bg) < 12, contrast(d.yellow, d.bg).toFixed(2));
+    await shot(dark, 'colour-dark');
+  } finally { await dark.close(); }
+
+  // One palette cannot serve both grounds — that is the whole reason there are
+  // two. If light mode handed back the dark values, this check has no point.
+  const lightPage = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
+  try {
+    const l = await paintMarks(lightPage, base);
+    t('light: the shell is drawn on the near-white we designed against', l.bg === '#fbfbfb', l);
+    t('light: the colours are a different set, not the dark ones reused', l.yellow !== '#f2cf88', l.yellow);
+    t('light: bright yellow is the dark amber that survives white', l.yellow === '#96620f', l.yellow);
+    t('light: both clear 4.5:1 — where Tango\'s yellow was 1.20:1, invisible',
+      contrast(l.yellow, l.bg) >= 4.5 && contrast(l.dim, l.bg) >= 4.5,
+      { yellow: contrast(l.yellow, l.bg).toFixed(2), dim: contrast(l.dim, l.bg).toFixed(2) });
+    await shot(lightPage, 'colour-light');
+  } finally { await lightPage.close(); }
+
+  // The Settings picker has to actually reach the shell, not just the dropdown.
+  const ember = await desktop(browser);
+  try {
+    await ember.addInitScript(() => {
+      localStorage.setItem('ct-settings', JSON.stringify({ palette: 'ember' }));
+    });
+    const e = await paintMarks(ember, base);
+    t('picking a different palette repaints the terminal', e.yellow === '#f5c87c', e.yellow);
+    t('every palette clears the floor, not just the default',
+      contrast(e.yellow, e.bg) >= 4.5 && contrast(e.dim, e.bg) >= 4.5,
+      { yellow: contrast(e.yellow, e.bg).toFixed(2), dim: contrast(e.dim, e.bg).toFixed(2) });
+    await shot(ember, 'colour-ember');
+  } finally { await ember.close(); }
 });
 
 // -------------------------------------------------------------------- main
