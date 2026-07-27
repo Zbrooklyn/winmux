@@ -117,6 +117,15 @@ Edward decides instantly from **rendered options**, not from words. So:
   slides up from the bottom edge as a full-width sheet with a drag handle and a dimmed backdrop,
   instead of a desktop popover anchored to a cursor. One shared path: `placeMenu()` routes to the
   sheet whenever `currentMode === 'narrow'`, so all menus stay consistent. (Live.)
+- **Phone notifications + command palette = native mobile surfaces.** Two desktop overlays
+  that still floated on the phone were converted: the **notifications panel** now slides up as a
+  full-width bottom sheet (drag handle, dimmed backdrop, closes on backdrop tap / Escape / jump) —
+  same `.sheet` language as the menus, routed through `toggleNotif`/`closeNotif`; the **command
+  palette** goes full-screen edge-to-edge (`.palette-wrap .palette` fills the viewport, no radius)
+  instead of a centered desktop card. **Keyboard noise removed on the phone:** the palette's
+  per-row shortcut chips (`.kbd`) and the shortcuts-help trigger (`#open-help`) are hidden on narrow —
+  a keyboardless device shouldn't advertise keys it can't press. `@media (max-width:620px)` in
+  index.html; cockpit.css frozen. (Live.)
 - **Tab strip scrolls silently — no scrollbar.** The mockup's global 11px scrollbar
   (`cockpit.css:15`) was drawing a cheap grey bar under the tabs on the tab strip's horizontal
   overflow (worst on a real phone). Overflow is already handled by the "N ⌄" menu, so the strip

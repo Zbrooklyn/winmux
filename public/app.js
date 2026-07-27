@@ -394,10 +394,25 @@
     });
     npanel.innerHTML = html;
   }
+  function closeNotif() {
+    npanel.removeAttribute('data-open');
+    npanel.classList.remove('sheet', 'in');
+    var bd = document.getElementById('notif-backdrop'); if (bd) bd.remove();
+  }
   function toggleNotif(btn) {
-    if (npanel.hasAttribute('data-open')) { npanel.removeAttribute('data-open'); return; }
+    if (npanel.hasAttribute('data-open')) { closeNotif(); return; }
     renderNotif();
     npanel.setAttribute('data-open', '');
+    // On the phone the notifications open as a bottom sheet, not a popover under the bell.
+    if (currentMode === 'narrow') {
+      npanel.style.top = ''; npanel.style.left = '';
+      npanel.classList.add('sheet');
+      var bd = document.createElement('div'); bd.className = 'sheet-backdrop'; bd.id = 'notif-backdrop';
+      bd.addEventListener('click', closeNotif);
+      document.body.appendChild(bd);
+      void npanel.offsetHeight; npanel.classList.add('in');
+      return;
+    }
     var r = btn.getBoundingClientRect();
     npanel.style.top = (r.bottom + 6) + 'px';
     npanel.style.left = Math.min(r.left, window.innerWidth - 356) + 'px';
@@ -410,7 +425,7 @@
     var id = parseInt(row.getAttribute('data-notif'), 10);
     var n = null; notifs.forEach(function (x) { if (x.id === id) n = x; });
     if (n) { n.unread = false; paintNotifBadge(); if (n.termId) focusTerm(n.termId); }
-    npanel.removeAttribute('data-open');
+    closeNotif();
   });
   function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
@@ -2409,7 +2424,7 @@
   document.getElementById('open-help').addEventListener('click', openCheat);
   document.getElementById('open-settings').addEventListener('click', function () { openSettings(); });
   document.addEventListener('mousedown', function (e) {
-    if (npanel.hasAttribute('data-open') && !npanel.contains(e.target) && !e.target.closest('#open-notif')) npanel.removeAttribute('data-open');
+    if (npanel.hasAttribute('data-open') && !npanel.contains(e.target) && !e.target.closest('#open-notif') && !e.target.closest('#notif-backdrop')) closeNotif();
   });
 
   // -------------------------------------------------------------- keyboard
@@ -2429,7 +2444,7 @@
       if (sessmenu.hasAttribute('data-open')) { closeLayoutMenu(); e.preventDefault(); return; }
       if (openMenu) { closeMenu(); e.preventDefault(); return; }
       if (plWrap.hasAttribute('data-open')) { closePalette(); e.preventDefault(); return; }
-      if (npanel.hasAttribute('data-open')) { npanel.removeAttribute('data-open'); e.preventDefault(); return; }
+      if (npanel.hasAttribute('data-open')) { closeNotif(); e.preventDefault(); return; }
       if (anyOvlOpen()) { [].forEach.call(document.querySelectorAll('.ovl[data-open]'), function (o) { o.removeAttribute('data-open'); }); e.preventDefault(); return; }
       var pf = paneById(activePaneId);
       if (pf && pf.findbar.classList.contains('on')) { closeFind(pf); e.preventDefault(); return; }

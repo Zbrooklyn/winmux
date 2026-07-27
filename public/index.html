@@ -183,6 +183,31 @@
   .ncard .nchev { display: flex; align-items: center; align-self: center; flex: 0 0 auto; color: var(--faint); }
   .ncard .nchev svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; }
 
+  /* Notifications open as a bottom sheet on the phone, not a popover under the bell. */
+  #npanel.sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: 100%;
+    max-width: none; min-width: 0; max-height: 72vh;
+    border: none; border-top: 1px solid var(--border); border-radius: 16px 16px 0 0;
+    box-shadow: 0 -12px 44px rgba(0,0,0,.5);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    transform: translateY(100%); transition: transform .24s cubic-bezier(.32,.72,0,1);
+  }
+  #npanel.sheet.in { transform: translateY(0); }
+  #npanel.sheet::before { content: ""; display: block; width: 38px; height: 4px; border-radius: 2px; background: var(--border); margin: 8px auto 4px; }
+  @media (prefers-reduced-motion: reduce) { #npanel.sheet { transition: none; } }
+
+  /* Phone-only overlay fixes (palette-wrap and #open-help sit outside .cockpit, so
+     these are gated by width, matching the narrow breakpoint of 620px). */
+  @media (max-width: 620px) {
+    /* Command palette fills the screen like a mobile search — no floating dialog. */
+    .palette-wrap { padding-top: 0; align-items: stretch; }
+    .palette-wrap .palette { width: 100%; max-width: none; height: 100%; max-height: 100%; border-radius: 0; }
+    /* No keyboard on a phone: drop the shortcut chips from palette rows. */
+    .pl-list .kbd, .pl-item .kbd, .pl-item .kbd.sm { display: none !important; }
+    /* The keyboard-shortcuts cheat sheet is meaningless without a keyboard — hide its trigger. */
+    #open-help { display: none !important; }
+  }
+
   /* Every menu on the phone is a bottom sheet that slides up from the edge. */
   .sheet-backdrop { position: fixed; inset: 0; z-index: 79; background: rgba(0,0,0,.45); }
   .ofmenu.sheet {
