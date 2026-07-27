@@ -217,8 +217,9 @@ function forgetDevice(id) {
   if (gone) saveTrust();
   // Forgetting has to mean something to a terminal that is open right now,
   // otherwise a revoked device keeps its shell until it feels like leaving.
-  if (gone && phone.wss) {
-    for (const ws of phone.wss.clients) {
+  if (gone) {
+    endSessionsOfDevice(id);
+    if (phone.wss) for (const ws of phone.wss.clients) {
       if (ws._ctDev === id) { try { ws.close(4003, 'device forgotten'); } catch (e) {} }
     }
   }
@@ -227,6 +228,7 @@ function forgetDevice(id) {
 function forgetAllDevices() {
   trust.devices = [];
   saveTrust();
+  endSessionsOfDevice('');
   if (phone.wss) for (const ws of phone.wss.clients) { try { ws.close(4003, 'devices forgotten'); } catch (e) {} }
 }
 // What Settings is allowed to see. The id is a credential — it goes to the PC,
@@ -547,7 +549,10 @@ function handle(req, res, viaPhone) {
       home: os.homedir(), cpus: os.cpus().length,
       mem: Math.round(os.totalmem() / 1073741824) + ' GB',
       shells: SHELLS.map((s) => s.label),
-      sessions: wss.clients.size + (phone.wss ? phone.wss.clients.size : 0),
+      sessions: SESSIONS.size,
+      // Shells still running with nobody watching them — the ones waiting out
+      // a sleeping phone. Worth seeing, because they are real processes.
+      detached: [...SESSIONS.values()].filter((s) => !s.ws).length,
       phone: phone.on ? 'on (' + phone.ip + ')' : 'off',
     }));
     return;
@@ -640,22 +645,86 @@ function setPhone(want, done) {
   });
 }
 
-// --- One shell process per websocket connection ----------------------------
+// --- Shells that outlive their socket --------------------------------------
+// A terminal used to be one shell welded to one websocket: close the socket and
+// the shell died with it. That is fine at a desk and wrong everywhere else — a
+// phone sleeping, a lid closing, a wifi hop, or a tab left in the background
+// long enough all close that socket, and the person comes back to a dead
+// rectangle with their work gone. So a shell belongs to the person, not to the
+// connection. It keeps running while nobody is attached, remembers what it
+// printed, and is picked up again by id when the browser returns.
+const SESSIONS = new Map();
+// How long an unattended shell waits for you before giving up. Long enough to
+// cover a commute or a meeting; short enough that a forgotten tab doesn't leave
+// a PowerShell running on this PC all week.
+const GRACE_MS = 10 * 60 * 1000;
+// What it can show you when you get back. Roughly a few screens of output.
+const SCROLLBACK = 256 * 1024;
+
+function endSession(s, why) {
+  if (!s || !SESSIONS.has(s.id)) return;
+  SESSIONS.delete(s.id);
+  if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+  try { s.term.kill(); } catch (e) {}
+  if (s.ws) { try { s.ws.close(4003, why || 'closed'); } catch (e) {} }
+}
+// Revocation cannot be outlived: forgetting a device has to reach the shells it
+// left running unattended, not only the ones it happens to be holding open.
+function endSessionsOfDevice(id) {
+  for (const s of [...SESSIONS.values()]) if (id ? s.dev === id : s.dev) endSession(s, 'device forgotten');
+}
+
+// Point a socket at a shell, and arrange for the shell to survive losing it.
+function attach(s, ws) {
+  if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+  // Two browsers, one shell: the newcomer wins, so a stale tab can't keep
+  // swallowing the keystrokes meant for the one you are looking at.
+  if (s.ws && s.ws !== ws) { try { s.ws.close(4004, 'picked up elsewhere'); } catch (e) {} }
+  s.ws = ws;
+  ws.on('message', (raw, isBinary) => {
+    if (isBinary) return;
+    let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
+    if (msg.t === 'i' && typeof msg.d === 'string') s.term.write(msg.d);
+    else if (msg.t === 'r' && msg.c > 0 && msg.r > 0) { try { s.term.resize(msg.c, msg.r); } catch {} }
+    // Closing a tab on purpose is the one close that still means "kill it".
+    // Everything else is treated as an interruption worth waiting out.
+    else if (msg.t === 'x') endSession(s, 'closed by you');
+  });
+  ws.on('close', () => {
+    if (s.ws !== ws) return;             // a newer socket already took over
+    s.ws = null;
+    if (!SESSIONS.has(s.id)) return;     // the shell is already gone
+    s.timer = setTimeout(() => endSession(s, 'nobody came back'), GRACE_MS);
+  });
+}
+
 // The desk door's socket. The phone door gets its own, key-checked, in setPhone.
 const wss = new WebSocketServer({ server, path: '/pty' });
 wss.on('connection', onShellConnection);
 function onShellConnection(ws, req) {
   // Which remembered device this terminal belongs to, so that forgetting a
   // device closes the shell it is holding right now rather than at its leisure.
-  ws._ctDev = deviceIdFrom(req);
-  var key = 'powershell';
-  var want = '';
+  const dev = deviceIdFrom(req);
+  ws._ctDev = dev;
+  let sid = '', key = 'powershell', want = '';
   try {
-    var qs = new URL(req.url, 'http://x').searchParams;
+    const qs = new URL(req.url, 'http://x').searchParams;
+    sid = qs.get('sid') || '';
     key = qs.get('shell') || 'powershell';
     want = qs.get('cwd') || '';
   } catch (e) {}
-  var shell = shellByKey(key);
+
+  // Coming back to a shell we kept warm. Only the device that started it may
+  // pick it up, so a session id is not a way around the guest list.
+  const held = sid ? SESSIONS.get(sid) : null;
+  if (held && held.dev === dev) {
+    attach(held, ws);
+    ws.send(JSON.stringify({ type: 'meta', sid: held.id, shell: held.shell, cwd: held.cwd, resumed: true }));
+    if (held.buf) ws.send(Buffer.from(held.buf, 'utf8'));
+    return;
+  }
+
+  const shell = shellByKey(key);
   // Honour a requested start folder only when it really is one.
   let cwd = os.homedir();
   try { if (want && fs.statSync(want).isDirectory()) cwd = want; } catch (e) {}
@@ -668,17 +737,33 @@ function onShellConnection(ws, req) {
     return;
   }
 
-  ws.send(JSON.stringify({ type: 'meta', shell: shell.label, cwd }));
-  term.onData((d) => { if (ws.readyState === ws.OPEN) ws.send(Buffer.from(d, 'utf8')); });
-  term.onExit(() => { if (ws.readyState === ws.OPEN) ws.close(); });
-
-  ws.on('message', (raw, isBinary) => {
-    if (isBinary) return;
-    let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
-    if (msg.t === 'i' && typeof msg.d === 'string') term.write(msg.d);
-    else if (msg.t === 'r' && msg.c > 0 && msg.r > 0) { try { term.resize(msg.c, msg.r); } catch {} }
+  const s = {
+    id: crypto.randomBytes(16).toString('hex'),
+    term, dev, shell: shell.label, cwd, buf: '', ws: null, timer: null,
+  };
+  SESSIONS.set(s.id, s);
+  term.onData((d) => {
+    s.buf += d;
+    if (s.buf.length > SCROLLBACK) s.buf = s.buf.slice(-SCROLLBACK);
+    if (s.ws && s.ws.readyState === s.ws.OPEN) s.ws.send(Buffer.from(d, 'utf8'));
   });
-  ws.on('close', () => { try { term.kill(); } catch {} });
+  // The shell itself exiting is the only real ending, and the client is told so
+  // explicitly — otherwise it would sit there politely trying to reconnect to a
+  // process that chose to leave.
+  term.onExit(() => {
+    if (!SESSIONS.has(s.id)) return;
+    SESSIONS.delete(s.id);
+    if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+    if (s.ws && s.ws.readyState === s.ws.OPEN) {
+      try { s.ws.send(JSON.stringify({ type: 'meta', exited: true })); } catch (e) {}
+      try { s.ws.close(4005, 'shell exited'); } catch (e) {}
+    }
+  });
+
+  // `lost` says we were asked for a session that is no longer here, so the app
+  // can say that plainly instead of pretending this fresh shell is the old one.
+  ws.send(JSON.stringify({ type: 'meta', sid: s.id, shell: shell.label, cwd, resumed: false, lost: !!sid }));
+  attach(s, ws);
 }
 
 function announce() {

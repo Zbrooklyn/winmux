@@ -44,6 +44,10 @@ const PORT_TRUST = 9915;
 // door is already open on 9912 the group used to skip instead. A skip is not a
 // pass, so it gets a port of its own.
 const PORT_PHONE = 9913;
+// The survival group counts running shells, so it must be the only thing
+// talking to its server — borrowing @edward's would count his terminals as
+// leaks and kill a tab he is using.
+const PORT_SURVIVE = 9916;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -909,6 +913,85 @@ check('trust', PORT_TRUST, async ({ browser, base, t, shot, skip }) => {
   const end = await state();
   t('the run leaves the door shut and the switch off',
     end.on === false && end.trustTailnet === false, { on: end.on, trustTailnet: end.trustTailnet });
+});
+
+// --- survive: losing the socket is not losing the shell -------------------
+// The thing a phone actually does to a backgrounded tab is reap its websocket.
+// That used to kill the shell on the other side and print "[session ended]"
+// forever, taking the person's work with it. So the harness does exactly what
+// the browser does — closes the page's own sockets — and then asks the only
+// questions that matter: did the shell keep running while nobody held it, did
+// the app pick it back up by itself, and is the work still there.
+check('survive', PORT_SURVIVE, async ({ browser, base, t, shot }) => {
+  const info = async () => JSON.parse((await get(base + '/api/info')).body);
+
+  const page = await desktop(browser);
+  // Take a handle on every socket the app opens, before the app opens any.
+  await page.addInitScript(() => {
+    window.__socks = [];
+    const Native = window.WebSocket;
+    window.WebSocket = function (...a) { const s = new Native(...a); window.__socks.push(s); return s; };
+    window.WebSocket.prototype = Native.prototype;
+    Object.assign(window.WebSocket, Native);
+  });
+  const screen = () => page.evaluate(() => {
+    const r = document.querySelector('.xterm-rows');
+    return r ? r.innerText : '';
+  });
+
+  try {
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3500);
+    await page.click('.xterm').catch(() => {});
+    await page.keyboard.type('$mywork = "IMPORTANT"');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(1500);
+    const started = await info();
+    t('a shell is running and someone is holding it',
+      started.sessions === 1 && started.detached === 0, started);
+
+    // The reap. Not setOffline — that leaves an established socket alone, which
+    // is why this bug survived so long: the emulation was politer than a phone.
+    await page.evaluate(() => window.__socks.forEach((s) => s.close()));
+    await page.waitForTimeout(250);
+    const orphan = await info();
+    t('the shell keeps running with nobody attached',
+      orphan.sessions === 1 && orphan.detached === 1, orphan);
+
+    await page.waitForTimeout(6000);
+    const back = await info();
+    const socks = await page.evaluate(() => window.__socks.length);
+    t('the app reconnects on its own', socks > 1, { sockets: socks });
+    t('and is holding the same shell again',
+      back.sessions === 1 && back.detached === 0, back);
+
+    await page.click('.xterm').catch(() => {});
+    await page.keyboard.type('echo $mywork');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(2000);
+    const after = await screen();
+    t('the work in the shell survived the trip', /IMPORTANT/.test(after.split('echo $mywork')[1] || ''));
+    t('and it never claimed the session ended', !/session ended/i.test(after));
+    await shot(page, 'reconnected');
+
+    // The other half of the contract: a shell that outlives a dropped socket
+    // must NOT outlive a tab its owner closed, or WinMux quietly leaves live
+    // PowerShells on the machine every time someone tidies up.
+    await page.locator('.pc-new').first().click();
+    await page.waitForTimeout(2500);
+    t('a second tab is a second shell', (await info()).sessions === 2);
+    await page.locator('.ptab[data-active] .x').first().click();
+    // Closing a live terminal asks first — click through it the way a person
+    // does, which also proves that confirmation actually reaches the shell.
+    const ok = page.locator('#dlg-body [data-ok]');
+    if (await ok.count()) await ok.click();
+    await page.waitForTimeout(1200);
+    const tidied = await info();
+    t('closing a tab on purpose ends its shell right away',
+      tidied.sessions === 1 && tidied.detached === 0, tidied);
+  } finally {
+    await page.close();
+  }
 });
 
 // -------------------------------------------------------------------- main

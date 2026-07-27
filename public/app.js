@@ -164,7 +164,7 @@
     try {
       if (navigator.clipboard && navigator.clipboard.readText) {
         navigator.clipboard.readText().then(function (txt) {
-          if (txt && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'i', d: txt }));
+          if (txt && t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'i', d: txt }));
           try { t.term.focus(); } catch (e) {}
         }).catch(function () {});
       }
@@ -261,7 +261,7 @@
         var name = t.tabEl ? t.tabEl.querySelector('.tt').textContent : labelFor(t.shell);
         html += '<div class="prow" data-term="' + t.id + '"' + (on ? ' data-active' : '') + '>' +
           '<span class="pfolder">' + FOLDER_SVG + '<span class="pdot" style="background:' + (STATUS_COLOR[st] || 'transparent') + '"></span></span>' +
-          '<div class="pinfo"><div class="pname">' + (p.pinned ? PPIN_SVG : '') + esc(name) + '</div><div class="psub">' + esc(t.cwd || (t.state === 'closed' ? 'session ended' : 'connecting…')) + '</div></div>' +
+          '<div class="pinfo"><div class="pname">' + (p.pinned ? PPIN_SVG : '') + esc(name) + '</div><div class="psub">' + esc(t.state === 'reconnecting' ? 'reconnecting…' : (t.cwd || (t.state === 'closed' ? 'session ended' : 'connecting…'))) + '</div></div>' +
           '<span class="ptrail"><span class="pexpand" data-close="' + t.id + '" title="Close terminal">' + CLOSE_SVG + '</span></span>' +
           '</div>';
       });
@@ -329,7 +329,16 @@
   }
   function activeTermOf(p) { for (var i = 0; i < p.terms.length; i++) if (p.terms[i].id === p.activeTermId) return p.terms[i]; return null; }
   function activeTerm() { var p = paneById(activePaneId); return p ? activeTermOf(p) : null; }
-  function sendResize(t) { if (t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'r', c: t.term.cols, r: t.term.rows })); }
+  function sendResize(t) { if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'r', c: t.term.cols, r: t.term.rows })); }
+  // Closing a tab on purpose is the one close that should take the shell with it.
+  // Every other disconnect is treated as an interruption and waited out, so this
+  // has to say so explicitly — otherwise a closed tab parks a live PowerShell on
+  // the machine for the length of the grace window.
+  function killShell(t) {
+    t.closing = true;
+    try { if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'x' })); } catch (e) {}
+    try { if (t.ws) t.ws.close(); } catch (e) {}
+  }
   function fitActive(p) { var t = activeTermOf(p); if (t) { try { t.fit.fit(); } catch (e) {} sendResize(t); } }
   function setFontSize(px) {
     px = Math.max(8, Math.min(28, px));
@@ -364,8 +373,9 @@
   function reflect(p) {
     var t = activeTermOf(p);
     var s = t ? t.state : 'idle';
-    p.pill.setAttribute('data-state', s === 'open' ? 'open' : (s === 'closed' ? 'closed' : 'idle'));
-    p.connText.textContent = s === 'open' ? 'connected' : (s === 'closed' ? 'disconnected' : 'connecting…');
+    p.pill.setAttribute('data-state', s === 'open' ? 'open' : (s === 'closed' ? 'closed' : (s === 'reconnecting' ? 'reconnecting' : 'idle')));
+    p.connText.textContent = s === 'open' ? 'connected'
+      : (s === 'closed' ? 'disconnected' : (s === 'reconnecting' ? 'reconnecting…' : 'connecting…'));
   }
   function focusPane(id) {
     activePaneId = id;
@@ -411,7 +421,7 @@
     var t = p.terms[idx];
     recordClosed(p, t);
     clearTimeout(t.busyTimer); stopProg(t);
-    try { t.ws.close(); } catch (e) {}
+    killShell(t);
     try { t.term.dispose(); } catch (e) {}
     t.host.remove(); t.tabEl.remove();
     p.terms.splice(idx, 1);
@@ -616,55 +626,112 @@
     p.tabscroll.appendChild(tabEl);
     var ttEl = tabEl.querySelector('.tt');
 
-    var q = '/pty?shell=' + encodeURIComponent(shellKey);
-    var startIn = cwd || S.startFolder;
-    if (startIn) q += '&cwd=' + encodeURIComponent(startIn);
-    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    var ws = new WebSocket(proto + '//' + location.host + q);
-    ws.binaryType = 'arraybuffer';
-
     var t = {
-      id: id, paneId: p.id, term: term, fit: fit, search: search, ws: ws, host: host,
+      id: id, paneId: p.id, term: term, fit: fit, search: search, ws: null, host: host,
       tabEl: tabEl, dotEl: tabEl.querySelector('.fdot'), progEl: tabEl.querySelector('.tprog'),
-      state: 'idle', status: 'idle',
+      state: 'idle', status: 'idle', sid: null, ended: false,
       cwd: null, shell: shellKey, renamed: false, results: null, busyTimer: null, progTimer: null,
     };
     // A tab can be dragged into another pane, so never close over `p` — look the pane up live.
     function pn() { return paneById(t.paneId) || p; }
 
-    ws.onopen = function () { t.state = 'open'; if (pn().activeTermId === id) reflect(pn()); sendResize(t); };
-    ws.onmessage = function (ev) {
-      if (typeof ev.data === 'string') {
-        var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-        if (m.type === 'meta') {
+    // One shell, but possibly several sockets over its life. Losing the socket
+    // is not the shell ending — a phone sleeping, a lid closing, a wifi hop and
+    // a backgrounded tab all do it, and the shell on the other side is still
+    // running with your work in it. So we wait it out and pick it back up by id
+    // instead of printing an obituary. `[session ended]` is kept for the one
+    // case that earns it: the shell itself exited.
+    var retries = 0, retryTimer = null, told = false;
+    function connect() {
+      clearTimeout(retryTimer);
+      var q = '/pty?shell=' + encodeURIComponent(shellKey);
+      var startIn = cwd || S.startFolder;
+      if (startIn) q += '&cwd=' + encodeURIComponent(startIn);
+      if (t.sid) q += '&sid=' + encodeURIComponent(t.sid);
+      var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      var ws = new WebSocket(proto + '//' + location.host + q);
+      ws.binaryType = 'arraybuffer';
+      t.ws = ws;
+
+      ws.onopen = function () {
+        retries = 0;
+        t.state = 'open';
+        if (t.status === 'closed') setStatus(t, 'idle');
+        if (pn().activeTermId === id) reflect(pn());
+        sendResize(t);
+      };
+      ws.onmessage = function (ev) {
+        if (typeof ev.data === 'string') {
+          var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+          if (m.type !== 'meta') return;
           if (m.error) {
             term.write('\r\n\x1b[31m' + m.error + '\x1b[0m\r\n');
-            t.state = 'closed'; setStatus(t, 'closed');
+            t.ended = true; t.state = 'closed'; setStatus(t, 'closed');
             if (pn().activeTermId === id) reflect(pn());
-          } else {
-            if (m.shell && ttEl && !t.renamed) ttEl.textContent = m.shell;
-            if (m.cwd) { t.cwd = m.cwd; if (!dockPath.value) dockPath.value = m.cwd; }
-            renderSidebar();
+            return;
           }
+          // The shell chose to leave. That is the real ending, and the only one
+          // worth telling the person about.
+          if (m.exited) { t.ended = true; return; }
+          if (m.sid) t.sid = m.sid;
+          if (m.shell && ttEl && !t.renamed) ttEl.textContent = m.shell;
+          if (m.cwd) { t.cwd = m.cwd; if (!dockPath.value) dockPath.value = m.cwd; }
+          if (m.resumed) {
+            // Redraw from the shell's own record rather than trusting whatever
+            // half-written screen we were left holding.
+            term.reset();
+            if (told) { term.write('\x1b[90m[reconnected]\x1b[0m\r\n'); told = false; }
+          } else if (m.lost) {
+            // We asked for a shell that is gone — say so plainly instead of
+            // passing this fresh one off as the old one.
+            term.write('\r\n\x1b[90m[that session ended — this is a new shell]\x1b[0m\r\n');
+            told = false;
+          }
+          renderSidebar();
+          return;
         }
-        return;
-      }
-      term.write(new Uint8Array(ev.data));
-      markWorking(t);
-    };
-    ws.onclose = function () {
-      t.state = 'closed'; setStatus(t, 'closed');
-      if (pn().activeTermId === id) reflect(pn());
-      term.write('\r\n\x1b[90m[session ended]\x1b[0m\r\n');
-      notify('Session ended', ttEl.textContent, id);
-    };
-    ws.onerror = function () { t.state = 'closed'; setStatus(t, 'closed'); if (pn().activeTermId === id) reflect(pn()); };
+        term.write(new Uint8Array(ev.data));
+        markWorking(t);
+      };
+      ws.onclose = function () {
+        if (t.ws !== ws) return;               // a newer socket already took over
+        if (t.closing) return;                 // this tab is being closed on purpose
+        if (t.ended) {
+          t.state = 'closed'; setStatus(t, 'closed');
+          if (pn().activeTermId === id) reflect(pn());
+          term.write('\r\n\x1b[90m[session ended]\x1b[0m\r\n');
+          notify('Session ended', ttEl.textContent, id);
+          return;
+        }
+        t.state = 'reconnecting';
+        if (pn().activeTermId === id) reflect(pn());
+        if (!told) { told = true; term.write('\r\n\x1b[90m[connection lost — reconnecting…]\x1b[0m\r\n'); }
+        renderSidebar();
+        // Quick at first for a blip, then backing off to every few seconds so a
+        // phone that stays asleep isn't hammering the tailnet.
+        var wait = Math.min(5000, 400 * Math.pow(2, Math.min(retries++, 4)));
+        retryTimer = setTimeout(connect, wait);
+      };
+      // onerror always arrives with an onclose behind it, so the retry lives
+      // there — doing it in both would double every attempt.
+      ws.onerror = function () {};
+    }
+    connect();
+    // Coming back to the tab, or getting the network back, is the best possible
+    // moment to try again — better than whatever the backoff had scheduled.
+    function retryNow() {
+      if (t.closing || t.ended || t.state !== 'reconnecting') return;
+      retries = 0;
+      connect();
+    }
+    t.retryNow = retryNow;
+
     term.onData(function (d) {
       if (broadcastOn) {
-        allTerms().forEach(function (x) { if (x.ws.readyState === WebSocket.OPEN) x.ws.send(JSON.stringify({ t: 'i', d: d })); });
+        allTerms().forEach(function (x) { if (x.ws && x.ws.readyState === WebSocket.OPEN) x.ws.send(JSON.stringify({ t: 'i', d: d })); });
         return;
       }
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'i', d: d }));
+      if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'i', d: d }));
     });
     // A real terminal bell (\a) from the shell = this terminal wants attention.
     try {
@@ -756,7 +823,7 @@
   function closePane(p) {
     if (panes.length <= 1) return;
     clearZoom();
-    p.terms.forEach(function (t) { try { t.ws.close(); } catch (e) {} try { t.term.dispose(); } catch (e) {} });
+    p.terms.forEach(function (t) { killShell(t); try { t.term.dispose(); } catch (e) {} });
     var col = p.col;
     var prev = p.el.previousElementSibling;
     var next = p.el.nextElementSibling;
@@ -1232,7 +1299,7 @@
   function restoreLayout(desc) {
     if (!desc || !desc.cols || !desc.cols.length) return;
     clearZoom();
-    panes.forEach(function (p) { p.terms.forEach(function (t) { try { t.ws.close(); } catch (e) {} try { t.term.dispose(); } catch (e) {} }); });
+    panes.forEach(function (p) { p.terms.forEach(function (t) { killShell(t); try { t.term.dispose(); } catch (e) {} }); });
     panes = [];
     wsrow.innerHTML = '';
     desc.cols.forEach(function (stack) {
@@ -1834,6 +1901,14 @@
   fetch('/shells').then(function (r) { return r.json(); }).then(function (list) {
     if (Array.isArray(list) && list.length) { SHELLS = list; DEFAULT_SHELL = list[0].key; }
   }).catch(function () {});
+
+  // The two moments worth retrying on immediately, instead of waiting out
+  // whatever the backoff had scheduled: the tab coming back to the foreground
+  // (the phone was asleep) and the network returning (the wifi hopped).
+  function wakeAll() { allTerms().forEach(function (t) { if (t.retryNow) t.retryNow(); }); }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) wakeAll(); });
+  window.addEventListener('online', wakeAll);
+  window.addEventListener('pageshow', wakeAll);
 
   var first = makePane(makeCol());
   newTerm(first, startShell());

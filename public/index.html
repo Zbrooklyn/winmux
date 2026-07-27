@@ -61,6 +61,12 @@
   .connpill .dot { width:8px; height:8px; border-radius:50%; background:var(--idle); }
   .connpill[data-state="open"] .dot { background:var(--ok); }
   .connpill[data-state="closed"] .dot { background:var(--err); }
+  /* Reconnecting is neither working nor dead — the shell is still there, we are
+     just not holding its hand this second. It pulses so the state reads as
+     in-progress rather than as a second flavour of broken. */
+  .connpill[data-state="reconnecting"] .dot { background:var(--work); animation:connpulse 1.2s ease-in-out infinite; }
+  @keyframes connpulse { 0%,100% { opacity:1 } 50% { opacity:.35 } }
+  @media (prefers-reduced-motion: reduce) { .connpill[data-state="reconnecting"] .dot { animation:none; } }
   /* In a narrow pane the tab name matters more than the word "connected", so the
      pill collapses to its status dot and gives the label its width back. */
   #wsrow .pane { container-type: inline-size; }
