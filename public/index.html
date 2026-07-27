@@ -112,6 +112,17 @@
      flex spacer that used to split them left/right is neutralised. cockpit.css frozen. */
   .sx-foot { justify-content: space-between; }
   .sx-foot .sxsp { display: none; }
+  /* Active group row (Edward's pick): one soft-purple fill IS the whole selection
+     signal. The accent bar is dropped — a stripe poking out the side is redundant
+     once the entire row is tinted. cockpit.css keeps the fill; this only kills the
+     bar. */
+  .prow[data-active] { border-left-color: transparent; }
+  /* Status dot: an idle group's dot was just a hollow --bg1 ring over a transparent
+     centre (STATUS_COLOR.idle = transparent), reading as a stray black circle.
+     Drop the ring so an idle group shows NO dot at all; a working (amber) or
+     needs-you (red) group still fills the dot, so it stays visible. Loudness
+     tracks signal — the marker appears only when a group actually wants attention. */
+  .prow .pfolder .pdot { border-color: transparent; }
   /* The version chip is the loudest thing in the sidebar and says the least —
      it wears the accent only on hover, when it is actually a button. */
   #version-chip { background: var(--bg1); color: var(--muted); font-weight: 560; border: 1px solid var(--border); }
