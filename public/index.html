@@ -28,10 +28,21 @@
   .findbar .fb-btn { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--faint); cursor: pointer; }
   .findbar .fb-btn:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
   .findbar .fb-btn svg { width: 14px; height: 14px; }
+  /* --faint is the third rung of the ink ramp, and it carries real words: the
+     "Groups" title, the session sub-line, "connected". At the mockup's #6b6b6b it
+     measures 2.8:1 on the sidebar, where readable body text needs 4.5:1. Lifted in
+     both themes to clear the bar on every surface it lands on (bg0/bg1/bg2).
+     Token override only — cockpit.css is the frozen contract and stays untouched. */
+  :root { --faint: #969696; --accent-ink: #ab90ff; }
+  @media (prefers-color-scheme: light) { :root { --faint: #666666; --accent-ink: #6b3fd4; } }
   /* Manual theme override (Settings). Unset = follow system. These win over the
      mockup's prefers-color-scheme media query because of the attribute selector. */
-  :root[data-theme="light"] { --bg0:#fff; --bg1:#f6f6f6; --bg2:#eeeef0; --bg3:#e6e6e8; --border:#e2e2e2; --border-s:#c4c4c4; --text:#232323; --muted:#5c5c5c; --faint:#a0a0a0; --term-bg:#fbfbfb; }
-  :root[data-theme="dark"]  { --bg0:#1e1e1e; --bg1:#262626; --bg2:#2d2d2d; --bg3:#333; --border:#363636; --border-s:#4a4a4a; --text:#dadada; --muted:#a8a8a8; --faint:#6b6b6b; --term-bg:#1a1a1a; }
+  :root[data-theme="light"] { --bg0:#fff; --bg1:#f6f6f6; --bg2:#eeeef0; --bg3:#e6e6e8; --border:#e2e2e2; --border-s:#c4c4c4; --text:#232323; --muted:#5c5c5c; --faint:#666666; --accent-ink:#6b3fd4; --term-bg:#fbfbfb; }
+  :root[data-theme="dark"]  { --bg0:#1e1e1e; --bg1:#262626; --bg2:#2d2d2d; --bg3:#333; --border:#363636; --border-s:#4a4a4a; --text:#dadada; --muted:#a8a8a8; --faint:#969696; --accent-ink:#ab90ff; --term-bg:#1a1a1a; }
+  /* Accent-as-text needs more lift than accent-as-surface: the mockup's #8a5cf5
+     reads 3.6:1 behind the "Mux" wordmark and the favicon-strip initials. Those
+     two use --accent-ink; every accent *fill* still uses the mockup's --accent. */
+  .nhead .brand b, .tfav .fav-b { color: var(--accent-ink); }
   .ofmi[data-on]::after { content: "✓"; margin-left: auto; color: var(--accent); font-weight: 700; }
   /* Split layout: wsrow holds columns; each column stacks panes vertically. */
   .wscol { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); }
@@ -78,14 +89,34 @@
      them in its narrow phone mode). */
   .cockpit .sx-deck { display: flex; }
   /* Nothing happening is not news. A counter at zero steps back so the two that
-     are actually counting something carry the eye. */
-  .stat[data-zero] { opacity: .48; }
+     are actually counting something carry the eye.
+     Dimming it with opacity was the wrong tool — it dragged the label to 1.6:1.
+     The step down happens in the colour ramp instead, which still reads as quiet
+     and stays legible. */
   .stat[data-zero] .v { color: var(--faint); }
   /* The version chip is the loudest thing in the sidebar and says the least —
      it wears the accent only on hover, when it is actually a button. */
   #version-chip { background: var(--bg1); color: var(--muted); font-weight: 560; border: 1px solid var(--border); }
-  #version-chip:hover { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+  #version-chip:hover { background: var(--accent-soft); color: var(--accent-ink); border-color: transparent; }
   .sx-list { overflow-y: auto; }
+  /* Every icon control in this app is a <span role="button">, which the browser
+     does NOT put in the tab order. Tab skipped all fifteen of them, so the only
+     way to reach the palette, the collapse handle, or "new group" was a mouse —
+     and shortcuts are allowed to enhance a control, never to be its only path.
+     app.js gives them tabindex and Enter/Space; this is what focus looks like. */
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  .sxbtn:focus-visible, .pc:focus-visible, .upbadge:focus-visible { outline-offset: 1px; }
+  /* The tab close glyph was dimmed with opacity to .45, which put it at 2.8:1.
+     Same step down, done in the colour ramp instead, where it stays readable. */
+  .ptab .x { opacity: 1; color: var(--faint); }
+  .ptab .x:hover { color: var(--text); }
+  /* On the phone the primary input is a thumb, so the controls it has to hit are
+     sized for one: the mockup's 28px icons and its 10x14 close glyph are not. */
+  .cockpit[data-mode="narrow"] .ptab { min-height: 44px; }
+  .cockpit[data-mode="narrow"] .ptab .x { width: 34px; height: 44px; margin-right: -9px; display: flex; align-items: center; justify-content: center; opacity: 1; color: var(--faint); }
+  .cockpit[data-mode="narrow"] .ptab .x:hover { color: var(--text); }
+  .cockpit[data-mode="narrow"] .pc { width: 40px; height: 40px; }
+  .cockpit[data-mode="narrow"] .pc.pcaret { width: 26px; }
   /* Changes dock: folder bar on top, diff filling the rest. */
   .dock .pbody { display: flex; flex-direction: column; background: var(--bg0); }
   .dock .dwrap { position: relative; flex: 1; min-height: 0; }

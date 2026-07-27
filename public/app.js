@@ -6,6 +6,10 @@
   var countEl = document.getElementById('sx-count');
   var sxList = document.getElementById('sx-list');
 
+  // Everything a mouse can press. None of it is a <button>, so none of it is in
+  // the tab order until we put it there (see wireFocusable at the bottom).
+  var FOCUSABLE = '[role="button"], .prow, .srow, .ncard, .ptab, .ptab .x, .mrow, .setrow, .plrow';
+
   var panes = [];
   var paneSeq = 0;
   var termSeq = 0;
@@ -2230,6 +2234,12 @@
   document.addEventListener('keydown', function (e) {
     var tgt = e.target;
     var inField = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'SELECT' || (tgt.tagName === 'TEXTAREA' && !tgt.classList.contains('xterm-helper-textarea')));
+    // A real button fires on Enter and Space. Every icon control here is a span
+    // wearing role="button", so the browser gives it neither; without this the
+    // keyboard can reach a control and still not press it.
+    if ((e.key === 'Enter' || e.key === ' ') && tgt && tgt.matches && tgt.matches(FOCUSABLE)) {
+      e.preventDefault(); e.stopPropagation(); tgt.click(); return;
+    }
     if (e.key === 'Escape') {
       if (copyMode) { exitCopyMode(); e.preventDefault(); return; }
       if (sessmenu.hasAttribute('data-open')) { closeLayoutMenu(); e.preventDefault(); return; }
@@ -2348,6 +2358,24 @@
   document.addEventListener('visibilitychange', function () { if (!document.hidden) wakeAll(); });
   window.addEventListener('online', wakeAll);
   window.addEventListener('pageshow', wakeAll);
+
+  // role="button" on a <span> is a label, not a behaviour: the browser still
+  // leaves it out of the tab order. Same for the rows, cards and tabs that carry
+  // the app's actual navigation. Everything clickable gets a tab stop, including
+  // the ones the sidebar re-renders on every fleet change.
+  function wireFocusable() {
+    var list = document.querySelectorAll(FOCUSABLE);
+    for (var i = 0; i < list.length; i++) if (!list[i].hasAttribute('tabindex')) list[i].tabIndex = 0;
+  }
+  wireFocusable();
+  new MutationObserver(function (muts) {
+    for (var i = 0; i < muts.length; i++) {
+      var t = muts[i].target;
+      if (t && t.closest && t.closest('.xterm')) continue; // terminal output, not chrome
+      wireFocusable();
+      return;
+    }
+  }).observe(document.body, { childList: true, subtree: true });
 
   var first = makePane(makeCol());
   newTerm(first, startShell());
