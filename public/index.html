@@ -172,6 +172,12 @@
   .cockpit[data-mode="narrow"] .pctrls .pc:active,
   .cockpit[data-mode="narrow"] .tab-of:active { background: transparent; color: var(--text); }
 
+  /* The tab strip scrolls horizontally, but the mockup's 11px scrollbar drawn under the
+     tabs reads cheap (worst on a phone). Overflow is already handled by the "N v" menu, so
+     the strip scrolls silently — hide its scrollbar on both axes, keep the scroll. */
+  .ptabs .tabscroll { scrollbar-width: none; -ms-overflow-style: none; }
+  .ptabs .tabscroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
   /* Session cards drill into the terminal on tap — give them the same "tap to open"
      chevron the group rows carry, so the affordance reads the same at both levels. */
   .ncard .nchev { display: flex; align-items: center; align-self: center; flex: 0 0 auto; color: var(--faint); }

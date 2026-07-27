@@ -117,6 +117,12 @@ Edward decides instantly from **rendered options**, not from words. So:
   slides up from the bottom edge as a full-width sheet with a drag handle and a dimmed backdrop,
   instead of a desktop popover anchored to a cursor. One shared path: `placeMenu()` routes to the
   sheet whenever `currentMode === 'narrow'`, so all menus stay consistent. (Live.)
+- **Tab strip scrolls silently — no scrollbar.** The mockup's global 11px scrollbar
+  (`cockpit.css:15`) was drawing a cheap grey bar under the tabs on the tab strip's horizontal
+  overflow (worst on a real phone). Overflow is already handled by the "N ⌄" menu, so the strip
+  hides its scrollbar on both axes (`scrollbar-width:none` + `::-webkit-scrollbar{display:none}`)
+  while keeping the scroll. Caught on Edward's real phone — emulated viewports hide overlay
+  scrollbars, so this class of defect only shows on the device. (Live.)
 - **Phone controls stay flat on touch.** The mockup's icon-button hover is a 7px-rounded grey fill —
   a *desktop* affordance. Phones tap, not hover, so that fill flashed a rounded grey box on every
   touch and fought the flat language. On narrow, the `.pc` / `.tab-of` / tab-`×` controls drop the
