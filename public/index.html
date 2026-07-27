@@ -142,6 +142,13 @@
   .ctxsw { width: 18px; height: 18px; border-radius: 50%; cursor: pointer; border: 1px solid var(--border);
     display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--faint); line-height: 1; }
   .ctxsw[data-on] { outline: 2px solid var(--text); outline-offset: 1px; }
+  /* Command palette: drop the decorative "›" prefix on every row so the labels
+     align left cleanly — the repeated chevron was noise, not information. */
+  .pl-item .pl-ic { display: none; }
+  /* Dock / browser address bar: flatten the bordered pill to a quiet borderless
+     fill, so the folder path reads as a calm line instead of the one bordered box
+     in an otherwise flat panel. Shared with the in-app browser (consistent). */
+  .burl { border-color: transparent; background: var(--bg1); }
   .sx-list { overflow-y: auto; }
   /* Every icon control in this app is a <span role="button">, which the browser
      does NOT put in the tab order. Tab skipped all fifteen of them, so the only

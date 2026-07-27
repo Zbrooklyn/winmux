@@ -62,6 +62,13 @@ Edward decides instantly from **rendered options**, not from words. So:
   The status dot's hollow ring is gone, so an idle group shows no dot — but a working (amber)
   or needs-you (red) group still fills its dot, and needs-you still shows red subtext. Loudness
   tracks signal: the dot appears only when a group wants attention. (Live.)
+- **Command palette = no row chevrons.** The decorative `›` prefix on every palette row is
+  gone; labels align left cleanly. (Live.)
+- **Dock / browser address bar = flat, borderless.** The path pill lost its border and reads
+  as a quiet line, not the one bordered box in a flat panel. Shared with the in-app browser's
+  address bar (consistent). (Live.)
+- **Notifications + Settings = reviewed, already on-language.** Flat rows, one purple highlight,
+  purple toggles; no change made.
 - **Dock toggle = one button, like the sidebar.** The pane-header panel icon (`.pc-dock`)
   is the single dock toggle, both directions. The floating right-edge reopen-strip is gone —
   it was the same stray chrome we removed from the sidebar, and `.pc-dock` already reopens.
