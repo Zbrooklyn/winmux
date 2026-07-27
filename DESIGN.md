@@ -63,6 +63,6 @@ Edward decides instantly from **rendered options**, not from words. So:
 ## Pending visual review
 
 - **North star:** principles-first vs. strict mockup-parity for the whole app — Edward wants
-  to brainstorm this visually, region by region.
-- **Header icon row** arrangement (the "GROUPS … controls" row).
-- **Whole-sidebar side-by-side** to confirm the overall language in one look.
+  to brainstorm this visually, region by region. (This is the last open framing question.)
+- **Whole-sidebar language** — shown to Edward in one look (2026-07-27) with all four
+  decisions applied; awaiting his confirm that it reads as one coherent thing.
