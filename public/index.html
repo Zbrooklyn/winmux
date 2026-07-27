@@ -272,8 +272,15 @@
   .cockpit[data-mode="narrow"] .ptab { min-height: 44px; }
   .cockpit[data-mode="narrow"] .ptab .x { width: 34px; height: 44px; margin-right: -9px; display: flex; align-items: center; justify-content: center; opacity: 1; color: var(--faint); }
   .cockpit[data-mode="narrow"] .ptab .x:hover { color: var(--text); }
-  .cockpit[data-mode="narrow"] .pc { width: 40px; height: 40px; }
-  .cockpit[data-mode="narrow"] .pc.pcaret { width: 26px; }
+  .cockpit[data-mode="narrow"] .pc { width: 44px; height: 44px; }
+  .cockpit[data-mode="narrow"] .pc.pcaret { width: 30px; }
+  /* Footer + header icon spans are 28px in the mockup — a desktop mouse target.
+     On the phone every one is a thumb tap, so give them a 44px hit area (glyph
+     unchanged at 16px; the box grows around it). */
+  .cockpit[data-mode="narrow"] .sxbtn { width: 44px; height: 44px; }
+  /* The back chevron + name is the whole phone back-affordance; it was 20px tall.
+     Give it a full 44px hit band so the thumb can't miss it. */
+  .cockpit[data-mode="narrow"][data-view="focus"] .nhead-ctx { min-height: 44px; }
   /* Changes dock: folder bar on top, diff filling the rest. */
   .dock .pbody { display: flex; flex-direction: column; background: var(--bg0); }
   .dock .dwrap { position: relative; flex: 1; min-height: 0; }

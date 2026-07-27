@@ -117,6 +117,12 @@ Edward decides instantly from **rendered options**, not from words. So:
   slides up from the bottom edge as a full-width sheet with a drag handle and a dimmed backdrop,
   instead of a desktop popover anchored to a cursor. One shared path: `placeMenu()` routes to the
   sheet whenever `currentMode === 'narrow'`, so all menus stay consistent. (Live.)
+- **Phone controls are thumb-sized (44px minimum).** The mockup's controls are mouse targets —
+  28px footer/header icon spans, a 40px new-tab `+`, a 20px-tall back chevron. On the phone every
+  one is a thumb tap, so on narrow the footer/header `.sxbtn` icons, the `.pc` pane controls, and
+  the `.nhead-ctx` back band all get a **44px hit area** (glyphs unchanged; the box grows around
+  them) — verified by measured box metrics, not eye. Tab rows and the tap-to-type pill were already
+  44px. No horizontal overflow at 384px. index.html narrow overrides; cockpit.css frozen. (Live.)
 - **Phone notifications + command palette = native mobile surfaces.** Two desktop overlays
   that still floated on the phone were converted: the **notifications panel** now slides up as a
   full-width bottom sheet (drag handle, dimmed backdrop, closes on backdrop tap / Escape / jump) —
