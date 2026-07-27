@@ -1030,7 +1030,13 @@
 
     // Right-click the tab opens its full session menu (rename, colour, split, move,
     // export, find, the close family). Session controls live here, not on the toolbar.
-    tabEl.addEventListener('contextmenu', function (e) { e.preventDefault(); e.stopPropagation(); showTabMenu(t, e.clientX, e.clientY); });
+    // Drop it from the tab's bottom edge, not the cursor Y — otherwise the menu opens
+    // up inside the tab bar and overlaps the tabs.
+    tabEl.addEventListener('contextmenu', function (e) {
+      e.preventDefault(); e.stopPropagation();
+      var r = tabEl.getBoundingClientRect();
+      showTabMenu(t, e.clientX, r.bottom + 2);
+    });
 
     // One shell, but possibly several sockets over its life. Losing the socket
     // is not the shell ending — a phone sleeping, a lid closing, a wifi hop and
