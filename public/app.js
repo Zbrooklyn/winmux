@@ -1299,6 +1299,7 @@
     el.innerHTML =
       '<div class="nbar"><span class="back">' + BACK_SVG + '<span>Sessions</span></span><span class="nm"></span></div>' +
       '<div class="ptabs">' +
+        '<span class="pc ptab-back" title="Back to sessions" role="button" aria-label="Back to sessions">' + BACK_SVG + '</span>' +
         '<div class="pctrls"><span class="pc pc-rail" title="Toggle left sidebar (Ctrl+B)" role="button">' + RAIL_SVG + '</span></div>' +
         '<div class="tabscroll"></div>' +
         '<div class="tab-of" title="Tabs that don\'t fit" role="button" style="display:none"><span class="ofc">0</span>' + CARET_SVG + '<span class="ofdot" style="display:none"></span></div>' +
@@ -1395,7 +1396,10 @@
     p.ofBtn.addEventListener('click', function (e) { e.stopPropagation(); focusPane(p.id); showOverflowMenu(p); });
     p.tabscroll.addEventListener('scroll', function () { layoutTabs(p); });
     // Back out of a terminal to its group's session list, not all the way to the groups.
+    // On the phone this lives in the tab bar (the separate back header is hidden there);
+    // the .nbar copy is kept as the wiring source for both.
     el.querySelector('.nbar .back').addEventListener('click', function () { setView('sessions'); });
+    el.querySelector('.ptab-back').addEventListener('click', function () { setView('sessions'); });
     wirePaneDrop(p);
 
     panes.push(p);

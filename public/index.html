@@ -159,6 +159,22 @@
   .wc .wcbtn.wc-close:hover { background: #e5484d; color: #fff; }
   .cockpit[data-mode="narrow"] .wc { display: none !important; }
 
+  /* The left rail toggle is hidden on the phone, but its .pctrls holder keeps its
+     0 8px padding — a phantom gap before the first tab. Collapse the empty holder. */
+  .cockpit[data-mode="narrow"] .ptabs .pctrls:has(.pc-rail) { display: none; }
+
+  /* Phone terminal view = two bars: the back-arrow merges into the tab bar and the
+     separate back header is hidden, so the session name isn't printed twice. */
+  .ptab-back { display: none; }
+  .cockpit[data-mode="narrow"][data-view="focus"] .main .npane .nbar { display: none; }
+  .cockpit[data-mode="narrow"][data-view="focus"] .ptab-back {
+    display: flex; align-items: center; justify-content: center;
+    width: 44px; min-width: 44px; height: 100%; flex: 0 0 auto;
+    color: var(--muted); cursor: pointer;
+  }
+  .cockpit[data-mode="narrow"][data-view="focus"] .ptab-back:active { color: var(--text); }
+  .cockpit[data-mode="narrow"][data-view="focus"] .ptab-back svg { width: 20px; height: 20px; }
+
   /* Phone tap-to-type: a floating pill in the terminal view that raises the soft
      keyboard. Discoverability — a phone terminal gives no cue you can type into it.
      Shown only in narrow focus, and hidden the moment the terminal has focus. */
