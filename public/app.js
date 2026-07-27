@@ -1588,8 +1588,8 @@
   // ------------------------------------------------------- sidebar + dock
   function setSidebar(state) { root.setAttribute('data-sidebar', state); setTimeout(function () { panes.forEach(fitActive); }, 40); }
   function toggleSidebar() { setSidebar(root.getAttribute('data-sidebar') === 'open' ? 'collapsed' : 'open'); }
-  document.getElementById('collapse-sidebar').addEventListener('click', function () { setSidebar('collapsed'); });
-  document.getElementById('sidebar-reopen').addEventListener('click', function () { setSidebar('open'); });
+  // One control does both directions: the tab-bar rail (.pc-rail), present whether the
+  // sidebar is open or collapsed. The old header chevron and edge strip are gone.
 
   var dockPath = document.getElementById('dock-path');
   var dockDiff = document.getElementById('dock-diff');
@@ -2412,8 +2412,9 @@
       var panel = document.getElementById(EXPANDERS[i][1]);
       if (btn && panel) setAria(btn, 'aria-expanded', panel.hasAttribute('data-open') ? 'true' : 'false');
     }
-    setAria(document.getElementById('collapse-sidebar'), 'aria-expanded',
-      root.getAttribute('data-sidebar') === 'open' ? 'true' : 'false');
+    // The rail is the sole sidebar toggle now; mirror the open/collapsed state onto it.
+    var open = root.getAttribute('data-sidebar') === 'open';
+    document.querySelectorAll('.pc-rail').forEach(function (r) { setAria(r, 'aria-expanded', open ? 'true' : 'false'); });
     var sel = document.querySelectorAll('.prow, .ptab, .srow');
     for (var j = 0; j < sel.length; j++) setAria(sel[j], 'aria-current', sel[j].hasAttribute('data-active') ? 'true' : 'false');
   }

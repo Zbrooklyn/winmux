@@ -53,13 +53,12 @@ Edward decides instantly from **rendered options**, not from words. So:
 - **Sidebar footer icon row = evenly distributed** across the full width — one balanced
   toolbar, no dead centre gap. (Live.)
 - **Sidebar collapse/expand = one button, both directions.** No second toggle. The same
-  control collapses when open and expands when closed. (Decided; implementation pending —
-  will be shown as a visual before it lands.)
+  control — the panel icon at the left of the tab bar — collapses when open and expands when
+  closed. The header chevron and the edge reopen-strip are both gone. (Live.)
 
 ## Pending visual review
 
 - **North star:** principles-first vs. strict mockup-parity for the whole app — Edward wants
   to brainstorm this visually, region by region.
 - **Header icon row** arrangement (the "GROUPS … controls" row).
-- **The one-button collapse/expand** — show exactly which button and where.
 - **Whole-sidebar side-by-side** to confirm the overall language in one look.
