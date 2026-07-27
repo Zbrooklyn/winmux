@@ -1711,7 +1711,9 @@
     setTimeout(function () { panes.forEach(fitActive); }, 40);
   }
   document.getElementById('dock-close').addEventListener('click', function () { root.setAttribute('data-dock', 'closed'); setTimeout(function () { panes.forEach(fitActive); }, 40); });
-  document.getElementById('dock-reopen').addEventListener('click', toggleDock);
+  // The dock's single toggle is the pane-header panel icon (.pc-dock), which reopens it
+  // when closed — same one-button pattern as the sidebar. The floating edge reopen-strip
+  // was the same stray chrome we dropped from the sidebar, so it's gone.
   document.getElementById('dock-refresh').addEventListener('click', refreshChanges);
   dockPath.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Enter') refreshChanges(); });
 
