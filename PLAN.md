@@ -329,6 +329,16 @@ a folder in from Explorer puts its path on the command line.
     contents instead.
     (proof: `52cd700` — harness `drop`, 5/5; screenshots `drop-hint.png` / `drop-pasted.png` shipped
     to @edward. The one link automation cannot originate is a real OS drag — @edward's acceptance)
+- [x] Colours nobody chose, replaced by colours measured against the ground @claude
+    `themeColors()` named only four values and never the sixteen ANSI slots, so xterm.js fell back
+    to Tango — GNOME Terminal's 2006 default, drawn for a mid-grey background. PSReadLine paints
+    every command you type in brightYellow (`#fce94f`, a 14.01:1 shout on our near-black) and every
+    parameter in brightBlack (`#555753`, 2.38:1 mud). Light mode had 11 of 16 failing outright.
+    The luminance windows for the two backgrounds do not overlap, so each mode gets its own set.
+    (proof: `11001e3` — three palettes x two modes, all clearing 4.5:1; harness `colour` 12/12,
+    reading the colour off the span xterm actually painted after a real PowerShell command; six
+    screenshots `palette-{aurora,ash,ember}-{dark,light}.png` shipped to @edward. Which of the three
+    ships as default is @edward's eye — Aurora is the current default)
 
 ## Decisions
 
