@@ -115,6 +115,11 @@
   .sx-deck .stat { background: transparent; border: none; border-radius: 0; padding: 0 12px; }
   .sx-deck .stat:first-child { padding-left: 0; }
   .sx-deck .stat + .stat { border-left: 1px solid var(--border); }
+  /* Footer icon row: evenly distributed across the full width (Edward's pick), so
+     the seven controls read as one balanced toolbar with no dead centre gap. The
+     flex spacer that used to split them left/right is neutralised. cockpit.css frozen. */
+  .sx-foot { justify-content: space-between; }
+  .sx-foot .sxsp { display: none; }
   /* The version chip is the loudest thing in the sidebar and says the least —
      it wears the accent only on hover, when it is actually a button. */
   #version-chip { background: var(--bg1); color: var(--muted); font-weight: 560; border: 1px solid var(--border); }
