@@ -117,6 +117,15 @@ Edward decides instantly from **rendered options**, not from words. So:
   slides up from the bottom edge as a full-width sheet with a drag handle and a dimmed backdrop,
   instead of a desktop popover anchored to a cursor. One shared path: `placeMenu()` routes to the
   sheet whenever `currentMode === 'narrow'`, so all menus stay consistent. (Live.)
+- **Second adversarial sweep — the surfaces the first pass missed.** A full-surface phone audit
+  (every view + every overlay, screenshot + measured) caught what the five roots didn't: the
+  **sessions-view back** ("‹ Groups") was a 26px-tall target (only the focus-view back had been
+  sized) → now a 44px band at 14px; the **Diagnostics overlay** was still a floating desktop card
+  with a 30px close → now full-screen with a 44px close, consistent with Settings (generalized:
+  every `.ovl > .modal` is full-screen on narrow, while small `.dlg`/`.tut` confirm dialogs stay
+  centred); the **confirm dialog** was a fixed 420px — wider than a 384px phone → capped at 92vw.
+  Lesson logged: "I fixed the surfaces I flagged" is not "I swept every surface" — the builder
+  can't self-certify done. index.html; cockpit.css frozen. (Live.)
 - **Phone Settings = full-screen drill-in (Edward's pick).** The mockup's 780×560 centred
   dialog crammed onto a phone kept its two-column split — the category list ate ~half the width,
   squeezing the content. Edward chose the drill-in (over top-tabs, both rendered) because it

@@ -207,8 +207,18 @@
      780x560 centred dialog would otherwise squeeze the content into half-width. */
   .mhead .mback { display: none; align-items: center; justify-content: center; width: 44px; height: 44px; margin-left: -10px; margin-right: 2px; color: var(--muted); cursor: pointer; flex: 0 0 auto; }
   .mhead .mback svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .cockpit[data-mode="narrow"] #settings-ovl.ovl[data-open] { align-items: stretch; justify-content: stretch; }
-  .cockpit[data-mode="narrow"] #settings-ovl .modal { width: 100%; max-width: none; height: 100%; max-height: none; border: none; border-radius: 0; }
+  /* Every full modal (Settings, Diagnostics) is full-screen on the phone, not a
+     centred desktop card. Small confirm/tutorial dialogs (.dlg/.tut) stay centred. */
+  .cockpit[data-mode="narrow"] .ovl[data-open]:has(> .modal) { align-items: stretch; justify-content: stretch; }
+  .cockpit[data-mode="narrow"] .ovl > .modal { width: 100%; max-width: none; height: 100%; max-height: none; border: none; border-radius: 0; }
+  .cockpit[data-mode="narrow"] .mhead .mx { width: 44px; height: 44px; }
+  /* The sessions-view back ("‹ Groups") was a 26px-tall mouse target; give it a
+     44px band and phone-legible size, matching the focus-view back. */
+  .cockpit[data-mode="narrow"] .nbar .back { min-height: 44px; font-size: 14px; padding: 5px 10px 5px 6px; }
+  .cockpit[data-mode="narrow"] .nbar .back svg { width: 20px; height: 20px; }
+  .cockpit[data-mode="narrow"] .nbar .nm { font-size: 14px; }
+  /* The confirm dialog is a fixed 420px — wider than a 384px phone. Cap it. */
+  .dlg { max-width: 92vw; }
   /* LIST state — full-width category rows with a chevron; content hidden. */
   .cockpit[data-mode="narrow"] #settings-ovl .modal[data-drill="list"] .mtabs { flex: 1; border-right: none; padding: 4px 0; overflow-y: auto; }
   .cockpit[data-mode="narrow"] #settings-ovl .modal[data-drill="list"] .mtab { border-radius: 0; padding: 16px 18px; font-size: 15px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
