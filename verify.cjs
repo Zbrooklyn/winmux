@@ -48,6 +48,9 @@ const PORT_PHONE = 9913;
 // talking to its server — borrowing @edward's would count his terminals as
 // leaks and kill a tab he is using.
 const PORT_SURVIVE = 9916;
+// The drop group makes twin folders on disk and asks the server to tell them
+// apart, so it wants a server whose answers nobody else is racing.
+const PORT_DROP = 9917;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -989,6 +992,72 @@ check('survive', PORT_SURVIVE, async ({ browser, base, t, shot }) => {
     const tidied = await info();
     t('closing a tab on purpose ends its shell right away',
       tidied.sessions === 1 && tidied.detached === 0, tidied);
+  } finally {
+    await page.close();
+  }
+});
+
+// --- drop: a folder dragged in from Explorer becomes a path ---------------
+// Every terminal on Windows lets you type "cd " and drag a folder in. A browser
+// refuses to tell a page where a dropped folder lives, so WinMux asks the server
+// to find it by name and contents. Two things have to hold or the feature is
+// worse than not having it: the right folder wins when two share a name, and a
+// drop that misses the pane must not navigate the whole app away.
+check('drop', PORT_DROP, async ({ browser, base, t }) => {
+  const find = async (name, kids, near) => JSON.parse((await get(base + '/api/findpath' +
+    '?name=' + encodeURIComponent(name) +
+    '&kids=' + encodeURIComponent((kids || []).join('|')) +
+    '&near=' + encodeURIComponent(near || ''))).body).hits;
+
+  const here = __dirname;
+  const mine = await find(path.basename(here), fs.readdirSync(here).slice(0, 40));
+  t('the folder you dropped is the folder it finds',
+    mine.length && mine[0].path.toLowerCase() === here.toLowerCase(), mine[0]);
+
+  // Two folders, same name, different contents — the only thing that can tell
+  // them apart is what is inside, which is exactly what the browser hands over.
+  const twin = path.join(OUT, 'twin-' + PORT_DROP);
+  const right = path.join(twin, 'a', 'ledger');
+  const wrong = path.join(twin, 'b', 'ledger');
+  fs.mkdirSync(right, { recursive: true });
+  fs.mkdirSync(wrong, { recursive: true });
+  fs.writeFileSync(path.join(right, 'invoices.txt'), 'x');
+  fs.writeFileSync(path.join(wrong, 'something-else.txt'), 'x');
+  const picked = await find('ledger', ['invoices.txt'], twin);
+  t('contents decide it when two folders share a name',
+    picked.length && picked[0].path.toLowerCase() === right.toLowerCase(), picked[0]);
+
+  const none = await find('no-folder-is-called-this-9917', ['a', 'b']);
+  t('a folder that is not on this machine comes back empty, not wrong', none.length === 0, none);
+
+  const page = await desktop(browser);
+  try {
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3000);
+
+    // Dragging over a pane has to say something, or the drop looks broken until
+    // it works.
+    const hint = await page.evaluate(() => {
+      const pane = document.querySelector('.pane');
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'x.txt'));
+      pane.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+      const pv = pane.querySelector('.split-preview');
+      return { text: pv ? pv.textContent : '', shown: pv ? pv.style.display : '' };
+    });
+    t('a folder dragged over a pane is invited in', /Drop to paste/.test(hint.text) && hint.shown === 'flex', hint);
+
+    // The browser's own default for a dropped file is to leave the app and
+    // display the file. That would look exactly like a crash.
+    const stray = await page.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'x.txt'));
+      const ev = new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true });
+      document.body.dispatchEvent(ev);
+      return { prevented: ev.defaultPrevented, url: location.href };
+    });
+    t('a drop that misses the pane does not throw the app away',
+      stray.prevented && stray.url.indexOf(':' + PORT_DROP) > 0, stray);
   } finally {
     await page.close();
   }

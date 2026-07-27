@@ -540,6 +540,21 @@ function handle(req, res, viaPhone) {
     });
     return;
   }
+  // Dragging a folder from Explorer onto a terminal is how people say "cd here".
+  // A browser refuses to tell a page where a dropped folder actually lives — it
+  // hands over the name and the child names and withholds the path on purpose.
+  // That is a hard wall in the browser, but not on this machine: the server is
+  // standing on the same disk, so it can just go and find the folder whose name
+  // and contents match what the browser saw.
+  if (urlPath === '/api/findpath') {
+    let q = {};
+    try { q = Object.fromEntries(new URL(req.url, 'http://x').searchParams); } catch (e) {}
+    findFolder(q.name || '', (q.kids || '').split('|').filter(Boolean), q.near || '', (hits) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ hits }));
+    });
+    return;
+  }
   // Diagnostics modal: what this server actually is right now.
   if (urlPath === '/api/info') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -643,6 +658,76 @@ function setPhone(want, done) {
     console.log('phone access: ON  →  ' + phoneURL());
     done(Object.assign({ ok: true }, phoneState(false)));
   });
+}
+
+// --- Finding a folder the browser refused to name --------------------------
+// Places that are enormous, uninteresting, or both. Walking into them turns a
+// half-second answer into a minute of disk grinding for a folder nobody drags.
+const FIND_SKIP = new Set([
+  'node_modules', '.git', 'appdata', 'windows', 'program files', 'program files (x86)',
+  'programdata', '$recycle.bin', 'system volume information', '.cache', '__pycache__',
+  'venv', '.venv', 'dist', 'build', '.next', 'onedrivetemp',
+]);
+const FIND_DEPTH = 6;
+const FIND_BUDGET = 12000;   // directories looked at before we give up
+const FIND_MS = 4000;
+
+// Chunked on purpose: a synchronous walk would freeze every terminal on the
+// machine while it ran. 200 directories per tick keeps the shells responsive.
+function findFolder(name, kids, near, done) {
+  const want = String(name).toLowerCase();
+  if (!want) return done([]);
+  const kidSet = new Set(kids.map((k) => String(k).toLowerCase()));
+  const seen = new Set();
+  const hits = [];
+  const started = Date.now();
+  let budget = FIND_BUDGET;
+
+  // Nearest first: the folder you are already sitting in, then home, then the
+  // two places this machine actually keeps work.
+  const roots = [near, os.homedir(), path.join(os.homedir(), 'Dropbox'), 'C:\\dev', 'C:\\']
+    .filter(Boolean)
+    .filter((r) => { try { return fs.statSync(r).isDirectory(); } catch (e) { return false; } });
+  const queue = roots.map((r) => ({ dir: r, depth: 0 }));
+
+  function score(dir) {
+    if (!kidSet.size) return 0.5;   // an empty folder can only match by name
+    let got = 0;
+    try {
+      for (const e of fs.readdirSync(dir)) if (kidSet.has(e.toLowerCase())) got++;
+    } catch (e) { return 0; }
+    return got / kidSet.size;
+  }
+
+  function tick() {
+    let n = 0;
+    while (queue.length && n++ < 200) {
+      if (budget-- <= 0 || Date.now() - started > FIND_MS) { queue.length = 0; break; }
+      const { dir, depth } = queue.shift();
+      const key = dir.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { continue; }
+      for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        const low = e.name.toLowerCase();
+        if (FIND_SKIP.has(low) || low.startsWith('$')) continue;
+        const full = path.join(dir, e.name);
+        if (low === want) {
+          const s = score(full);
+          if (s > 0) hits.push({ path: full, score: s });
+          // A perfect content match is the folder. Stop paying for more.
+          if (s === 1) { queue.length = 0; break; }
+        }
+        if (depth + 1 <= FIND_DEPTH) queue.push({ dir: full, depth: depth + 1 });
+      }
+    }
+    if (queue.length) return setImmediate(tick);
+    hits.sort((a, b) => b.score - a.score || a.path.length - b.path.length);
+    done(hits.slice(0, 5));
+  }
+  setImmediate(tick);
 }
 
 // --- Shells that outlive their socket --------------------------------------

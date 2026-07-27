@@ -1058,9 +1058,14 @@
     });
   }
   function clearDropUI(p) {
+    if (p.hintTimer) { clearTimeout(p.hintTimer); p.hintTimer = null; }
     p.el.classList.remove('drop');
     if (p.preview) { p.preview.style.display = 'none'; p.preview.className = 'split-preview'; }
   }
+  // Miss the pane and the browser's own default takes over — it navigates away
+  // from the app to display the file. Swallow every stray drop on the page.
+  window.addEventListener('dragover', function (e) { if (!dragTerm) e.preventDefault(); });
+  window.addEventListener('drop', function (e) { e.preventDefault(); });
   var ZONE_LABEL = { left: 'Split left', right: 'Split right', up: 'Split up', down: 'Split down', center: 'Move here' };
   function dropZone(p, e) {
     var r = p.el.getBoundingClientRect();
@@ -1072,9 +1077,106 @@
     if (y > 0.75) return 'down';
     return 'center';
   }
+  // ---- drag a folder in from Explorer -----------------------------------
+  // Muscle memory: type "cd ", drag a folder in, hit enter. A browser will not
+  // tell a page where a dropped folder actually lives — it hands over the name
+  // and the child names and withholds the path on purpose. So the page asks the
+  // server, which is standing on the same disk and can just go find it.
+  function hasFiles(e) {
+    try {
+      var ty = e.dataTransfer.types;
+      for (var i = 0; i < ty.length; i++) if (ty[i] === 'Files') return true;
+    } catch (err) {}
+    return false;
+  }
+  function showHint(p, msg, ms) {
+    if (!p.preview) return;
+    p.el.classList.add('drop');
+    p.preview.className = 'split-preview sp-center';
+    p.preview.textContent = msg;
+    p.preview.style.display = 'flex';
+    if (p.hintTimer) clearTimeout(p.hintTimer);
+    if (ms) p.hintTimer = setTimeout(function () { clearDropUI(p); }, ms);
+  }
+  // Windows Terminal only quotes when it has to, and so do we — an unquoted
+  // path is what you'd have typed, and stays editable.
+  function quotePath(s) { return /[\s&(){}^;!'`,~=]/.test(s) ? '"' + s + '"' : s; }
+  function sendText(t, txt) {
+    if (!t || !t.ws || t.ws.readyState !== WebSocket.OPEN) return false;
+    t.ws.send(JSON.stringify({ t: 'i', d: txt }));
+    try { t.term.focus(); } catch (e) {}
+    return true;
+  }
+  // The DataTransfer is emptied the moment this handler returns, so the entry
+  // and the child names have to be grabbed now, not after the fetch.
+  function readDrop(e, done) {
+    var entry = null;
+    try {
+      var items = e.dataTransfer.items;
+      if (items && items.length && items[0].webkitGetAsEntry) entry = items[0].webkitGetAsEntry();
+    } catch (err) {}
+    var file = null;
+    try { file = e.dataTransfer.files && e.dataTransfer.files[0]; } catch (err) {}
+    if (!entry && !file) return done(null);
+    var name = (entry && entry.name) || file.name;
+    if (entry && !entry.isDirectory) return done({ name: name, kids: [], isDir: false });
+    if (!entry) return done({ name: name, kids: [], isDir: false });
+    // Child names are the fingerprint that tells two folders of the same name apart.
+    var kids = [];
+    var reader = entry.createReader();
+    (function readMore() {
+      reader.readEntries(function (batch) {
+        if (!batch.length || kids.length >= 40) return done({ name: name, kids: kids, isDir: true });
+        for (var i = 0; i < batch.length; i++) kids.push(batch[i].name);
+        readMore();
+      }, function () { done({ name: name, kids: kids, isDir: true }); });
+    })();
+  }
+  function dropFolder(p, e) {
+    var t = activeTermOf(p);
+    var mx = e.clientX, my = e.clientY;
+    readDrop(e, function (info) {
+      if (!info) { clearDropUI(p); return; }
+      if (!info.isDir) {
+        showHint(p, 'Drop a folder, or use Shift+right-click → Copy as path', 4500);
+        return;
+      }
+      showHint(p, 'Finding ' + info.name + '…');
+      var q = '/api/findpath?name=' + encodeURIComponent(info.name) +
+        '&kids=' + encodeURIComponent(info.kids.join('|')) +
+        '&near=' + encodeURIComponent((t && t.cwd) || '');
+      fetch(q).then(function (r) { return r.json(); }).then(function (d) {
+        var hits = (d && d.hits) || [];
+        if (!hits.length) {
+          showHint(p, "Couldn't find " + info.name + ' — Shift+right-click → Copy as path', 5000);
+          return;
+        }
+        clearDropUI(p);
+        // An empty folder is only identifiable by its name, so several places on
+        // disk can answer to it equally well. Guessing would quietly paste the
+        // wrong one; ask instead, using the menu the rest of the app already uses.
+        if (hits.length > 1 && hits[1].score === hits[0].score) {
+          var m = newMenu();
+          hits.forEach(function (h) {
+            addMenuItem(m, esc(h.path), '', function () { sendText(t, quotePath(h.path)); });
+          });
+          placeMenu(m, mx, my);
+          return;
+        }
+        sendText(t, quotePath(hits[0].path));
+      }).catch(function () { showHint(p, 'Path lookup failed', 3000); });
+    });
+  }
+
   function wirePaneDrop(p) {
     p.el.addEventListener('dragover', function (e) {
-      if (!dragTerm) return;
+      if (!dragTerm) {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        try { e.dataTransfer.dropEffect = 'copy'; } catch (err) {}
+        showHint(p, 'Drop to paste this path');
+        return;
+      }
       e.preventDefault();
       try { e.dataTransfer.dropEffect = 'move'; } catch (err) {}
       var z = dropZone(p, e);
@@ -1088,7 +1190,12 @@
       clearDropUI(p);
     });
     p.el.addEventListener('drop', function (e) {
-      if (!dragTerm) return;
+      if (!dragTerm) {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        dropFolder(p, e);
+        return;
+      }
       e.preventDefault();
       var t = dragTerm, z = dropZone(p, e);
       clearDropUI(p);
