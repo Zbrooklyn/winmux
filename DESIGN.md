@@ -100,14 +100,15 @@ Edward decides instantly from **rendered options**, not from words. So:
   element in the flat sidebar and a second colour highlight. Version + diagnostics stay
   reachable via the footer diag button. (Live.)
 
-- **Phone terminal header = two bars, not three.** The mobile Terminal view stacked three
-  header rows — brand bar + a back header + the tab bar — and printed the session name twice
-  (back header *and* its tab). Collapsed to two (Option A of three shown): the `‹` back-arrow
-  moved into the tab bar (`.ptab-back`, back to the session list), and the separate npane back
-  header is hidden in narrow focus. Brand bar (with the global "running" count) stays. Alternatives
-  shown and not taken: drop the brand bar here (B), or fold back+name into the brand bar (C) — both
-  left the name duplicated. cockpit.css frozen; done in index.html/app.js; harness back-nav test
-  retargeted to `.ptab-back`. (Live.)
+- **Phone terminal header = two bars, not three (Option C1 — Edward's pick).** The mobile Terminal
+  view stacked three header rows — brand bar + a back header + the tab bar. Collapsed to two: the
+  `‹` back-arrow + the active session name live in the **brand bar** (`#nhead-ctx`, back to the
+  session list), next to the WinMux wordmark behind a hairline divider; the separate npane back
+  header AND the tab-bar back-arrow are both hidden; full tab labels stay. Name updates on tab
+  switch (`paintNbar` in `activateTerm`). Edward chose C1 for polish after seeing A (back in the
+  tab bar), B (drop the brand bar), and C-variants C1–C4 (WinMux kept vs replaced × full-label vs
+  icon tab) all rendered. cockpit.css frozen; done in index.html/app.js; harness back-nav test
+  targets `#nhead-ctx`. (Live.)
 - **Phone tab bar = no phantom left gap.** The left rail toggle is hidden on the phone, but its
   `.pctrls` holder kept its `0 8px` padding — dead space before the first tab. The empty holder is
   now collapsed (`:has(.pc-rail)`), so tabs (and the back-arrow) sit flush left. (Live.)

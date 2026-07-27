@@ -188,17 +188,20 @@
   .ofmenu.sheet .ctxlabel { padding: 8px 12px 5px; }
   @media (prefers-reduced-motion: reduce) { .ofmenu.sheet { transition: none; } }
 
-  /* Phone terminal view = two bars: the back-arrow merges into the tab bar and the
-     separate back header is hidden, so the session name isn't printed twice. */
+  /* Phone terminal view = two bars (Option C1): the back-arrow + session name live in
+     the brand bar; the separate back header AND the tab-bar back-arrow are both hidden,
+     and full tab labels stay. Session name appears once (brand bar); tabs are the switcher. */
   .ptab-back { display: none; }
   .cockpit[data-mode="narrow"][data-view="focus"] .main .npane .nbar { display: none; }
-  .cockpit[data-mode="narrow"][data-view="focus"] .ptab-back {
-    display: flex; align-items: center; justify-content: center;
-    width: 44px; min-width: 44px; height: 100%; flex: 0 0 auto;
-    color: var(--muted); cursor: pointer;
+  .nhead-ctx { display: none; }
+  .cockpit[data-mode="narrow"][data-view="focus"] .nhead-ctx {
+    display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer;
   }
-  .cockpit[data-mode="narrow"][data-view="focus"] .ptab-back:active { color: var(--text); }
-  .cockpit[data-mode="narrow"][data-view="focus"] .ptab-back svg { width: 20px; height: 20px; }
+  .nhead-ctx .nc-div { width: 1px; height: 16px; background: var(--border); flex: 0 0 auto; }
+  .nhead-ctx .nc-back { display: flex; align-items: center; color: var(--muted); flex: 0 0 auto; }
+  .nhead-ctx .nc-back svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .nhead-ctx .nc-name { font-size: 15px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nhead-ctx:active .nc-back, .nhead-ctx:active .nc-name { color: var(--text); }
 
   /* Phone tap-to-type: a floating pill in the terminal view that raises the soft
      keyboard. Discoverability — a phone terminal gives no cue you can type into it.
@@ -328,6 +331,11 @@
 
   <div class="nhead">
     <span class="brand">Win<b>Mux</b></span>
+    <span class="nhead-ctx" id="nhead-ctx" role="button" aria-label="Back to sessions">
+      <span class="nc-div"></span>
+      <span class="nc-back"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></span>
+      <span class="nc-name" id="nhead-ctx-name"></span>
+    </span>
     <span class="live"><span class="pulse"></span><span id="nhead-live">1 running</span></span>
   </div>
 

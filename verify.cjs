@@ -1349,9 +1349,9 @@ check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
     (await ph.evaluate(SIDEBAR)).view === 'focus');
   await shot(ph, 'phone-terminal');
 
-  // On the phone terminal view the back-arrow lives in the tab bar (.ptab-back);
-  // the separate .nbar back header is hidden there to keep the header to two bars.
-  await ph.click('.main .npane .ptab-back');
+  // C1 phone header: the back-arrow lives in the brand bar (#nhead-ctx); both the
+  // separate .nbar back header and the tab-bar back-arrow are hidden to keep two bars.
+  await ph.click('#nhead-ctx');
   await ph.waitForTimeout(600);
   const v2 = await ph.evaluate(SIDEBAR);
   const ns = await ph.evaluate(() => ({

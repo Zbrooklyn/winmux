@@ -817,6 +817,8 @@
     reflect(p);
     updateFindCount(p);
     layoutTabs(p);
+    // Keep the C1 phone brand-bar name in sync when switching tabs.
+    if (currentMode === 'narrow' && p.id === activePaneId) paintNbar(p);
     renderSidebar();
   }
 
@@ -2385,6 +2387,8 @@
     if (p) focusPane(p.id);
   });
   document.getElementById('ns-back').addEventListener('click', function () { setView('projects'); });
+  // C1 phone header: the brand-bar back-arrow returns to the session list.
+  document.getElementById('nhead-ctx').addEventListener('click', function () { setView('sessions'); });
   // Phone: the pill focuses the open terminal from inside a user gesture, which is
   // what actually raises the soft keyboard on iOS/Android.
   (function () {
@@ -2501,9 +2505,13 @@
     }
   }
   function paintNbar(p) {
-    if (!p || !p.nbarName) return;
+    if (!p) return;
     var t = activeTermOf(p);
-    p.nbarName.textContent = t ? t.tabEl.querySelector('.tt').textContent : 'Terminal';
+    var nm = t ? t.tabEl.querySelector('.tt').textContent : 'Terminal';
+    if (p.nbarName) p.nbarName.textContent = nm;
+    // C1 phone header: the active session name lives in the brand bar.
+    var ctxName = document.getElementById('nhead-ctx-name');
+    if (ctxName) ctxName.textContent = nm;
   }
   function applyMode() {
     var m = modeFor(window.innerWidth);
