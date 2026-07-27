@@ -2264,6 +2264,19 @@
     if (ctrl && e.shiftKey && (e.key === 'M' || e.key === 'm')) { stop(); enterCopyMode(); return; }
     if (e.altKey && !ctrl && !e.shiftKey && (e.key === 'p' || e.key === 'P')) { stop(); if (p) togglePin(p); return; }
 
+    // Terminal is king. When a shell or a full-screen TUI (vim, less, a REPL) has
+    // focus, the chords that mean something to a terminal belong to it, not to us.
+    // vim/less page with Ctrl+F and Ctrl+B; a shell takes EOF on Ctrl+D — intercept
+    // them here and every one is silently stolen from the terminal underneath.
+    // Hand them back by falling through (no stop(), so xterm receives the key).
+    // Each action stays reachable from its pane button and the palette, so nothing
+    // is stranded. Alt/Meta chords stay ours so keyboard tab/pane nav still works.
+    var termFocused = tgt && tgt.classList && tgt.classList.contains('xterm-helper-textarea');
+    if (termFocused && ctrl && !e.altKey && !e.shiftKey &&
+        (e.key === 'd' || e.key === 'D' || e.key === 'f' || e.key === 'F' || e.key === 'b' || e.key === 'B')) {
+      return;
+    }
+
     if (e.key === 'F1') { stop(); openCheat(); return; }
     if (ctrl && e.shiftKey && (e.key === 'P' || e.key === 'p')) { stop(); openPalette(); return; }
     if (ctrl && !e.shiftKey && !e.altKey && e.key === ',') { stop(); openSettings(); return; }
