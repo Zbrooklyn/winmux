@@ -69,6 +69,11 @@ Edward decides instantly from **rendered options**, not from words. So:
   address bar (consistent). (Live.)
 - **Notifications + Settings = reviewed, already on-language.** Flat rows, one purple highlight,
   purple toggles; no change made.
+- **Diff panel = reviewed, already on-language.** File list and hunks divided by a single hairline
+  (no boxes); the active file row reuses the active-row soft-purple fill; status is the only colour —
+  `M`/`A` badges (amber/green), add lines green-tinted, del lines red-tinted, hunk headers in accent,
+  quiet everywhere else. Header carries the same `± Changes` tab · panel-glyph · window frame. The
+  browser address bar in this chrome was already flattened (shared `.burl`). No change made. (Live.)
 - **Dock toggle = one button, like the sidebar.** The pane-header panel icon (`.pc-dock`)
   is the single dock toggle, both directions. The floating right-edge reopen-strip is gone —
   it was the same stray chrome we removed from the sidebar, and `.pc-dock` already reopens.
