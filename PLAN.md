@@ -272,6 +272,64 @@ scanned QR dies with the next restart. That is fixable without widening anything
       a real target, and the "dark"/"light" shots are the resolved themes (`#1e1e1e` / `#ffffff`), not an
       emulated OS hint that the app's attribute override would have beaten. Shipped to @edward)
 
+## Phase 4 — A session that survives the trip
+
+Objective: leaving WinMux and coming back finds the same shell, with the same work in it. Today it
+does not, and the app says so in the worst possible way.
+
+Gate: a socket reaped mid-session — exactly what a phone browser does to a backgrounded tab —
+reconnects on its own and the shell's state is still there; the terminal only ever says the session
+ended when the shell genuinely exited.
+
+- [x] Shells outlive their socket @claude
+    Every terminal is one pty pinned to one websocket, and `ws.on('close')` kills it. A phone that
+    sleeps, a laptop lid, a wifi hop, or a tab left in the background long enough all close that
+    socket, so the shell dies and everything in it goes with it. Give each shell a stable id and a
+    scrollback buffer, keep it alive for a grace window after its socket detaches, and let a
+    returning client reattach by id.
+    (proof: `75e8189` — harness `survive` proves a reaped socket leaves the shell running with
+    nobody attached, and that closing a tab on purpose still ends its shell rather than leaking it)
+- [ ] Revocation cannot be outlived @claude
+    The other half of the same contract, and the one thing the survival work made worse: a forgotten
+    device is re-admitted by its still-valid key cookie even after its row is deleted, because the
+    client now reconnects. `forgetDevice()` has to rotate the phone key; kept devices still enter by
+    their own row, so rotation costs them nothing.
+    (need: nothing — this is the single failing check, 131/132)
+- [x] The client reconnects instead of giving up @claude
+    There is no retry anywhere in `app.js` — one `onclose` and the terminal is a dead rectangle
+    printing `[session ended]`. Reconnect with backoff, reattach by id, replay the scrollback, and
+    retry the moment the tab becomes visible or the network comes back. `[session ended]` is
+    reserved for a shell that actually exited; an interrupted one says it is reconnecting.
+    (proof: `75e8189` — harness proves the app opens a second socket by itself and the shell's
+    variable is still set afterwards, and that it never printed "session ended")
+- [x] The harness holds the line @claude
+    A check that sets a variable in a shell, reaps the socket the way a backgrounded phone does, and
+    proves the terminal comes back with that variable still set — plus the other half, that closing a
+    tab on purpose still kills its shell rather than leaking a process.
+    (proof: `75e8189` — `verify.cjs survive`, 8/8)
+
+## Phase 5 — The app is simply there, and behaves like a terminal
+
+Objective: WinMux stops being something that has to be remembered and started, and the small physical
+habits of a Windows terminal work in it.
+
+Gate: a link saved today still opens the app tomorrow without anyone starting anything, and dragging
+a folder in from Explorer puts its path on the command line.
+
+- [x] One address that never moves, running before anyone asks @claude
+    The port floated between runs and nothing kept the server alive, so a saved link pointed at
+    nothing and the honest state of the app most of any day was "not running" — which from the
+    outside is indistinguishable from broken.
+    (proof: `2c5272b` — port pinned to 9912 in the launcher, `winmux-autostart.vbs` in the user
+    Startup folder; proved cold: stopped the server, ran only the Startup file, it came back by
+    itself in 9s on the same port with the phone door still on)
+- [x] Drag a folder in from Explorer to get its path @claude
+    The muscle memory is: type `cd `, drag the folder in, enter. A browser refuses to tell a page
+    where a dropped folder lives, so the server — standing on the same disk — finds it by name and
+    contents instead.
+    (proof: `52cd700` — harness `drop`, 5/5; screenshots `drop-hint.png` / `drop-pasted.png` shipped
+    to @edward. The one link automation cannot originate is a real OS drag — @edward's acceptance)
+
 ## Decisions
 
 - Design contract (resolved: `public/cockpit.css` is the mockup verbatim and is never edited — all app-specific CSS lives in the `<style>` block in `index.html`)
