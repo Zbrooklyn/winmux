@@ -106,6 +106,15 @@
      The step down happens in the colour ramp instead, which still reads as quiet
      and stays legible. */
   .stat[data-zero] .v { color: var(--faint); }
+  /* The deck was the only bordered box in an otherwise flat, borderless sidebar —
+     three card widgets bolted into a clean surface, reading as a dashboard the rest
+     of the cockpit isn't. Flatten it to what the spec actually asks for: three small
+     counters on the sidebar surface, left-aligned like the header and the group row,
+     divided by hairlines instead of boxed. cockpit.css stays frozen; this overrides. */
+  .sx-deck { gap: 0; padding: 6px 14px 12px; }
+  .sx-deck .stat { background: transparent; border: none; border-radius: 0; padding: 0 12px; }
+  .sx-deck .stat:first-child { padding-left: 0; }
+  .sx-deck .stat + .stat { border-left: 1px solid var(--border); }
   /* The version chip is the loudest thing in the sidebar and says the least —
      it wears the accent only on hover, when it is actually a button. */
   #version-chip { background: var(--bg1); color: var(--muted); font-weight: 560; border: 1px solid var(--border); }
