@@ -454,8 +454,64 @@ Anything genuinely new goes in the `<style>` block in `index.html`.
     so appearance is his call and the mechanics above are mine to measure.
     (proof: `node verify.cjs groups` — 29/29 measured assertions pass on :9919, commit d54b6f9. Screenshots shipped 2026-07-26: groups-desktop.png, groups-expanded.png, groups-phone-groups.png, groups-phone-sessions.png, groups-phone-terminal.png in verify-out/. Two defects the harness caught and fixed: a saved layout spanning two groups collapsed them into one, and hidden tabs piled into the overflow menu as phantoms)
 
+## Phase 7 — The finishing pass: cleaner chrome, a kinder keyboard, an honest reload
+
+Objective: close the gaps a real discovery pass found — redundant controls, a keyboard that
+fought the terminal, and a reload that silently threw away your shell — so WinMux is genuinely
+pleasant to run tools (including Claude, Codex, vim) through.
+
+Gate: the chrome carries no duplicate control, a focused terminal keeps its own keys, and
+reopening the page lands back in the running shell with the work intact.
+
+- [x] Drop the redundant chrome and even the spacing @claude
+    Diagnostics was reachable four ways; Save and Load were two buttons for one popover; the
+    per-pane sidebar-rail icon duplicated three other controls; pin rendered in single-pane where
+    it does nothing. All dropped or merged to one Layouts button. The same 28px icon button was
+    spaced 6px in the header and 4px in the footer — unified to 6px — the header padding evened,
+    and the group count no longer floats to the buttons. cockpit.css untouched.
+    (proof: measured — diag/save/load absent, one Layouts button, rail absent, pin display:none
+    single-pane, sx-head gap == sx-foot gap == 6px, count margin-left 0; desktop + phone
+    screenshots shipped to @edward; 29/29 groups)
+
+- [x] Terminal is king — stop stealing Ctrl+D/F/B from a focused shell @claude
+    WinMux's capture-phase shortcuts consumed keys the terminal needs: Ctrl+D (shell EOF, vim
+    half-page), Ctrl+F (vim/less page-forward), Ctrl+B (page-back). vim, less and REPLs were
+    broken. When a terminal has focus those three now fall through to xterm; each action stays
+    reachable from its pane button and the palette. Alt/Meta chords stay WinMux's so keyboard
+    tab/pane nav still works — a lower-severity collision left intact by choice (revisit if heavy
+    readline/emacs use appears).
+    (proof: measured live — terminal-focused Ctrl+B/F/D do not drive WinMux, chrome-focused Ctrl+B
+    still toggles the sidebar; behaviour change only, no rendered change; 29/29 groups)
+
+- [x] Reopening the page reattaches instead of orphaning the shell @claude
+    A dropped socket detaches for the 10-min grace, but a full reload lost the in-memory session
+    id and started a fresh shell, orphaning the old one. The live layout — with each tab's session
+    id — is now saved on the way out and restored on load, reconnecting by id; named layouts stay
+    templates and strip the sid. Reuses the tested snapshot/restoreLayout machinery, with a new
+    committed harness scenario.
+    (proof: committed harness `reload` check 4/4 — one shell after reload, detached 0, `$mywork`
+    survives; live reload screenshot shipped to @edward)
+
+- [ ] Close the revocation hole so a forgotten device cannot outlive its welcome @claude
+    The same open item as Phase 4's "Revocation cannot be outlived" (#153): forgetting a phone must
+    rotate the key. This is the binding constraint on the open-source-ready verdict and is what
+    turns the failing `trust` harness check green — the last build item before the readiness call.
+    (need: nothing — reversible and owned; next in the batch)
+
+- [ ] Open-source packaging + the honest readiness verdict @claude
+    README a stranger can follow, a LICENSE, a clean-clone build check, then the market-ready call.
+    (need: @edward's answer on decision "Open-source launch" below — it sets whether this phase runs)
+
 ## Decisions
 
+- Open-source launch the target? (pending: @edward — if yes, the revocation hole + packaging above
+  are required and WinMux hardens to the promotable bar; if it stays a personal tool, packaging is
+  skipped and the trust bar is @edward's call. The cost difference is small — mostly a README + LICENSE.)
+- Detached-shell grace window (pending: @edward — currently 10 min, so a phone asleep longer loses a
+  running job. Keep 10, extend to 30–60 for a commute, or add a per-session keep-alive. A resource-vs-
+  lost-work tradeoff, so it is @edward's.)
+- Shells surviving a reboot (pending: @edward — true today that they die on reboot, in-memory only.
+  Accept + document for v1, or build disk persistence — a much larger change for a rare case.)
 - Design contract (resolved: `public/cockpit.css` is the mockup verbatim and is never edited — all app-specific CSS lives in the `<style>` block in `index.html`)
 - What a group is (resolved: **just a name** — a container the user creates and renames, @edward 2026-07-26. Not a folder, repo, or path. An earlier reading tied sidebar rows to working directories; that would have made a group something you cannot create on purpose)
 - Sidebar model (resolved: **groups on the side, sessions on top** — settled in `design-spec/GAP-ANALYSIS.md` as "the single highest-leverage decision" and recorded resolved there. An earlier version of this file wrongly called it out of scope; see the Correction at the top)

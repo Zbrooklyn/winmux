@@ -55,6 +55,8 @@ const PORT_DROP = 9917;
 // so it needs a server whose terminals nobody else is writing to.
 const PORT_COLOUR = 9918;
 const PORT_GROUPS = 9919;
+// Reopening the page must reattach to the running shell, not orphan it.
+const PORT_RELOAD = 9920;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -996,6 +998,53 @@ check('survive', PORT_SURVIVE, async ({ browser, base, t, shot }) => {
     const tidied = await info();
     t('closing a tab on purpose ends its shell right away',
       tidied.sessions === 1 && tidied.detached === 0, tidied);
+  } finally {
+    await page.close();
+  }
+});
+
+// --- reload: reopening the page reattaches, it does not orphan the shell ---
+// A dropped socket detaches for the grace window; a full page reload is different —
+// the whole app is torn down and rebuilt. That used to lose the session id (it lived
+// only in the page's memory), so the reopened page started a fresh shell and left the
+// old one orphaned to die at the grace mark, silently taking the person's work. WinMux
+// now saves the live layout with each session id and restores it on load, reconnecting
+// by id. The harness reloads the whole page and asks the two questions that matter: is
+// it the same one shell with nobody orphaned, and is the work still inside it.
+check('reload', PORT_RELOAD, async ({ browser, base, t, shot }) => {
+  const info = async () => JSON.parse((await get(base + '/api/info')).body);
+  const page = await desktop(browser);
+  const screen = () => page.evaluate(() => {
+    const r = document.querySelector('.xterm-rows');
+    return r ? r.innerText : '';
+  });
+  try {
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3500);
+    await page.click('.xterm').catch(() => {});
+    await page.keyboard.type('$mywork = "RELOAD_KEEP"');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(1500);
+    const before = await info();
+    t('a shell is running before the reload',
+      before.sessions === 1 && before.detached === 0, before);
+
+    // The whole page, torn down and rebuilt — exactly what used to orphan the shell.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(6000);
+    const back = await info();
+    t('the reopened page holds the same one shell, nothing orphaned',
+      back.sessions === 1 && back.detached === 0, back);
+
+    await page.click('.xterm').catch(() => {});
+    await page.keyboard.type('echo $mywork');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(2000);
+    const after = await screen();
+    t('the work in the shell survived the reload',
+      /RELOAD_KEEP/.test(after.split('echo $mywork')[1] || ''));
+    t('and it never claimed the session ended', !/session ended/i.test(after));
+    await shot(page, 'reload-reattach');
   } finally {
     await page.close();
   }
