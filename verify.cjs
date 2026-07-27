@@ -359,6 +359,20 @@ check('brand', PORT_BUSY, async ({ browser, base, t, shot }) => {
   await shot(p2, 'phone');
 });
 
+// --- fresh: the browser must never serve yesterday's app ------------------
+// This one is not cosmetic. The app lives at a fixed local address and gets
+// rebuilt constantly, so an asset a browser is allowed to cache means the next
+// visit can render a version of the app that no longer exists — which reads,
+// correctly, as "the server is broken."
+check('fresh', PORT_BUSY, async ({ base, t }) => {
+  for (const asset of ['/', '/app.js', '/cockpit.css']) {
+    const r = await get(base + asset);
+    const cc = (r.headers['cache-control'] || '').toLowerCase();
+    t('served ' + asset, r.status === 200, r.status);
+    t(asset + ' tells the browser not to store it', cc.includes('no-store'), cc || '(no Cache-Control at all)');
+  }
+});
+
 // --- busyport: a failed phone flip must not take the app down -------------
 check('busyport', PORT_BUSY, async ({ browser, base, t, shot, skip }) => {
   if (!busyHold) return skip('Tailscale is not running, so there is no tailnet side to collide with');

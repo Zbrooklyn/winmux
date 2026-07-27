@@ -557,7 +557,14 @@ function handle(req, res, viaPhone) {
   if (!filePath.startsWith(PUBLIC)) { res.writeHead(403); res.end('Forbidden'); return; }
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); res.end('Not found'); return; }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' });
+    // Never let a browser hold on to yesterday's app. This is a local server on
+    // a fixed port that gets rebuilt constantly, so a cached index.html/app.js
+    // shows a version of the app that no longer exists — and the person reads
+    // that as "the server is broken." Bandwidth here is a loopback copy.
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream',
+      'Cache-Control': 'no-store, must-revalidate',
+    });
     res.end(data);
   });
 }
