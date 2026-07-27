@@ -117,6 +117,12 @@ Edward decides instantly from **rendered options**, not from words. So:
   slides up from the bottom edge as a full-width sheet with a drag handle and a dimmed backdrop,
   instead of a desktop popover anchored to a cursor. One shared path: `placeMenu()` routes to the
   sheet whenever `currentMode === 'narrow'`, so all menus stay consistent. (Live.)
+- **Phone type is lifted out of desktop fine-print.** The sidebar labels are sized for a dense
+  desktop rail; when that rail fills a phone screen the 9.5px deck labels (WORKING/NEEDS YOU/IDLE)
+  and 11px GROUPS header read as fine print. On narrow they're lifted into a legible range —
+  deck label 9.5→11px, deck number 18→20px, GROUPS 11→12.5px, running pill 10.5→12px — measured
+  and modest, so hierarchy is unchanged and only legibility improves. index.html narrow overrides;
+  cockpit.css frozen. (Live.)
 - **Phone controls are thumb-sized (44px minimum).** The mockup's controls are mouse targets —
   28px footer/header icon spans, a 40px new-tab `+`, a 20px-tall back chevron. On the phone every
   one is a thumb tap, so on narrow the footer/header `.sxbtn` icons, the `.pc` pane controls, and

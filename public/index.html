@@ -281,6 +281,15 @@
   /* The back chevron + name is the whole phone back-affordance; it was 20px tall.
      Give it a full 44px hit band so the thumb can't miss it. */
   .cockpit[data-mode="narrow"][data-view="focus"] .nhead-ctx { min-height: 44px; }
+  /* Micro-typography rescale. The sidebar labels are sized for a dense desktop
+     rail; when that rail becomes a full phone screen the 9.5px deck labels and
+     11px header labels read as fine print. On narrow, lift them into a legible
+     range (deck label 9.5->11, deck number 18->20, GROUPS 11->12.5, running
+     pill 10.5->12). Measured, modest — hierarchy unchanged, just readable. */
+  .cockpit[data-mode="narrow"] .stat .l { font-size: 11px; }
+  .cockpit[data-mode="narrow"] .stat .v { font-size: 20px; }
+  .cockpit[data-mode="narrow"] .sx-head { font-size: 12.5px; }
+  .cockpit[data-mode="narrow"] .nhead .live { font-size: 12px; }
   /* Changes dock: folder bar on top, diff filling the rest. */
   .dock .pbody { display: flex; flex-direction: column; background: var(--bg0); }
   .dock .dwrap { position: relative; flex: 1; min-height: 0; }
