@@ -117,6 +117,13 @@ Edward decides instantly from **rendered options**, not from words. So:
   slides up from the bottom edge as a full-width sheet with a drag handle and a dimmed backdrop,
   instead of a desktop popover anchored to a cursor. One shared path: `placeMenu()` routes to the
   sheet whenever `currentMode === 'narrow'`, so all menus stay consistent. (Live.)
+- **Save/load layout menu = bottom sheet + touch-reachable delete.** This menu had its own
+  positioner (`openLayoutMenu`) and so escaped the `placeMenu` bottom-sheet routing — on the phone
+  it still floated as a desktop popover anchored beside a footer icon, and its per-row delete `×`
+  was `opacity:0` until hover (invisible to a thumb). Now on narrow it slides up as a full-width
+  bottom sheet (drag handle, dimmed backdrop, closes on backdrop tap) with the name field NOT
+  auto-focused (so the soft keyboard doesn't slam up over the sheet on open), and the delete `×`
+  is always shown. index.html/app.js; cockpit.css frozen. (Live.)
 - **Phone type is lifted out of desktop fine-print.** The sidebar labels are sized for a dense
   desktop rail; when that rail fills a phone screen the 9.5px deck labels (WORKING/NEEDS YOU/IDLE)
   and 11px GROUPS header read as fine print. On narrow they're lifted into a legible range —

@@ -1950,6 +1950,17 @@
     renderLayouts();
     smName.value = 'Layout ' + (layouts().length + 1);
     sessmenu.setAttribute('data-open', '');
+    if (currentMode === 'narrow') {
+      // On the phone this is a bottom sheet like every other menu, not a desktop
+      // popover anchored beside a footer icon. Don't auto-focus the name field —
+      // that would slam the soft keyboard up over the sheet the instant it opens.
+      sessmenu.style.left = ''; sessmenu.style.top = '';
+      sessmenu.classList.add('sheet');
+      var bd = document.createElement('div'); bd.className = 'sheet-backdrop'; bd.id = 'sess-backdrop';
+      bd.addEventListener('click', closeLayoutMenu); document.body.appendChild(bd);
+      void sessmenu.offsetHeight; sessmenu.classList.add('in');
+      return;
+    }
     if (anchor) {
       var r = anchor.getBoundingClientRect();
       sessmenu.style.left = Math.round(r.right + 8) + 'px';
@@ -1957,7 +1968,11 @@
     }
     smName.focus(); smName.select();
   }
-  function closeLayoutMenu() { sessmenu.removeAttribute('data-open'); }
+  function closeLayoutMenu() {
+    sessmenu.removeAttribute('data-open');
+    sessmenu.classList.remove('sheet', 'in');
+    var bd = document.getElementById('sess-backdrop'); if (bd) bd.remove();
+  }
   function toggleLayoutMenu(anchor) {
     if (sessmenu.hasAttribute('data-open')) closeLayoutMenu(); else openLayoutMenu(anchor);
   }
