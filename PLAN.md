@@ -375,7 +375,7 @@ Everything this phase renders already exists in `public/cockpit.css` and is curr
 `.pexpand[data-open2]`, `.nsessions`, `.nbar`, `.ncard`, `.ns-list`. **The CSS file is not touched.**
 Anything genuinely new goes in the `<style>` block in `index.html`.
 
-- [ ] Every terminal belongs to a group, and the group survives a reload @claude
+- [x] Every terminal belongs to a group, and the group survives a reload @claude
     Today `panes[]` holds terminals directly and there is no group layer anywhere in `app.js`, which
     is why the sidebar can only list terminals. Add the missing layer: a `groups` array of
     `{ id, name, pinned, color }`, an `activeGroupId`, and a `groupId` on every terminal (set in
@@ -385,7 +385,7 @@ Anything genuinely new goes in the `<style>` block in `index.html`.
     `Workspace` so nothing is orphaned on upgrade. Groups, their order, their names and the selected
     one persist to `localStorage` under `ct-groups`, alongside the existing `ct-settings`/`ct-layouts`.
     (need: nothing — this is invisible plumbing, no owner decision in it)
-- [ ] The sidebar lists groups, not terminals @claude
+- [x] The sidebar lists groups, not terminals @claude
     `renderSidebar()` (`public/app.js:296-321`) emits one `.prow` per terminal, puts a working
     directory in the sub-line, and repurposes `.pexpand` as a close button — three divergences from
     the contract in one function. Rewrite it to emit one `.prow` per group carrying
@@ -397,7 +397,7 @@ Anything genuinely new goes in the `<style>` block in `index.html`.
     fleet gauge, and scoping it to one group would hide the alert you opened the app for. The header
     word "Terminals" becomes "Groups". Close moves off the row and into the row's right-click menu,
     where closing a whole group belongs.
-- [ ] The arrow on a group opens its sessions without leaving the group @claude
+- [x] The arrow on a group opens its sessions without leaving the group @claude
     Restore `.pexpand` to the job the CSS already gives it: a right-pointing caret that rotates down
     when open (`cockpit.css:392` keys off `[data-open2]`), revealing a `.skids` block of `.srow`
     session rows beneath the group — status dot, name, a status line reading Idle / Working / Needs
@@ -405,7 +405,7 @@ Anything genuinely new goes in the `<style>` block in `index.html`.
     in the reference (`wmux-amirlehmam/design-spec/cockpit.html:506`). Clicking a session row focuses
     that terminal directly. This is the "peek without switching" move — expanding a group must not
     change which group is active.
-- [ ] Clicking a group swaps the top tab strip @claude
+- [x] Clicking a group swaps the top tab strip @claude
     This is the mechanic @edward described and the reason the phase exists: side = groups, top = that
     group's terminals. `switchGroup(id)` sets `activeGroupId`, then in every pane shows the tab
     elements whose terminal is in that group and hides the rest (`display:none` on `t.tabEl`, the
@@ -423,7 +423,7 @@ Anything genuinely new goes in the `<style>` block in `index.html`.
     overflow menu (`tab-of` / `hiddenTabs` / `showOverflowMenu`), so a hard cap would remove working
     capability to imitate a mockup's placeholder data, and silently losing the 11th terminal of a
     group is worse than a scrollable strip.
-- [ ] Making, naming, and closing a group @claude
+- [x] Making, naming, and closing a group @claude
     A "New group" button in the sidebar footer (`.sx-foot`, `index.html:191`) next to the existing
     new/save/load buttons: it creates a group, prompts for the name, switches to it, and opens one
     shell in it. Right-clicking a group row offers Rename, Pin, and Close group — mirroring the
@@ -432,7 +432,7 @@ Anything genuinely new goes in the `<style>` block in `index.html`.
     first and says how many it is about to end. The last group cannot be closed — there is nowhere
     for the terminals to go.
     (need: nothing — naming is free-text, which is exactly what "just a name" means)
-- [ ] The phone gets its middle screen @claude
+- [x] The phone gets its middle screen @claude
     On a phone the app can only show one thing at a time, and today it shows a flat list then a
     terminal. The contract's three-screen drill-in — groups, then that group's sessions, then the
     terminal — has never been built: there is no `<section class="nsessions">` in `index.html` at
@@ -443,7 +443,7 @@ Anything genuinely new goes in the `<style>` block in `index.html`.
     The `data-view` values stay **`projects` / `sessions` / `focus`** exactly as they are. They read
     like leftovers but `cockpit.css:66`, `:251`, `:253` and `:91` all key off those literal strings,
     and the CSS file is never edited. Only the word a human sees changes to "Groups".
-- [ ] Prove it, on the real thing @claude
+- [x] Prove it, on the real thing @claude
     A `groups` scenario in `verify.cjs` alongside the existing eleven, run against a real server on
     its own port: two groups exist; switching hides one group's tabs and shows the other's (read off
     computed style, not appearance); the sub-line arithmetic matches the terminals that actually
@@ -452,7 +452,7 @@ Anything genuinely new goes in the `<style>` block in `index.html`.
     and at phone width the back arrow walks focus → sessions → groups. Then screenshots at desktop
     and phone width, shipped to @edward unprompted (rule 21) — the sidebar is a thing he looks at,
     so appearance is his call and the mechanics above are mine to measure.
-    (proof: pending — harness result + `groups-desktop.png` / `groups-phone.png`)
+    (proof: `node verify.cjs groups` — 29/29 measured assertions pass on :9919, commit d54b6f9. Screenshots shipped 2026-07-26: groups-desktop.png, groups-expanded.png, groups-phone-groups.png, groups-phone-sessions.png, groups-phone-terminal.png in verify-out/. Two defects the harness caught and fixed: a saved layout spanning two groups collapsed them into one, and hidden tabs piled into the overflow menu as phantoms)
 
 ## Decisions
 
