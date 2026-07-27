@@ -176,7 +176,7 @@
   </div>
 
   <aside class="sessions">
-    <div class="sx-head"><span>Terminals</span><span class="n" id="sx-count">1</span><span class="sxsp"></span>
+    <div class="sx-head"><span>Groups</span><span class="n" id="sx-count">1</span><span class="sxsp"></span>
       <span class="upbadge on" id="version-chip" title="WinMux v1.0 — click for diagnostics" role="button">v1.0</span>
       <span class="sxbtn" id="open-palette" title="Command palette (Ctrl+Shift+P)" role="button" aria-label="Command palette"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></span>
       <span class="sxbtn" id="open-notif" title="Notifications (Ctrl+Alt+N)" role="button" aria-label="Notifications"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg><span class="nbadge" id="notif-badge" style="display:none">0</span></span>
@@ -190,6 +190,7 @@
     <div class="sx-list" id="sx-list"></div>
     <div class="sx-foot">
       <span class="sxbtn" id="open-new" title="New terminal (Alt+T)" role="button" aria-label="New terminal"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>
+      <span class="sxbtn" id="open-newgroup" title="New group" role="button" aria-label="New group"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><path d="M12 10v6M9 13h6"/></svg></span>
       <span class="sxbtn" id="open-save" title="Save layout (Ctrl+Alt+S)" role="button" aria-label="Save layout"><svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg></span>
       <span class="sxbtn" id="open-load" title="Load layout (Ctrl+Alt+O)" role="button" aria-label="Load layout"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg></span>
       <span class="sxsp"></span>
@@ -202,6 +203,15 @@
   </aside>
 
   <div id="sidebar-reopen" title="Show sidebar (Ctrl+B)" role="button" aria-label="Show sidebar"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></div>
+
+  <!-- Phone only: the middle screen between the group list and a terminal. -->
+  <section class="nsessions">
+    <div class="nbar">
+      <span class="back" id="ns-back" role="button" aria-label="Back to groups"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>Groups</span>
+      <span class="nm" id="ns-name">Workspace</span>
+    </div>
+    <div class="ns-list" id="ns-list"></div>
+  </section>
 
   <div class="main">
     <div class="workspace">

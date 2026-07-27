@@ -54,6 +54,7 @@ const PORT_DROP = 9917;
 // The colour group types into a real shell and reads the painted result back,
 // so it needs a server whose terminals nobody else is writing to.
 const PORT_COLOUR = 9918;
+const PORT_GROUPS = 9919;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1177,6 +1178,173 @@ check('colour', PORT_COLOUR, async ({ browser, base, t, shot }) => {
       { yellow: contrast(e.yellow, e.bg).toFixed(2), dim: contrast(e.dim, e.bg).toFixed(2) });
     await shot(ember, 'colour-ember');
   } finally { await ember.close(); }
+});
+
+// --- groups: the side is groups, the top is that group's sessions ---------
+// The defect this exists to keep fixed: the sidebar shipped as a second copy of
+// the tab bar. The design contract has always been two levels — a group row on
+// the side owns many terminals, and the top strip shows only the open group's.
+// Every assertion below is measured (computed style, counted nodes), never
+// eyeballed, because a tab hidden by a `display:none` still looks fine in a shot.
+
+// The sidebar as the DOM actually has it, in one round trip.
+const SIDEBAR = () => {
+  const rows = [...document.querySelectorAll('#sx-list .prow')].map((r) => ({
+    id: r.getAttribute('data-switch'),
+    name: r.querySelector('.pname').textContent.trim(),
+    sub: r.querySelector('.psub').textContent.trim(),
+    active: r.hasAttribute('data-active'),
+    open: !!r.querySelector('.pexpand[data-open2]'),
+  }));
+  // Scoped to the workspace: the changes dock carries a decorative .ptab of its own.
+  const tabs = [...document.querySelectorAll('#wsrow .ptabs .ptab')].map((el) => ({
+    text: el.querySelector('.tt').textContent.trim(),
+    shown: getComputedStyle(el).display !== 'none',
+  }));
+  return {
+    rows,
+    count: document.getElementById('sx-count').textContent.trim(),
+    view: document.getElementById('root').getAttribute('data-view'),
+    tabs,
+    shown: tabs.filter((x) => x.shown).length,
+    kids: document.querySelectorAll('#sx-list .skids .srow').length,
+  };
+};
+
+check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
+  const p = await desktop(browser);
+  // Naming a group goes through a prompt; the harness answers it.
+  const answers = ['Client work'];
+  p.on('dialog', (d) => d.accept(answers.length ? answers.shift() : ''));
+  await p.goto(base + '/', { waitUntil: 'domcontentloaded' });
+  await p.waitForTimeout(4500);
+
+  const first = await p.evaluate(SIDEBAR);
+  t('the sidebar opens on one group, not a terminal list', first.rows.length === 1, first.rows);
+  t('the header count counts groups', first.count === '1', first.count);
+  t('the group row rolls its terminals up into a sub-line',
+    /^1 session · /.test(first.rows[0].sub), first.rows[0].sub);
+  t('that one group owns the one terminal on top', first.shown === 1, first.tabs);
+
+  // A second group. Its terminals are a different set from the first group's.
+  await p.click('#open-newgroup');
+  await p.waitForTimeout(1200);
+  const two = await p.evaluate(SIDEBAR);
+  t('the new group appears on the side', two.rows.length === 2 && two.rows.some((r) => r.name === 'Client work'),
+    two.rows.map((r) => r.name));
+  t('the header count follows', two.count === '2', two.count);
+  t('making a group opens it', (two.rows.find((r) => r.name === 'Client work') || {}).active === true);
+  t('the top strip shows exactly the open group — one terminal, not two',
+    two.shown === 1 && two.tabs.length === 2, two.tabs);
+  await shot(p, 'desktop');
+
+  // Two terminals in this group, so the sub-line has arithmetic to get wrong.
+  await p.click('#open-new');
+  await p.waitForTimeout(1200);
+  const grown = await p.evaluate(SIDEBAR);
+  const clientRow = grown.rows.find((r) => r.name === 'Client work');
+  t('the sub-line counts this group only', /^2 sessions · /.test(clientRow.sub), clientRow.sub);
+  t('and the top strip grew with it', grown.shown === 2, grown.tabs);
+
+  // The chevron peeks into a group. Peeking is not switching.
+  const otherId = grown.rows.find((r) => r.name !== 'Client work').id;
+  await p.click('.prow[data-switch="' + otherId + '"] .pexpand');
+  await p.waitForTimeout(400);
+  const peeked = await p.evaluate(SIDEBAR);
+  t('the arrow opens that group\'s sessions inline', peeked.kids === 1, peeked.kids);
+  t('peeking did NOT switch groups', (peeked.rows.find((r) => r.name === 'Client work') || {}).active === true);
+  t('the top strip did not move', peeked.shown === 2, peeked.shown);
+  const caret = await p.evaluate((id) => {
+    const svg = document.querySelector('.prow[data-switch="' + id + '"] .pexpand svg');
+    return getComputedStyle(svg).transform;
+  }, otherId);
+  // cockpit.css:392 rotates the caret 90°; a right-pointing caret becomes a down one.
+  t('the caret is rotated, so it reads as open', caret === 'matrix(0, 1, -1, 0, 0, 0)', caret);
+  await shot(p, 'expanded');
+
+  // Clicking the row itself IS switching — the whole two-level model.
+  await p.click('.prow[data-switch="' + otherId + '"] .pinfo');
+  await p.waitForTimeout(900);
+  const swapped = await p.evaluate(SIDEBAR);
+  t('clicking a group swaps the top tab strip', swapped.shown === 1, swapped.tabs);
+  t('nothing from the other group is left reachable on top',
+    swapped.tabs.filter((x) => x.shown).length === 1 && swapped.tabs.length === 3, swapped.tabs);
+
+  // Closing the last terminal of the open group must leave a live shell, not an
+  // empty frame and not a pane that eats the other group's terminals.
+  await p.click('#wsrow .ptab[data-active] .x');
+  await p.waitForTimeout(1200);
+  const emptied = await p.evaluate(SIDEBAR);
+  t('closing the group\'s last terminal leaves a live one, never a blank pane',
+    emptied.shown === 1, emptied.tabs);
+
+  // Names and the open group are the thing that has to survive a reload.
+  await p.reload({ waitUntil: 'domcontentloaded' });
+  await p.waitForTimeout(4500);
+  const back = await p.evaluate(SIDEBAR);
+  t('both groups come back by name after a reload',
+    back.rows.length === 2 && back.rows.some((r) => r.name === 'Client work'), back.rows.map((r) => r.name));
+  t('and the group that was open is still the open one',
+    (back.rows.find((r) => r.id === otherId) || {}).active === true, back.rows);
+  await p.close();
+
+  // The phone can only show one level at a time, so it is three screens. This
+  // context is a fresh browser — one group, one terminal — so the walk starts at
+  // the bottom and climbs, which is exactly the back-arrow chain a phone needs.
+  const ph = await phoneCtx(browser);
+  const phoneAnswers = ['Phone group'];
+  ph.on('dialog', (d) => d.accept(phoneAnswers.length ? phoneAnswers.shift() : ''));
+  await ph.goto(base + '/', { waitUntil: 'domcontentloaded' });
+  await ph.waitForTimeout(5000);
+  t('a phone with one group and one terminal opens straight into the terminal — a list of one costs a pointless tap',
+    (await ph.evaluate(SIDEBAR)).view === 'focus');
+  await shot(ph, 'phone-terminal');
+
+  await ph.click('.main .npane .nbar .back');
+  await ph.waitForTimeout(600);
+  const v2 = await ph.evaluate(SIDEBAR);
+  const ns = await ph.evaluate(() => ({
+    name: document.getElementById('ns-name').textContent.trim(),
+    cards: document.querySelectorAll('#ns-list .ncard[data-open]').length,
+    shown: getComputedStyle(document.querySelector('.nsessions')).display,
+  }));
+  t('back from a terminal lands on that group\'s sessions, not on the groups', v2.view === 'sessions', v2.view);
+  t('the sessions screen is actually on screen', ns.shown === 'flex', ns);
+  t('it is titled with the group and lists its terminals', ns.name === 'Workspace' && ns.cards === 1, ns);
+  await shot(ph, 'phone-sessions');
+
+  await ph.click('#ns-back');
+  await ph.waitForTimeout(600);
+  t('back again lands on the groups — the top of the phone stack',
+    (await ph.evaluate(SIDEBAR)).view === 'projects');
+
+  // A second group, made from the phone, must show up as a second row here.
+  await ph.click('#open-newgroup');
+  await ph.waitForTimeout(1200);
+  const madeIt = await ph.evaluate(() => ({
+    view: document.getElementById('root').getAttribute('data-view'),
+    name: document.getElementById('ns-name').textContent.trim(),
+    cards: document.querySelectorAll('#ns-list .ncard[data-open]').length,
+  }));
+  t('making a group opens it on its own sessions screen', madeIt.view === 'sessions' && madeIt.name === 'Phone group', madeIt);
+  // A new group is never an empty frame — it comes with one live shell, and that
+  // shell belongs to the new group, not to the one you just left.
+  t('a brand-new group arrives with exactly one live shell of its own', madeIt.cards === 1, madeIt);
+
+  await ph.click('#ns-back');
+  await ph.waitForTimeout(600);
+  const phRows = await ph.evaluate(SIDEBAR);
+  t('the phone group list shows both groups', phRows.rows.length === 2, phRows.rows.map((r) => r.name));
+  await shot(ph, 'phone-groups');
+
+  // And the way back down: group → its sessions → a terminal.
+  await ph.click('#sx-list .prow[data-switch="1"] .pinfo');
+  await ph.waitForTimeout(800);
+  t('tapping a group opens its sessions, not a terminal',
+    (await ph.evaluate(SIDEBAR)).view === 'sessions');
+  await ph.click('#ns-list .ncard[data-open]');
+  await ph.waitForTimeout(800);
+  t('tapping a session opens the terminal', (await ph.evaluate(SIDEBAR)).view === 'focus');
 });
 
 // -------------------------------------------------------------------- main

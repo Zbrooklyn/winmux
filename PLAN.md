@@ -21,24 +21,41 @@ at `http://127.0.0.1:8799`.
 - `public/cockpit.css` — lines 8–399 of the mockup, verbatim. **Never edited.** It is the design contract.
 - `public/index.html` + `public/app.js` — the real app: the mockup's markup, wired to live terminals.
 
-## Explicitly out of scope
+## Correction — the sidebar is groups, and always was (2026-07-26)
 
-These exist in the mockup because it is a demo of *wmux the AI-agent cockpit*, not of a terminal. They
-were never discussed for this project and are not being built here:
+An earlier version of this file listed the sidebar as out of scope, calling it "a Claude session-fleet
+browser … never discussed for this project." **That was wrong**, and it is the reason WinMux shipped a
+flat terminal list where a group list belongs.
 
-- Projects sidebar (a Claude session-fleet browser)
+The design contract says otherwise, in three places:
+
+- The mockup's sidebar is titled **Projects**. Each `.prow` is a *container*, not a terminal: it carries
+  `data-switch="<name>"`, a folder glyph with an aggregate status dot, a sub-line reading
+  `"N sessions · M working"`, and a `.pexpand` chevron that reveals that group's session rows inline.
+- `switchProject()` (`cockpit.html:625`) rewrites the **top tab strip** to the clicked group's sessions,
+  capped at `MAX_TABS = 10`. Side = groups, top = that group's terminals.
+- `design-spec/GAP-ANALYSIS.md` calls the sidebar model "**the single highest-leverage decision**" and
+  records it **resolved**: project-grouped, collapsed by default, row-click filters tabs, arrow expands
+  sessions inline.
+
+So the two-level model is a settled decision, not a new feature. **It is in scope.** One owner decision
+refines it: a group is **just a name** — a named container the user creates and renames, not a folder.
+
+Still genuinely out of scope (agent-cockpit demo features, never discussed for a terminal):
+
 - Orchestration panel (multi-agent run tracking)
 - Browser tab, markdown tab, diff-as-a-tab
 - Tutorial / onboarding overlay
 
-If any of these is wanted later it is a new decision, not a leftover from this build.
+If any of those is wanted later it is a new decision, not a leftover from this build.
 
 ## Already done (working, verified)
 
 Real PTY shells · tabs · 2D splits (right/down) with drag dividers · zoom · close pane/tab with confirm ·
 find in scrollback (Ctrl+F) · copy/paste · rename tab · context menus · broadcast input · command palette ·
 settings (theme/font/cursor/scrollback/behaviour) · keyboard cheat sheet (F1) · diagnostics · notifications
-with badge · changes dock (git diff) · save/load layout · sidebar terminal list with live status deck ·
+with badge · changes dock (git diff) · save/load layout · sidebar list with live status deck (currently a
+**flat terminal list — not the group list the contract calls for**, see Correction above) ·
 light/dark themes.
 
 ## Proving it still works — `npm run verify`
@@ -340,9 +357,110 @@ a folder in from Explorer puts its path on the command line.
     screenshots `palette-{aurora,ash,ember}-{dark,light}.png` shipped to @edward. Which of the three
     ships as default is @edward's eye — Aurora is the current default)
 
+## Phase 6 — The side is groups, the top is sessions
+
+Objective: the sidebar stops being a second copy of the tab bar and becomes what the design contract
+always said it was — a list of **groups**, each holding many terminals. Clicking a group changes which
+terminals the top tab strip shows. A group is **just a name** you make and rename (@edward's decision,
+2026-07-26) — it is not tied to a folder, a repo, or a project on disk.
+
+Gate: with two groups on screen, clicking one swaps the top tabs to that group's terminals and nothing
+from the other group is reachable or visible; the arrow on a group row opens its sessions inline
+without leaving the group; a terminal opened while "Client work" is selected still belongs to "Client
+work" after a browser reload; and on the phone the three screens go Groups → Sessions → Terminal with
+a working back arrow at each step.
+
+Everything this phase renders already exists in `public/cockpit.css` and is currently unused —
+`.skids`, `.srow`, `.sinfo`, `.srtop`, `.sname`, `.sstat`, `.smeta`, `.sbar`, `.pbar`, `.pu`,
+`.pexpand[data-open2]`, `.nsessions`, `.nbar`, `.ncard`, `.ns-list`. **The CSS file is not touched.**
+Anything genuinely new goes in the `<style>` block in `index.html`.
+
+- [ ] Every terminal belongs to a group, and the group survives a reload @claude
+    Today `panes[]` holds terminals directly and there is no group layer anywhere in `app.js`, which
+    is why the sidebar can only list terminals. Add the missing layer: a `groups` array of
+    `{ id, name, pinned, color }`, an `activeGroupId`, and a `groupId` on every terminal (set in
+    `newTerm()`, in the object literal at `public/app.js:~700` that already carries `id`/`paneId`).
+    A `visibleTerms(p)` helper returns only the active group's terminals in a pane — every place that
+    asks "what is in this pane" goes through it. Existing terminals migrate into a first group named
+    `Workspace` so nothing is orphaned on upgrade. Groups, their order, their names and the selected
+    one persist to `localStorage` under `ct-groups`, alongside the existing `ct-settings`/`ct-layouts`.
+    (need: nothing — this is invisible plumbing, no owner decision in it)
+- [ ] The sidebar lists groups, not terminals @claude
+    `renderSidebar()` (`public/app.js:296-321`) emits one `.prow` per terminal, puts a working
+    directory in the sub-line, and repurposes `.pexpand` as a close button — three divergences from
+    the contract in one function. Rewrite it to emit one `.prow` per group carrying
+    `data-switch="<group id>"`, a folder glyph whose dot aggregates that group's worst status
+    (needs-you beats working beats idle), and a sub-line reading `"3 sessions · 1 working"` — or
+    `"2 needs you"` when something is waiting, because that is the line worth stealing attention.
+    `#sx-count` becomes the number of groups, not `totalTerms()`. The deck counts (working / needs
+    you / idle) stay **global across every group** exactly as the mockup has them — the deck is a
+    fleet gauge, and scoping it to one group would hide the alert you opened the app for. The header
+    word "Terminals" becomes "Groups". Close moves off the row and into the row's right-click menu,
+    where closing a whole group belongs.
+- [ ] The arrow on a group opens its sessions without leaving the group @claude
+    Restore `.pexpand` to the job the CSS already gives it: a right-pointing caret that rotates down
+    when open (`cockpit.css:392` keys off `[data-open2]`), revealing a `.skids` block of `.srow`
+    session rows beneath the group — status dot, name, a status line reading Idle / Working / Needs
+    you / Error, and a `.sbar` progress sliver while a command is running. Matches `sessionRowHTML`
+    in the reference (`wmux-amirlehmam/design-spec/cockpit.html:506`). Clicking a session row focuses
+    that terminal directly. This is the "peek without switching" move — expanding a group must not
+    change which group is active.
+- [ ] Clicking a group swaps the top tab strip @claude
+    This is the mechanic @edward described and the reason the phase exists: side = groups, top = that
+    group's terminals. `switchGroup(id)` sets `activeGroupId`, then in every pane shows the tab
+    elements whose terminal is in that group and hides the rest (`display:none` on `t.tabEl`, the
+    terminal host follows), activates the group's most-recent terminal in each pane, and re-renders.
+    A pane that would be left showing nothing gets a fresh shell rather than an empty frame.
+    Three existing call sites break the moment tabs can be hidden and are patched in the same commit:
+    `closeTerm`'s emptiness test `p.terms.length === 0` (`public/app.js:474`) becomes
+    `visibleTerms(p).length === 0`, or closing the last tab of the visible group leaves a live pane
+    looking dead; the same function's MRU fallback must pick a *visible* terminal; and `hiddenTabs(p)`
+    (`public/app.js:524-532`) must skip hidden tabs — a `display:none` tab measures 0×0 at offset 0,
+    so once the strip is scrolled every other group's tabs would pile into the overflow menu as
+    phantom entries.
+    Deliberate deviation, recorded not omitted: the mockup caps a strip at `MAX_TABS = 10`
+    (`cockpit.html:625`). WinMux does **not** implement that cap. It already has a working tab
+    overflow menu (`tab-of` / `hiddenTabs` / `showOverflowMenu`), so a hard cap would remove working
+    capability to imitate a mockup's placeholder data, and silently losing the 11th terminal of a
+    group is worse than a scrollable strip.
+- [ ] Making, naming, and closing a group @claude
+    A "New group" button in the sidebar footer (`.sx-foot`, `index.html:191`) next to the existing
+    new/save/load buttons: it creates a group, prompts for the name, switches to it, and opens one
+    shell in it. Right-clicking a group row offers Rename, Pin, and Close group — mirroring the
+    reference's project menu (`cockpit.html:961-964`), and reusing WinMux's existing context-menu
+    plumbing rather than inventing a second one. Closing a group closes its terminals, so it asks
+    first and says how many it is about to end. The last group cannot be closed — there is nowhere
+    for the terminals to go.
+    (need: nothing — naming is free-text, which is exactly what "just a name" means)
+- [ ] The phone gets its middle screen @claude
+    On a phone the app can only show one thing at a time, and today it shows a flat list then a
+    terminal. The contract's three-screen drill-in — groups, then that group's sessions, then the
+    terminal — has never been built: there is no `<section class="nsessions">` in `index.html` at
+    all, even though `cockpit.css:250-264` fully styles it. Add it between the sidebar and `.main`:
+    a `.nbar` with a back arrow, `#ns-name` for the group name, and `#ns-list` of `.ncard` rows
+    (status dot, name, status badge, last line of output). Tapping a group goes to Sessions, tapping
+    a session goes to the terminal, and back steps out one level.
+    The `data-view` values stay **`projects` / `sessions` / `focus`** exactly as they are. They read
+    like leftovers but `cockpit.css:66`, `:251`, `:253` and `:91` all key off those literal strings,
+    and the CSS file is never edited. Only the word a human sees changes to "Groups".
+- [ ] Prove it, on the real thing @claude
+    A `groups` scenario in `verify.cjs` alongside the existing eleven, run against a real server on
+    its own port: two groups exist; switching hides one group's tabs and shows the other's (read off
+    computed style, not appearance); the sub-line arithmetic matches the terminals that actually
+    exist; expanding a group does not change the active group; closing the last visible tab leaves a
+    live shell rather than an empty pane; a reload restores the group names and the selected group;
+    and at phone width the back arrow walks focus → sessions → groups. Then screenshots at desktop
+    and phone width, shipped to @edward unprompted (rule 21) — the sidebar is a thing he looks at,
+    so appearance is his call and the mechanics above are mine to measure.
+    (proof: pending — harness result + `groups-desktop.png` / `groups-phone.png`)
+
 ## Decisions
 
 - Design contract (resolved: `public/cockpit.css` is the mockup verbatim and is never edited — all app-specific CSS lives in the `<style>` block in `index.html`)
+- What a group is (resolved: **just a name** — a container the user creates and renames, @edward 2026-07-26. Not a folder, repo, or path. An earlier reading tied sidebar rows to working directories; that would have made a group something you cannot create on purpose)
+- Sidebar model (resolved: **groups on the side, sessions on top** — settled in `design-spec/GAP-ANALYSIS.md` as "the single highest-leverage decision" and recorded resolved there. An earlier version of this file wrongly called it out of scope; see the Correction at the top)
+- Tab cap (declined: the mockup's `MAX_TABS = 10` is not implemented — WinMux's existing tab overflow menu already handles a crowded strip, and a hard cap would drop the 11th terminal of a group)
+- Deck counters under groups (resolved: stay **global** across all groups, as in the mockup — the deck is a fleet gauge; scoping it to the open group would hide the "needs you" that made you open the app)
 - Network exposure (resolved: 127.0.0.1 always — it runs real shell commands)
 - Phone access (resolved: a switch in Settings → Phone, not a startup flag — @edward expected a setting and he was right. Two separate listeners: the desk door always on 127.0.0.1, the phone door bound to the Tailscale address only and key-gated on every request; never `0.0.0.0`. Built and verified 12/12; turning it on is @edward's call, because the link is a shell on his PC)
 - Onboarding the phone (resolved: a scanned QR code, not a typed 32-character key — nobody types a key correctly on a phone)

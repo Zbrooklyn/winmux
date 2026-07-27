@@ -137,6 +137,10 @@
   var DOCK_SVG = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>';
   var FOLDER_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>';
 
+  // The group row's expand chevron. cockpit.css rotates it 90° when the group is
+  // open, so it has to start out pointing right.
+  var CARET_RIGHT_SVG = '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>';
+  var FOLDER_PLUS_SVG = '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><path d="M12 10v6M9 13h6"/></svg>';
   var PIN_SVG = '<svg viewBox="0 0 24 24"><path d="M9 3h6M12 3v7M7 10h10l-1.6 4H8.6zM12 14v7"/></svg>';
   var BACK_SVG = '<svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>';
   var PPIN_SVG = '<svg class="ppin" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M9 2h6l-1 6 4 4H6l4-4z"/><path d="M11 12h2v9h-2z"/></svg>';
@@ -291,58 +295,283 @@
   });
   function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
+  // ----------------------------------------------------------------- groups
+  // The side of the app is groups; the top of the app is one group's terminals.
+  // A group is just a name — not a folder, not a repo, not a path. You make one,
+  // you name it, and the terminals you open while it is selected belong to it.
+  var groups = [];
+  var activeGroupId = null;
+  var groupSeq = 0;
+  var expandedGroups = {};
+  function loadGroups() {
+    try {
+      var raw = JSON.parse(localStorage.getItem('ct-groups') || 'null');
+      if (raw && raw.groups && raw.groups.length) {
+        groups = raw.groups.map(function (g) {
+          var id = parseInt(g.id, 10) || 0;
+          if (id > groupSeq) groupSeq = id;
+          return { id: id, name: String(g.name || 'Group'), pinned: !!g.pinned };
+        }).filter(function (g) { return g.id > 0; });
+      }
+    } catch (e) {}
+    if (!groups.length) groups = [{ id: ++groupSeq, name: 'Workspace', pinned: false }];
+    var want = null;
+    try { want = parseInt(JSON.parse(localStorage.getItem('ct-groups') || '{}').active, 10); } catch (e) {}
+    activeGroupId = groups.some(function (g) { return g.id === want; }) ? want : groups[0].id;
+  }
+  function saveGroups() {
+    try { localStorage.setItem('ct-groups', JSON.stringify({ groups: groups, active: activeGroupId })); } catch (e) {}
+  }
+  function groupById(id) { for (var i = 0; i < groups.length; i++) if (groups[i].id === id) return groups[i]; return null; }
+  function termsOfGroup(gid) { var out = []; eachTerm(function (t) { if (t.groupId === gid) out.push(t); }); return out; }
+  // Every place that asks "what is in this pane" means "what is in this pane
+  // right now, in the open group".
+  function visibleTerms(p) { return p.terms.filter(function (t) { return t.groupId === activeGroupId; }); }
+  function sortGroups() {
+    groups.sort(function (a, b) { return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0); });
+  }
+  loadGroups();
+
   // ---------------------------------------------------------------- sidebar
   function totalTerms() { return panes.reduce(function (n, p) { return n + p.terms.length; }, 0); }
+  function dotClass(t) { return t.status === 'closed' ? 'error' : (t.status === 'needsyou' ? 'needsyou' : (t.status === 'working' ? 'working' : 'idle')); }
+  function termName(t) { return t.tabEl ? t.tabEl.querySelector('.tt').textContent : labelFor(t.shell); }
+  function statusLine(t) {
+    if (t.state === 'reconnecting') return 'Reconnecting…';
+    if (t.status === 'closed' || t.state === 'closed') return 'Session ended';
+    if (t.status === 'needsyou') return 'Needs you';
+    if (t.status === 'working') return 'Working';
+    return 'Idle';
+  }
+  function statusTone(t) {
+    if (t.status === 'needsyou' || t.status === 'closed') return 'hot';
+    return t.status === 'working' ? 'work' : 'mut';
+  }
+  // A full path eats the row; the folder you are standing in is the useful part.
+  function tailPath(cwd) {
+    if (!cwd) return '';
+    var parts = String(cwd).replace(/[\\/]+$/, '').split(/[\\/]/);
+    return parts[parts.length - 1] || cwd;
+  }
+  // One session row inside an expanded group.
+  function srowHTML(t, on) {
+    return '<div class="srow"' + (on ? ' data-active' : '') + ' data-term="' + t.id + '">' +
+      '<span class="dot ' + dotClass(t) + '"></span>' +
+      '<div class="sinfo">' +
+      '<div class="srtop"><span class="sname mono">' + esc(termName(t)) + '</span></div>' +
+      '<div class="sstat ' + statusTone(t) + '">' + statusLine(t) +
+      (t.cwd ? ' · <span class="m2">' + esc(tailPath(t.cwd)) + '</span>' : '') + '</div>' +
+      (t.status === 'working' ? '<div class="sbar"><i style="width:' + Math.round(t.prog || 8) + '%"></i></div>' : '') +
+      '</div></div>';
+  }
+  // The group's own dot: the worst thing happening inside it.
+  function groupStatus(ts) {
+    var st = 'idle';
+    for (var i = 0; i < ts.length; i++) {
+      if (ts[i].status === 'needsyou' || ts[i].status === 'closed') return 'needsyou';
+      if (ts[i].status === 'working') st = 'working';
+    }
+    return st;
+  }
   function renderSidebar() {
+    // The deck is a fleet gauge — it counts every terminal in every group, so a
+    // "needs you" in a group you are not looking at still reaches you.
     var counts = { working: 0, needsyou: 0, idle: 0 };
+    eachTerm(function (t) {
+      if (t.status === 'working') counts.working++;
+      else if (t.status === 'needsyou' || t.status === 'closed') counts.needsyou++;
+      else counts.idle++;
+    });
     var html = '';
-    panes.forEach(function (p) {
-      p.terms.forEach(function (t) {
-        var st = t.status;
-        if (st === 'working') counts.working++;
-        else if (st === 'needsyou') counts.needsyou++;
-        else counts.idle++;
-        var on = t.id === p.activeTermId && p.id === activePaneId;
-        var name = t.tabEl ? t.tabEl.querySelector('.tt').textContent : labelFor(t.shell);
-        html += '<div class="prow" data-term="' + t.id + '"' + (on ? ' data-active' : '') + '>' +
-          '<span class="pfolder">' + FOLDER_SVG + '<span class="pdot" style="background:' + (STATUS_COLOR[st] || 'transparent') + '"></span></span>' +
-          '<div class="pinfo"><div class="pname">' + (p.pinned ? PPIN_SVG : '') + esc(name) + '</div><div class="psub">' + esc(t.state === 'reconnecting' ? 'reconnecting…' : (t.cwd || (t.state === 'closed' ? 'session ended' : 'connecting…'))) + '</div></div>' +
-          '<span class="ptrail"><span class="pexpand" data-close="' + t.id + '" title="Close terminal">' + CLOSE_SVG + '</span></span>' +
-          '</div>';
-      });
+    groups.forEach(function (g) {
+      var ts = termsOfGroup(g.id);
+      var need = ts.filter(function (t) { return t.status === 'needsyou' || t.status === 'closed'; }).length;
+      var work = ts.filter(function (t) { return t.status === 'working'; }).length;
+      var n = ts.length;
+      var sub = n + ' session' + (n === 1 ? '' : 's') + ' · ' +
+        (need ? '<span class="hot">' + need + ' needs you</span>' : (work ? work + ' working' : 'idle'));
+      var open = !!expandedGroups[g.id];
+      html += '<div class="prow" data-switch="' + g.id + '"' + (g.id === activeGroupId ? ' data-active' : '') + '>' +
+        '<span class="pfolder">' + FOLDER_SVG + '<span class="pdot" style="background:' + (STATUS_COLOR[groupStatus(ts)] || 'transparent') + '"></span></span>' +
+        '<div class="pinfo"><div class="pname">' + (g.pinned ? PPIN_SVG : '') + esc(g.name) + '</div><div class="psub">' + sub + '</div></div>' +
+        '<span class="ptrail"><span class="pexpand" data-expand="' + g.id + '"' + (open ? ' data-open2' : '') +
+        ' title="' + (open ? 'Hide sessions' : 'Show sessions') + '">' + CARET_RIGHT_SVG + '</span></span>' +
+        '</div>';
+      if (open) {
+        html += '<div class="skids">' + (n
+          ? ts.map(function (t) {
+            var p = paneById(t.paneId);
+            return srowHTML(t, !!p && p.activeTermId === t.id && p.id === activePaneId && g.id === activeGroupId);
+          }).join('')
+          : '<div class="srow"><div class="sinfo"><div class="sstat mut">No terminals in this group</div></div></div>') + '</div>';
+      }
     });
     sxList.innerHTML = html;
     document.getElementById('d-work').textContent = String(counts.working);
     document.getElementById('d-need').textContent = String(counts.needsyou);
     document.getElementById('d-idle').textContent = String(counts.idle);
-    if (countEl) countEl.textContent = String(totalTerms());
+    if (countEl) countEl.textContent = String(groups.length);
     var live = document.getElementById('nhead-live');
-    if (live) { var n = totalTerms(); live.textContent = n + ' running'; }
+    if (live) { var n2 = totalTerms(); live.textContent = n2 + ' running'; }
+    renderNarrowSessions();
   }
   sxList.addEventListener('click', function (e) {
-    var x = e.target.closest ? e.target.closest('[data-close]') : null;
-    if (x) {
+    var ex = e.target.closest ? e.target.closest('[data-expand]') : null;
+    if (ex) {
+      // Peeking into a group must not switch to it.
       e.stopPropagation();
-      var tid = parseInt(x.getAttribute('data-close'), 10);
-      var tt = termById(tid);
-      if (tt) askCloseTerm(paneById(tt.paneId), tid);
+      var gid = parseInt(ex.getAttribute('data-expand'), 10);
+      expandedGroups[gid] = !expandedGroups[gid];
+      renderSidebar();
       return;
     }
-    var row = e.target.closest ? e.target.closest('[data-term]') : null;
-    if (row) focusTerm(parseInt(row.getAttribute('data-term'), 10));
+    var srow = e.target.closest ? e.target.closest('.srow[data-term]') : null;
+    if (srow) { focusTerm(parseInt(srow.getAttribute('data-term'), 10)); return; }
+    var row = e.target.closest ? e.target.closest('[data-switch]') : null;
+    if (row) switchGroup(parseInt(row.getAttribute('data-switch'), 10));
   });
   sxList.addEventListener('contextmenu', function (e) {
-    var row = e.target.closest ? e.target.closest('[data-term]') : null;
+    var srow = e.target.closest ? e.target.closest('.srow[data-term]') : null;
+    if (srow) {
+      e.preventDefault();
+      var t = termById(parseInt(srow.getAttribute('data-term'), 10));
+      if (t) showSessionMenu(t, e.clientX, e.clientY);
+      return;
+    }
+    var row = e.target.closest ? e.target.closest('[data-switch]') : null;
     if (!row) return;
     e.preventDefault();
-    var t = termById(parseInt(row.getAttribute('data-term'), 10));
-    if (t) showSessionMenu(t, e.clientX, e.clientY);
+    var g = groupById(parseInt(row.getAttribute('data-switch'), 10));
+    if (g) showGroupMenu(g, e.clientX, e.clientY);
   });
+
+  // On a phone the sidebar can only show one level at a time, so the group list
+  // and the session list are two screens. This is the middle one.
+  function renderNarrowSessions() {
+    var list = document.getElementById('ns-list');
+    if (!list) return;
+    var g = groupById(activeGroupId);
+    var nameEl = document.getElementById('ns-name');
+    if (nameEl) nameEl.textContent = g ? g.name : '';
+    var ts = termsOfGroup(activeGroupId);
+    list.innerHTML = ts.length
+      ? ts.map(function (t) {
+        var attn = t.status === 'needsyou' || t.status === 'closed';
+        return '<div class="ncard' + (attn ? ' attn' : '') + '" data-open="' + t.id + '">' +
+          '<span class="dot ' + dotClass(t) + ' sd"></span>' +
+          '<div class="sb"><div class="r1">' +
+          '<span class="nm mono">' + esc(termName(t)) + '</span>' +
+          '<span class="tm">' + esc(labelFor(t.shell)) + '</span></div>' +
+          '<div class="preview">' + statusLine(t) + (t.cwd ? ' · ' + esc(t.cwd) : '') + '</div>' +
+          '</div></div>';
+      }).join('')
+      : '<div class="ncard"><div class="sb"><div class="preview">No terminals in this group yet.</div></div></div>';
+  }
+
+  // Clicking a group swaps the top tab strip to that group's terminals. This is
+  // the whole two-level model in one function.
+  function switchGroup(gid) {
+    if (!groupById(gid)) return;
+    if (gid !== activeGroupId) {
+      activeGroupId = gid;
+      saveGroups();
+      applyGroupVisibility();
+    }
+    if (currentMode === 'narrow') setView('sessions');
+  }
+  function applyGroupVisibility() {
+    panes.forEach(function (p) {
+      p.terms.forEach(function (t) { t.tabEl.style.display = t.groupId === activeGroupId ? '' : 'none'; });
+    });
+    // Done in a second pass: newTerm() below can add to a pane while we iterate.
+    panes.slice().forEach(function (p) {
+      var vis = visibleTerms(p);
+      // A pane with nothing to show in this group would be an empty frame, so it
+      // gets a shell instead.
+      if (!vis.length) { newTerm(p, startShell()); return; }
+      var keep = null;
+      for (var i = 0; i < p.mru.length && !keep; i++) {
+        for (var j = 0; j < vis.length; j++) if (vis[j].id === p.mru[i]) { keep = vis[j]; break; }
+      }
+      activateTerm(p, (keep || vis[0]).id);
+    });
+    updateChrome();
+    layoutAllTabs();
+    setTimeout(function () { panes.forEach(fitActive); }, 30);
+  }
+  function newGroup(name) {
+    var g = { id: ++groupSeq, name: String(name || 'Group ' + (groups.length + 1)), pinned: false };
+    groups.push(g);
+    sortGroups();
+    saveGroups();
+    switchGroup(g.id);
+    return g;
+  }
+  function showGroupMenu(g, x, y) {
+    var m = newMenu();
+    var head = document.createElement('div');
+    head.className = 'ctxlabel'; head.textContent = g.name;
+    m.appendChild(head);
+    addMenuItem(m, 'Open group', '', function () { switchGroup(g.id); });
+    addMenuItem(m, 'New terminal here', 'Alt+T', function () {
+      switchGroup(g.id);
+      var p = paneById(activePaneId) || panes[0];
+      if (p) { newTerm(p, startShell()); focusPane(p.id); }
+    });
+    addMenuItem(m, 'Rename…', '', function () {
+      var name = window.prompt('Rename group', g.name);
+      if (name && name.trim()) { g.name = name.trim(); saveGroups(); renderSidebar(); }
+    });
+    addMenuItem(m, g.pinned ? 'Unpin' : 'Pin to top', '', function () {
+      g.pinned = !g.pinned; sortGroups(); saveGroups(); renderSidebar();
+    });
+    if (groups.length > 1) {
+      addMenuItem(m, 'Close group', '', function () { askCloseGroup(g); });
+    }
+    placeMenu(m, x, y);
+  }
+  function askCloseGroup(g) {
+    if (groups.length < 2) return;
+    var ts = termsOfGroup(g.id);
+    var live = ts.filter(function (t) { return t.state === 'open'; }).length;
+    function go() { closeGroup(g); }
+    if (live) {
+      confirmDialog('Close “' + g.name + '”?',
+        live === 1 ? 'The shell running in its terminal will be ended.'
+          : 'The ' + live + ' shells running in its terminals will be ended.',
+        'Close group', go);
+      return;
+    }
+    go();
+  }
+  function closeGroup(g) {
+    if (groups.length < 2) return;
+    // Leave the group before emptying it. Closing the last terminal of the *open*
+    // group hands the pane a fresh shell (that is what keeps a pane from going
+    // blank), which would fight us the whole way down this list.
+    if (g.id === activeGroupId) {
+      var next = null;
+      groups.forEach(function (x) { if (!next && x.id !== g.id) next = x; });
+      activeGroupId = next.id;
+      applyGroupVisibility();
+    }
+    termsOfGroup(g.id).forEach(function (t) {
+      var p = paneById(t.paneId);
+      if (p) closeTerm(p, t.id);
+    });
+    var i = groups.indexOf(g);
+    if (i >= 0) groups.splice(i, 1);
+    delete expandedGroups[g.id];
+    saveGroups();
+    renderSidebar();
+  }
 
   function termById(id) { var f = null; eachTerm(function (t) { if (t.id === id) f = t; }); return f; }
   function focusTerm(id) {
     var t = termById(id); if (!t) return;
     var p = paneById(t.paneId); if (!p) return;
+    // Reaching a terminal in another group means going to that group first.
+    if (t.groupId !== activeGroupId) switchGroup(t.groupId);
     clearZoom();
     focusPane(p.id);
     activateTerm(p, id);
@@ -471,13 +700,20 @@
     t.host.remove(); t.tabEl.remove();
     p.terms.splice(idx, 1);
     var mi = p.mru.indexOf(termId); if (mi >= 0) p.mru.splice(mi, 1);
-    if (p.terms.length === 0) {
+    // "Empty" means empty *of this group* — a pane still holding another group's
+    // terminals is not empty, it is just not showing them.
+    if (visibleTerms(p).length === 0) {
       // A pinned pane survives its last tab — it gets a fresh shell instead of disappearing.
-      if (panes.length > 1 && !p.pinned) { closePane(p); return; }
+      if (p.terms.length === 0 && panes.length > 1 && !p.pinned) { closePane(p); return; }
       newTerm(p, startShell()); updateChrome(); return;
     }
     if (p.activeTermId === termId) {
-      var nextId = p.mru.length ? p.mru[0] : p.terms[Math.max(0, idx - 1)].id;
+      var vis = visibleTerms(p);
+      var nextId = null;
+      for (var m = 0; m < p.mru.length && nextId == null; m++) {
+        for (var j = 0; j < vis.length; j++) if (vis[j].id === p.mru[m]) { nextId = vis[j].id; break; }
+      }
+      if (nextId == null) nextId = vis[Math.min(idx, vis.length - 1)].id;
       activateTerm(p, nextId);
     }
     layoutTabs(p);
@@ -525,6 +761,9 @@
     var sc = p.tabscroll, out = [];
     var l = sc.scrollLeft, r = l + sc.clientWidth;
     p.terms.forEach(function (t) {
+      // A tab belonging to another group is hidden outright — it measures 0×0 at
+      // offset 0, which would otherwise read as "scrolled out of sight".
+      if (t.tabEl.style.display === 'none') return;
       var a = t.tabEl.offsetLeft, b = a + t.tabEl.offsetWidth;
       if (a < l - 1 || b > r + 1) out.push(t);
     });
@@ -672,7 +911,7 @@
     var ttEl = tabEl.querySelector('.tt');
 
     var t = {
-      id: id, paneId: p.id, term: term, fit: fit, search: search, ws: null, host: host,
+      id: id, paneId: p.id, groupId: activeGroupId, term: term, fit: fit, search: search, ws: null, host: host,
       tabEl: tabEl, dotEl: tabEl.querySelector('.fdot'), progEl: tabEl.querySelector('.tprog'),
       state: 'idle', status: 'idle', sid: null, ended: false,
       cwd: null, shell: shellKey, renamed: false, results: null, busyTimer: null, progTimer: null,
@@ -923,7 +1162,7 @@
     el.className = 'pane npane';
     el.style.flex = '1 1 0';
     el.innerHTML =
-      '<div class="nbar"><span class="back">' + BACK_SVG + '<span>Terminals</span></span><span class="nm"></span></div>' +
+      '<div class="nbar"><span class="back">' + BACK_SVG + '<span>Sessions</span></span><span class="nm"></span></div>' +
       '<div class="ptabs">' +
         '<div class="pctrls"><span class="pc pc-rail" title="Toggle left sidebar (Ctrl+B)" role="button">' + RAIL_SVG + '</span></div>' +
         '<div class="tabscroll"></div>' +
@@ -1020,7 +1259,8 @@
     p.pinBtn.addEventListener('click', function (e) { e.stopPropagation(); togglePin(p); });
     p.ofBtn.addEventListener('click', function (e) { e.stopPropagation(); focusPane(p.id); showOverflowMenu(p); });
     p.tabscroll.addEventListener('scroll', function () { layoutTabs(p); });
-    el.querySelector('.nbar .back').addEventListener('click', function () { setView('projects'); });
+    // Back out of a terminal to its group's session list, not all the way to the groups.
+    el.querySelector('.nbar .back').addEventListener('click', function () { setView('sessions'); });
     wirePaneDrop(p);
 
     panes.push(p);
@@ -1074,11 +1314,16 @@
     np.tabscroll.appendChild(t.tabEl);
     t.paneId = np.id;
     np.terms.push(t);
-    if (op.terms.length === 0) {
-      if (panes.length > 1 && !op.pinned) closePane(op);
+    var ovis = visibleTerms(op);
+    if (ovis.length === 0) {
+      if (op.terms.length === 0 && panes.length > 1 && !op.pinned) closePane(op);
       else newTerm(op, startShell());
     } else if (op.activeTermId === t.id) {
-      activateTerm(op, op.mru.length ? op.mru[0] : op.terms[0].id);
+      var nid = null;
+      for (var m = 0; m < op.mru.length && nid == null; m++) {
+        for (var j = 0; j < ovis.length; j++) if (ovis[j].id === op.mru[m]) { nid = ovis[j].id; break; }
+      }
+      activateTerm(op, nid == null ? ovis[0].id : nid);
     }
     activateTerm(np, t.id);
     focusPane(np.id);
@@ -1440,13 +1685,24 @@
         stack.push({
           active: Math.max(0, p.terms.map(function (t) { return t.id; }).indexOf(p.activeTermId)),
           tabs: p.terms.map(function (t) {
-            return { shell: t.shell, cwd: t.cwd || '', title: t.renamed ? t.tabEl.querySelector('.tt').textContent : '' };
+            var g = groupById(t.groupId);
+            // The group is saved by NAME, not id — ids are per-browser, names are the thing.
+            return { shell: t.shell, cwd: t.cwd || '', group: g ? g.name : '', title: t.renamed ? t.tabEl.querySelector('.tt').textContent : '' };
           }),
         });
       });
       if (stack.length) cols.push(stack);
     });
-    return { cols: cols };
+    return { cols: cols, group: (groupById(activeGroupId) || {}).name || '' };
+  }
+  // Restoring a layout that spanned several groups must land each terminal back in
+  // its own group, making any group the layout names but this browser lacks.
+  function groupByName(name) {
+    if (!name) return null;
+    for (var i = 0; i < groups.length; i++) if (groups[i].name === name) return groups[i];
+    var g = { id: ++groupSeq, name: name, pinned: false };
+    groups.push(g); sortGroups(); saveGroups();
+    return g;
   }
   function restoreLayout(desc) {
     if (!desc || !desc.cols || !desc.cols.length) return;
@@ -1462,11 +1718,16 @@
         prev = p;
         (pd.tabs || []).forEach(function (td) {
           var t = newTerm(p, td.shell, td.cwd);
+          var g = groupByName(td.group);
+          if (g) t.groupId = g.id;
           if (td.title) { t.tabEl.querySelector('.tt').textContent = td.title; t.renamed = true; }
         });
         if (p.terms[pd.active]) activateTerm(p, p.terms[pd.active].id);
       });
     });
+    var back = groupByName(desc.group);
+    if (back) { activeGroupId = back.id; saveGroups(); }
+    applyGroupVisibility();
     updateChrome();
     if (panes[0]) focusPane(panes[0].id);
     setTimeout(function () { panes.forEach(fitActive); }, 60);
@@ -1932,6 +2193,18 @@
   document.getElementById('open-palette').addEventListener('click', openPalette);
   document.getElementById('open-notif').addEventListener('click', function (e) { e.stopPropagation(); toggleNotif(e.currentTarget); });
   document.getElementById('open-new').addEventListener('click', function () { var p = paneById(activePaneId) || panes[0]; if (p) { newTerm(p, startShell()); focusPane(p.id); } });
+  document.getElementById('open-newgroup').addEventListener('click', function () {
+    var name = window.prompt('Name this group', 'Group ' + (groups.length + 1));
+    if (!name || !name.trim()) return;
+    newGroup(name.trim());
+    var p = paneById(activePaneId) || panes[0];
+    if (p) focusPane(p.id);
+  });
+  document.getElementById('ns-back').addEventListener('click', function () { setView('projects'); });
+  document.getElementById('ns-list').addEventListener('click', function (e) {
+    var card = e.target.closest ? e.target.closest('.ncard[data-open]') : null;
+    if (card) focusTerm(parseInt(card.getAttribute('data-open'), 10));
+  });
   document.getElementById('open-save').addEventListener('click', function (e) { toggleLayoutMenu(e.currentTarget); });
   document.getElementById('open-load').addEventListener('click', function (e) { toggleLayoutMenu(e.currentTarget); });
   document.getElementById('open-diag').addEventListener('click', openDiag);
@@ -2026,8 +2299,11 @@
     currentMode = m;
     root.setAttribute('data-mode', m);
     if (m === 'narrow') {
-      // One terminal open? Go straight to it — a list of one costs a pointless tap.
-      setView(totalTerms() > 1 ? 'projects' : 'focus');
+      // Land on the shallowest screen that still has a choice on it: many groups →
+      // the group list; one group with several terminals → its session list; one
+      // terminal → the terminal, because a list of one costs a pointless tap.
+      setView(groups.length > 1 ? 'projects'
+        : (termsOfGroup(activeGroupId).length > 1 ? 'sessions' : 'focus'));
       // On a phone the changes dock and the split chrome have nowhere to live.
       clearZoom();
       if (copyMode) exitCopyMode();
