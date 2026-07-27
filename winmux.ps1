@@ -34,7 +34,12 @@ function Start-WinMux {
   # CT_REMOTE=1 pre-opens the same door the Settings toggle opens; the child
   # inherits this process's environment.
   $env:CT_REMOTE = '1'
-  Remove-Item Env:\PORT -ErrorAction SilentlyContinue   # let the server pick a usable port
+  # A moving address is the same as no address: a link saved yesterday points at
+  # nothing today, which reads as "the app is broken" rather than "the port
+  # changed". So the launcher pins one number and keeps it. 8799 can never be it
+  # on this machine — tailscaled owns that port on the Tailscale side — so the
+  # pin is 9912, the first candidate the server itself would have picked anyway.
+  $env:PORT = '9912'
   $proc = Start-Process -FilePath 'node' -ArgumentList 'server.cjs' `
     -WorkingDirectory $Root -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput $LogFile -RedirectStandardError $ErrFile
