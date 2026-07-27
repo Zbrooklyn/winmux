@@ -888,7 +888,7 @@
     input.addEventListener('mousedown', function (e) { e.stopPropagation(); });
   }
 
-  function newTerm(p, shellKey, cwd) {
+  function newTerm(p, shellKey, cwd, seedSid) {
     shellKey = shellKey || startShell();
     var id = ++termSeq;
     var host = document.createElement('div');
@@ -928,7 +928,7 @@
     var t = {
       id: id, paneId: p.id, groupId: activeGroupId, term: term, fit: fit, search: search, ws: null, host: host,
       tabEl: tabEl, dotEl: tabEl.querySelector('.fdot'), progEl: tabEl.querySelector('.tprog'),
-      state: 'idle', status: 'idle', sid: null, ended: false,
+      state: 'idle', status: 'idle', sid: seedSid || null, ended: false,
       cwd: null, shell: shellKey, renamed: false, results: null, busyTimer: null, progTimer: null,
     };
     // A tab can be dragged into another pane, so never close over `p` — look the pane up live.
@@ -972,7 +972,7 @@
           // The shell chose to leave. That is the real ending, and the only one
           // worth telling the person about.
           if (m.exited) { t.ended = true; return; }
-          if (m.sid) t.sid = m.sid;
+          if (m.sid) { t.sid = m.sid; persistLive(); }
           if (m.shell && ttEl && !t.renamed) ttEl.textContent = m.shell;
           if (m.cwd) { t.cwd = m.cwd; if (!dockPath.value) dockPath.value = m.cwd; }
           if (m.resumed) {
@@ -1699,7 +1699,9 @@
           tabs: p.terms.map(function (t) {
             var g = groupById(t.groupId);
             // The group is saved by NAME, not id — ids are per-browser, names are the thing.
-            return { shell: t.shell, cwd: t.cwd || '', group: g ? g.name : '', title: t.renamed ? t.tabEl.querySelector('.tt').textContent : '' };
+            // The session id rides along too, but only for the live-reload snapshot: a
+            // saved *layout* is a template, so it drops the sid (see snapshot callers).
+            return { shell: t.shell, cwd: t.cwd || '', group: g ? g.name : '', title: t.renamed ? t.tabEl.querySelector('.tt').textContent : '', sid: t.sid || '' };
           }),
         });
       });
@@ -1707,6 +1709,11 @@
     });
     return { cols: cols, group: (groupById(activeGroupId) || {}).name || '' };
   }
+  // The live layout — with each tab's session id — so a full page reload can land
+  // back in the running shells instead of orphaning them. Saved on the way out and
+  // whenever a session id is first learned, so a crash that skips beforeunload still
+  // leaves a recent copy. This is NOT a named layout; it is the working state.
+  function persistLive() { try { localStorage.setItem('ct-live', JSON.stringify(snapshot())); } catch (e) {} }
   // Restoring a layout that spanned several groups must land each terminal back in
   // its own group, making any group the layout names but this browser lacks.
   function groupByName(name) {
@@ -1729,7 +1736,9 @@
         var p = makePane(col, prev);
         prev = p;
         (pd.tabs || []).forEach(function (td) {
-          var t = newTerm(p, td.shell, td.cwd);
+          // td.sid is set only by the live-reload snapshot; connect() will send it
+          // and the server reattaches if the shell is still warm, else spawns fresh.
+          var t = newTerm(p, td.shell, td.cwd, td.sid);
           var g = groupByName(td.group);
           if (g) t.groupId = g.id;
           if (td.title) { t.tabEl.querySelector('.tt').textContent = td.title; t.renamed = true; }
@@ -1780,7 +1789,11 @@
     var name = (smName.value || ('Layout ' + (layouts().length + 1))).trim();
     if (!name) return;
     var list = layouts().filter(function (l) { return l.name !== name; });
-    list.unshift({ name: name, when: Date.now(), desc: snapshot() });
+    // A saved layout is a template you might load days later, so it must not carry
+    // live session ids — restoring one always spawns fresh shells.
+    var desc = snapshot();
+    desc.cols.forEach(function (col) { col.forEach(function (pd) { (pd.tabs || []).forEach(function (td) { td.sid = ''; }); }); });
+    list.unshift({ name: name, when: Date.now(), desc: desc });
     writeLayouts(list);
     renderLayouts();
     smName.value = '';
@@ -2417,9 +2430,23 @@
   }).observe(document.body, { childList: true, subtree: true, attributes: true,
     attributeFilter: ['data-open', 'data-active', 'data-sidebar'] });
 
-  var first = makePane(makeCol());
-  newTerm(first, startShell());
-  focusPane(first.id);
+  // A full page reload drops the socket — a detach, not a kill — so the shells are
+  // still warm on the server for the grace window. We saved the live layout with each
+  // tab's session id on the way out; restore it and reconnect by id, landing back in
+  // the same running shells instead of silently starting a fresh one and orphaning the
+  // old. Any session the server no longer holds simply returns as a fresh shell in its
+  // slot. First-ever open (no saved state) gets the default single shell.
+  window.addEventListener('beforeunload', persistLive);
+  var restored = false;
+  try {
+    var liveState = JSON.parse(localStorage.getItem('ct-live') || 'null');
+    if (liveState && liveState.cols && liveState.cols.length) { restoreLayout(liveState); restored = true; }
+  } catch (e) {}
+  if (!restored) {
+    var first = makePane(makeCol());
+    newTerm(first, startShell());
+    focusPane(first.id);
+  }
   applyMode();
   setTimeout(layoutAllTabs, 100);
 })();
