@@ -117,6 +117,16 @@ Edward decides instantly from **rendered options**, not from words. So:
   slides up from the bottom edge as a full-width sheet with a drag handle and a dimmed backdrop,
   instead of a desktop popover anchored to a cursor. One shared path: `placeMenu()` routes to the
   sheet whenever `currentMode === 'narrow'`, so all menus stay consistent. (Live.)
+- **Phone Settings = full-screen drill-in (Edward's pick).** The mockup's 780×560 centred
+  dialog crammed onto a phone kept its two-column split — the category list ate ~half the width,
+  squeezing the content. Edward chose the drill-in (over top-tabs, both rendered) because it
+  matches the phone's own groups→sessions→terminal spine: Settings now opens **full-screen to a
+  category list** (Appearance › Terminal › Behaviour › Phone › Shortcuts › About, full-width rows
+  with chevrons); tapping one **drills into that category full-screen** with the category name in
+  the header and a `‹` back-arrow that returns to the list; content gets the full width. State is
+  `data-drill` (list | detail) on the modal, set only on narrow — **desktop keeps its two-column
+  dialog untouched** (verified: desktop drill=null, 780px, both columns). Category rows are 60px
+  tall, back-arrow 44px. index.html/app.js; cockpit.css frozen. (Live.)
 - **Save/load layout menu = bottom sheet + touch-reachable delete.** This menu had its own
   positioner (`openLayoutMenu`) and so escaped the `placeMenu` bottom-sheet routing — on the phone
   it still floated as a desktop popover anchored beside a footer icon, and its per-row delete `×`

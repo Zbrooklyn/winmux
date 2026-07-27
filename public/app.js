@@ -2205,20 +2205,36 @@
     }).join('');
     document.getElementById('settings-pane').innerHTML = '<h3>' + curSet + '</h3>' + settingsPane(curSet);
   }
+  // On the phone, Settings is a drill-in like the rest of the app: it opens to a
+  // category list, tapping one drills into that category full-screen, and the
+  // header back-arrow returns to the list. `data-drill` on the modal is the state
+  // (list | detail); it's only set on narrow, so desktop keeps its two-column view.
+  var settingsModal = document.querySelector('#settings-ovl .modal');
+  var settingsTitle = document.getElementById('settings-title');
+  function settingsDrill(state) {
+    if (currentMode !== 'narrow') { settingsModal.removeAttribute('data-drill'); settingsTitle.textContent = 'Settings'; return; }
+    settingsModal.setAttribute('data-drill', state);
+    settingsTitle.textContent = state === 'detail' ? curSet : 'Settings';
+  }
   function openSettings(tab) {
     curSet = tab || curSet;
     if (curSet === 'Phone') phoneErr = '';
     renderSettings(); openOvl('settings-ovl');
+    // Opened via a specific category (e.g. a deep link) drills straight in; the
+    // plain footer/⌘, entry opens to the category list.
+    settingsDrill(tab ? 'detail' : 'list');
     if (curSet === 'Phone') loadPhone();
   }
   document.getElementById('settings-tabs').addEventListener('click', function (e) {
     var tab = e.target.closest ? e.target.closest('[data-settab]') : null;
     if (!tab) return;
     curSet = tab.getAttribute('data-settab');
+    settingsDrill('detail');
     // The switch must reflect the server, not whatever it looked like last time.
     if (curSet === 'Phone') { phoneS = null; phoneErr = ''; renderSettings(); loadPhone(); return; }
     renderSettings();
   });
+  document.getElementById('settings-back').addEventListener('click', function () { settingsDrill('list'); });
   document.getElementById('settings-pane').addEventListener('click', function (e) {
     if (e.target.closest && e.target.closest('[data-phone-toggle]')) { flipPhone(); return; }
     if (e.target.closest && e.target.closest('[data-trust-toggle]')) { flipTrust(); return; }

@@ -200,6 +200,26 @@
      On the phone it's always shown (a tap can't reveal it). */
   .cockpit[data-mode="narrow"] .sessmenu .sm-row .sm-del { opacity: 1; }
 
+  /* Settings on the phone is a drill-in like the rest of the app (Edward's pick):
+     full-screen, opens to a category list, tap drills into that category, the
+     header back-arrow returns. `data-drill` on the modal is the state; it's only
+     set on narrow so desktop keeps its two-column dialog untouched. The mockup's
+     780x560 centred dialog would otherwise squeeze the content into half-width. */
+  .mhead .mback { display: none; align-items: center; justify-content: center; width: 44px; height: 44px; margin-left: -10px; margin-right: 2px; color: var(--muted); cursor: pointer; flex: 0 0 auto; }
+  .mhead .mback svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .cockpit[data-mode="narrow"] #settings-ovl.ovl[data-open] { align-items: stretch; justify-content: stretch; }
+  .cockpit[data-mode="narrow"] #settings-ovl .modal { width: 100%; max-width: none; height: 100%; max-height: none; border: none; border-radius: 0; }
+  /* LIST state — full-width category rows with a chevron; content hidden. */
+  .cockpit[data-mode="narrow"] #settings-ovl .modal[data-drill="list"] .mtabs { flex: 1; border-right: none; padding: 4px 0; overflow-y: auto; }
+  .cockpit[data-mode="narrow"] #settings-ovl .modal[data-drill="list"] .mtab { border-radius: 0; padding: 16px 18px; font-size: 15px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+  .cockpit[data-mode="narrow"] #settings-ovl .modal[data-drill="list"] .mtab[data-active] { background: transparent; color: var(--text); }
+  .cockpit[data-mode="narrow"] #settings-ovl .modal[data-drill="list"] .mtab::after { content: "\203A"; color: var(--faint); font-size: 20px; font-weight: 400; }
+  .cockpit[data-mode="narrow"] #settings-ovl .modal[data-drill="list"] .mpane { display: none; }
+  /* DETAIL state — content full-width; list hidden; back-arrow shown. */
+  .cockpit[data-mode="narrow"] #settings-ovl .modal[data-drill="detail"] .mtabs { display: none; }
+  .cockpit[data-mode="narrow"] #settings-ovl .modal[data-drill="detail"] .mpane { padding: 14px 16px; }
+  .cockpit[data-mode="narrow"] #settings-ovl .modal[data-drill="detail"] .mhead .mback { display: flex; }
+
   /* Phone-only overlay fixes (palette-wrap and #open-help sit outside .cockpit, so
      these are gated by width, matching the narrow breakpoint of 620px). */
   @media (max-width: 620px) {
@@ -497,7 +517,7 @@
 
   <div class="ovl" id="settings-ovl">
     <div class="modal">
-      <div class="mhead"><span class="mt">Settings</span><span class="mx" data-close-ovl="settings-ovl" role="button" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span></div>
+      <div class="mhead"><span class="mback" id="settings-back" role="button" aria-label="Back to settings" tabindex="0"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></span><span class="mt" id="settings-title">Settings</span><span class="mx" data-close-ovl="settings-ovl" role="button" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span></div>
       <div class="mbody"><div class="mtabs" id="settings-tabs"></div><div class="mpane" id="settings-pane"></div></div>
     </div>
   </div>
