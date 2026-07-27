@@ -2236,7 +2236,6 @@
   document.getElementById('open-diag').addEventListener('click', openDiag);
   document.getElementById('open-help').addEventListener('click', openCheat);
   document.getElementById('open-settings').addEventListener('click', function () { openSettings(); });
-  document.getElementById('version-chip').addEventListener('click', openDiag);
   document.addEventListener('mousedown', function (e) {
     if (npanel.hasAttribute('data-open') && !npanel.contains(e.target) && !e.target.closest('#open-notif')) npanel.removeAttribute('data-open');
   });

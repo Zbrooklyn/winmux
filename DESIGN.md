@@ -55,6 +55,10 @@ Edward decides instantly from **rendered options**, not from words. So:
 - **Sidebar collapse/expand = one button, both directions.** No second toggle. The same
   control — the panel icon at the left of the tab bar — collapses when open and expands when
   closed. The header chevron and the edge reopen-strip are both gone. (Live.)
+- **Header row = no version chip.** The `GROUPS n` label sits left; search + notifications
+  sit right; nothing between. The old bordered `v1.0` pill is removed — it was the only boxed
+  element in the flat sidebar and a second colour highlight. Version + diagnostics stay
+  reachable via the footer diag button. (Live.)
 
 ## Pending visual review
 
