@@ -683,7 +683,47 @@ Missing, by area (— `[backend]` = pre-approved to build; `[gated]` = renders �
 - **Persistence:** `serialize` addon to capture scrollback for the resume feature `[backend]`.
 - **Agent-aligned (cockpit):** AI error quick-fix — detect an error in output, offer a fix via the attention bus `[split]`. Inline autocomplete/suggestions (Warp/Fig-style) — big, parked.
 
-Highest value-per-effort, all `[backend]`: **WebGL renderer** (fast-output perf), **bundle the font + Nerd glyphs** (clean-install + prompt icons), **unicode11**, **ligatures fix**, **screenReaderMode**.
+**Honest effort (corrected 2026-07-28 after feasibility check — earlier "all cheap backend" was wrong):**
+- **WebGL/GPU renderer is a migration, NOT a drop-in.** It switches xterm from DOM-text to a
+  `<canvas>`, which breaks every part of the harness (and any feature) that reads text from
+  `.xterm-rows` — the colour check, `read-screen`/`serializeTerm`, survive/reload/groups, the
+  phone-shell assertions. Closing it right means moving all of those to xterm's renderer-independent
+  `term.buffer` API first, then flipping the renderer with a try/catch DOM fallback (WebGL fails in
+  some headless/offscreen contexts). A dedicated task, budget for harness rework.
+- **Bundle the font is an asset task**, not code: source Cascadia Code + a Nerd Font variant (OFL,
+  shippable), ~1–2 MB, add `@font-face`. Fixes the clean-machine Consolas fallback + prompt-glyph tofu.
+- **Ligatures**: visual outcome on the DOM renderer is uncertain (the addon targets the canvas/GPU
+  path) — likely lands *with* the GPU migration, not before.
+- **Genuinely small + safe now:** `unicode11` (width calc, no DOM change), `screenReaderMode` (as a
+  setting). Low value alone; fold into the terminal-parity pass.
+- **Recommendation:** treat GPU-renderer + font-bundle + ligatures + unicode11 + screenReaderMode as
+  one focused **"terminal parity" pass** (its own session), because they interlock through the
+  renderer and the harness migration. Not a token-limited quick-win batch.
+
+### Competitive position — table-stakes vs differentiators (2026-07-28)
+
+What EVERY pro terminal (Windows Terminal, iTerm2, Warp, WezTerm, Kitty, Ghostty) has that we
+DON'T — the credibility table-stakes to close so nobody dismisses us on first launch:
+- GPU rendering · bundled font + ligatures + Nerd/powerline glyphs · shell integration (OSC-7 cwd,
+  OSC-133 marks/exit-codes, OSC-0/2 auto-title) · clickable hyperlinks (OSC-8) + cmd-click paths ·
+  user-editable config + custom keybindings · custom color-scheme import.
+
+Higher-end (only SOME have — optional, not credibility gaps): autocomplete/suggestions (Warp) ·
+command blocks (Warp) · quick-select/hints mode (Kitty/WezTerm) · inline images (Kitty/iTerm) ·
+triggers (iTerm).
+
+Where we already MATCH them (real baseline, don't re-do): tabs · split panes · pane zoom ·
+broadcast-to-panes · command palette · search · copy mode · shell profiles · reconnect-on-drop.
+
+What WE have that NONE of them do — the moat, don't lose it chasing parity:
+1. **Phone / Tailscale remote access** — pick up your real desktop session on your phone from anywhere.
+2. **Agent cockpit** — transcript reader, browser control, fleet awareness; shaped around AI agents,
+   not bolted on (Warp added AI; we're built around it).
+
+**Strategy:** spend the table-stakes budget to remove reasons to say no (GPU, fonts, shell
+integration, hyperlinks, config) — but do NOT try to out-Warp Warp on autocomplete or out-Kitty
+Kitty on images. Our win is being the only terminal that is remote-first and agent-native. Table
+stakes to earn credibility; differentiators to earn adoption.
 
 ## Upcoming phases (roadmap — not yet built)
 
