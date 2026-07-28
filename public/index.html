@@ -511,6 +511,23 @@
   .sxpv .pv-m .v.mono { font-family: "Cascadia Code", Consolas, monospace; font-size: 11.5px; font-weight: 400; color: var(--muted); }
   .sxpv .pv-foot { flex: 0 0 auto; padding: 12px 18px; border-top: 1px solid var(--border); }
   .sxpv .pv-foot .btn.wide { width: 100%; display: flex; justify-content: center; font-weight: 600; }
+  /* Phone: no hover, so the eyeball rides each session card as a real tap target. */
+  .ncard { position: relative; }
+  .ncard .nceye { flex: 0 0 auto; width: 40px; height: 40px; display: flex; align-items: center;
+    justify-content: center; border-radius: 8px; color: var(--faint); cursor: pointer; opacity: 1; align-self: center; }
+  .ncard .nceye svg { width: 18px; height: 18px; }
+  .ncard .nceye:active { background: color-mix(in srgb, var(--text) 12%, transparent); color: var(--text); }
+  /* Phone: the preview is a stack SCREEN with a back-arrow spine (PRODUCT.md),
+     not a floating X overlay. The nbar only shows in narrow mode. */
+  .sxpv .pv-nbar { display: none; }
+  .sxpv.narrow .pv-nbar { display: flex; align-items: center; height: 52px; padding: 0 6px;
+    border-bottom: 1px solid var(--border); background: var(--bg1); flex: 0 0 auto; }
+  .sxpv.narrow .pv-back { display: inline-flex; align-items: center; gap: 3px; height: 44px;
+    padding: 0 12px 0 6px; color: var(--muted); font-size: 15px; font-weight: 500; cursor: pointer; border-radius: 8px; }
+  .sxpv.narrow .pv-back:active { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
+  .sxpv.narrow .pv-back svg { width: 22px; height: 22px; stroke: currentColor; fill: none; }
+  .sxpv.narrow .pv-x { display: none; }
+  .sxpv.narrow .pv-scroll { padding-top: 16px; }
   @media (prefers-reduced-motion: reduce) { .sxpv { transition: none; } .srow .speye { transition: none; } }
 </style>
 </head>

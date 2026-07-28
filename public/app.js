@@ -618,7 +618,8 @@
     var meta = '<div class="pv-lbl">Details</div><div class="pv-meta">' +
       rows.map(function (r) { return '<div class="pv-m"><span class="k">' + r[0] + '</span><span class="v' + (r[2] ? ' mono' : '') + '">' + r[1] + '</span></div>'; }).join('') +
       '</div>';
-    return '<div class="pv-scroll">' +
+    return '<div class="pv-nbar"><span class="pv-back" data-pv="close" role="button" tabindex="0" aria-label="Back to sessions">' + BACK_SVG + '<span>Sessions</span></span></div>' +
+      '<div class="pv-scroll">' +
       '<div class="pv-head"><div class="pv-id"><span class="pv-name">' + esc(termName(t)) + '</span>' +
       '<span class="pv-chip ' + chip + '">' + esc(stat) + '</span>' +
       '<span class="pv-x" data-pv="close" role="button" tabindex="0" title="Close" aria-label="Close preview">' + XCLOSE_SVG + '</span></div>' +
@@ -629,6 +630,7 @@
   function positionPreview() {
     if (!previewEl) return;
     var narrow = root.getAttribute('data-mode') === 'narrow';
+    previewEl.classList.toggle('narrow', narrow);
     if (narrow) { previewEl.style.left = '0px'; previewEl.style.width = '100%'; return; }
     var sb = document.querySelector('.sessions');
     var left = sb ? Math.round(sb.getBoundingClientRect().right) : 264;
@@ -702,7 +704,9 @@
           '<span class="nm mono">' + esc(nm) + '</span>' +
           (kind === nm ? '' : '<span class="tm">' + esc(kind) + '</span>') + '</div>' +
           '<div class="preview">' + statusLine(t) + (t.cwd ? ' · ' + esc(t.cwd) : '') + '</div>' +
-          '</div><span class="nchev">' + CARET_RIGHT_SVG + '</span></div>';
+          '</div>' +
+          '<span class="speye nceye" data-eye="' + t.id + '" role="button" tabindex="0" title="Preview session" aria-label="Preview session">' + EYE_SVG + '</span>' +
+          '<span class="nchev">' + CARET_RIGHT_SVG + '</span></div>';
       }).join('')
       : '<div class="ncard"><div class="sb"><div class="preview">No terminals in this group yet.</div></div></div>';
   }
@@ -2553,6 +2557,8 @@
     });
   })();
   document.getElementById('ns-list').addEventListener('click', function (e) {
+    var eye = e.target.closest ? e.target.closest('[data-eye]') : null;
+    if (eye) { e.stopPropagation(); openPreview(parseInt(eye.getAttribute('data-eye'), 10)); return; }
     var card = e.target.closest ? e.target.closest('.ncard[data-open]') : null;
     if (card) focusTerm(parseInt(card.getAttribute('data-open'), 10));
   });
