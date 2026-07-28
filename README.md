@@ -38,8 +38,14 @@ With WinMux running, the `winmux` command scripts the live app:
     winmux split down               # split the active pane
     winmux send "Get-Date" --enter  # type into the active terminal and run it
     winmux read-screen --lines 40   # read what's on screen
+    winmux browser open example.com # open the browser panel (desktop app)
+    winmux browser snapshot         # list the page's clickable elements as @refs
+    winmux browser click @e1        # click one of them
+    winmux markdown README.md       # open a file in the live markdown viewer
 
 An agent (e.g. Claude) can use these to open terminals and run tools for you.
+The browser panel is the desktop app's Electron `<webview>`; the markdown viewer
+follows the file live as it's written.
 It works only at the PC (127.0.0.1), never over the phone link.
 
 ## Verify

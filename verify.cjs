@@ -60,6 +60,9 @@ const PORT_RELOAD = 9920;
 // The CLI check needs its own server + a connected app, on a port nobody else
 // is driving, so `winmux new-tab` counts don't race another group's terminals.
 const PORT_CLI = 9921;
+// The markdown check opens a viewer surface and edits the file under it, so it
+// needs a server whose /api/md nobody else is racing and a /control of its own.
+const PORT_MD = 9922;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1451,6 +1454,16 @@ check('electron', PORT_GROUPS, async ({ t }) => {
   t('the frameless tab bar resolves to a real drag handle',
     !!json && json.ptabsRegion === 'drag', json && json.ptabsRegion);
   t('the smoke run hit no error', !!json && !json.error, json && json.error);
+
+  // The Electron-only feature (Phase 10): a controllable <webview> browser panel,
+  // driven through the real /rpc → /control chain that the `winmux` CLI uses.
+  // The smoke run opened a data: page, snapshotted its interactive nodes, and
+  // clicked one — proving the panel navigates and is scriptable, not just mounted.
+  t('the browser panel opened a page over /rpc', !!json && json.browserOpened === true, json && json.browserError);
+  t('the snapshot tagged the page\'s interactive elements as @refs',
+    !!json && json.browserRefs >= 2, json && json.browserRefs);
+  t('a snapshotted element was clickable through the CLI path',
+    !!json && json.browserClicked === true, json && json.browserError);
 });
 
 // --- cli: the `winmux` command-line drives the live app -------------------
@@ -1500,6 +1513,67 @@ check('cli', PORT_CLI, async ({ browser, base, t, shot }) => {
   await new Promise((r) => setTimeout(r, 800));
   const orphan = await winmux(['list']);
   t('with no app open the CLI fails clearly, fast', orphan.code !== 0 && /no app connected/i.test(orphan.err), orphan.err);
+});
+
+// --- markdown: the viewer surface renders a file and follows its edits ------
+// `winmux markdown <file>` opens a read surface in the app. The server reads the
+// file (/api/md), the app renders a tiny markdown subset, and it re-pulls on a
+// timer so a file the agent is writing updates live. This check drives the real
+// CLI path (like `cli`) and then edits the file on disk to prove the live pull.
+check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_MD), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => o += d);
+    proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+
+  // The file the viewer will show — written where the server can read it.
+  const mdFile = path.join(OUT, 'md-' + PORT_MD + '.md');
+  fs.writeFileSync(mdFile, '# Hello WinMux\n\nThis is **bold** and `code`.\n\n- one\n- two\n');
+
+  // The server side on its own: /api/md reads the file and hands back its text.
+  const api = JSON.parse((await get(base + '/api/md?path=' + encodeURIComponent(mdFile))).body);
+  t('/api/md reads the file and returns its text', api.ok === true && /Hello WinMux/.test(api.text), { ok: api.ok });
+  const missing = JSON.parse((await get(base + '/api/md?path=' + encodeURIComponent(mdFile + '.nope'))).body);
+  t('/api/md fails cleanly on a file that is not there', missing.ok === false && !!missing.error, missing.error);
+
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);          // the app connects to /control
+
+  const opened = await winmux(['markdown', mdFile]);
+  t('winmux markdown exits clean', opened.code === 0, opened.err);
+  await page.waitForTimeout(1500);
+
+  const rendered = await page.evaluate(() => {
+    const e = document.querySelector('.wmm[data-open] .wmm-body');
+    if (!e) return null;
+    return {
+      h1: (e.querySelector('h1') || {}).textContent,
+      strong: !!e.querySelector('strong'),
+      code: !!e.querySelector('code'),
+      li: e.querySelectorAll('li').length,
+      title: (document.querySelector('.wmm-title') || {}).textContent,
+    };
+  });
+  t('the viewer surface opened and rendered the markdown',
+    !!rendered && rendered.h1 === 'Hello WinMux' && rendered.strong && rendered.code && rendered.li === 2, rendered);
+  t('the surface is titled with the file name', !!rendered && /md-\d+\.md$/.test(String(rendered.title)), rendered && rendered.title);
+  await shot(page, 'markdown');
+
+  // Live update: the agent rewrites the file; the surface must follow it without
+  // a reopen. This is the whole point of a viewer over `cat`.
+  fs.writeFileSync(mdFile, '# Changed Title\n\nNew body.\n');
+  await page.waitForTimeout(2200);
+  const after = await page.evaluate(() => {
+    const h = document.querySelector('.wmm[data-open] .wmm-body h1');
+    return h ? h.textContent : null;
+  });
+  t('editing the file live-updates the open surface', after === 'Changed Title', after);
+  await page.close();
 });
 
 // -------------------------------------------------------------------- main

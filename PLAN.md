@@ -611,9 +611,38 @@ can't talk only to the server — it has to reach the running app.
   screen, `new-tab` grows the count, and with no app connected the CLI fails
   clean and fast. `verify-out/cli-drove-it.png`.
 
-Deferred to later phases: browser panel + markdown (Phase 10), agent integration
-(Phase 11), OSS distribution — installer, auto-update, winget, LICENSE, public
-repo (Phase 12).
+Deferred to later phases: agent integration (Phase 11), OSS distribution —
+installer, auto-update, winget, LICENSE, public repo (Phase 12).
+
+## Phase 10 — The two surfaces wmux was Electron for (browser panel + markdown)
+
+wmux's one genuinely Electron-hard feature is a *controllable* browser panel — not an
+iframe, but a real page you can navigate, snapshot, and click by script. WinMux gets it
+from Electron's `<webview>`, driven through the same `/rpc → /control` chain the CLI
+already uses, so no new transport is invented.
+
+- **Browser panel** (`public/app.js`, `public/index.html`, `electron/main.ts`). `webviewTag`
+  is enabled on the window; the app mounts a `.wmb` overlay holding a `<webview>` docked
+  right. Navigation goes through the `dom-ready` event (a `src` change while the panel is
+  hidden is dropped by Electron), so opens queue until the view is ready. `runControl('browser')`
+  handles `open/url/back/forward/reload/snapshot/click/screenshot`; `snapshot` tags every
+  interactive node `@e1..@eN`, `click` acts on a ref. Web/phone mode never sees a webview —
+  the panel simply does not mount there.
+- **CLI** (`bin/winmux.cjs`): `winmux browser open <url> | snapshot | click <@ref> |
+  back|forward|reload|url | screenshot [file]`.
+- **Markdown viewer** (`server.cjs` `/api/md`, `public/app.js`, `public/index.html`). `winmux
+  markdown <file>` opens a `.wmm` read surface; the server reads the file, the app renders a
+  small markdown subset, and it re-pulls every 1.5s so a file the agent is writing updates
+  live without a reopen. Works on plain web — no webview needed.
+- **Proof.** The `electron` check now drives the browser panel inside the headless smoke run
+  over the real `/rpc` path: it opens a `data:` page, snapshots it (asserts ≥2 `@refs`), and
+  clicks one — all green. A new `markdown` check proves `/api/md` (read + clean not-found),
+  the `winmux markdown` verb, the rendered surface, and the live-update on file edit.
+  `verify-out/markdown.png`.
+
+Deferred to later phases: agent integration — Claude Code hooks, fleet/transcript view,
+shell-integration cwd/git (Phase 11); OSS distribution — installer, auto-update, winget,
+LICENSE, public repo (Phase 12); launch hardening (Phase 13).
 
 ## Risks
 
