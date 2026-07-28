@@ -67,7 +67,7 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
   try { fs.mkdirSync(outDir, { recursive: true }); } catch (e) { /* ignore */ }
   let result: Record<string, unknown> = {
     hasCockpit: false, isElectron: false, dataElectron: false, ptabsRegion: null,
-    browserOpened: false, browserRefs: 0, browserClicked: false, error: null,
+    browserOpened: false, browserRefs: 0, browserClicked: false, ptyOk: false, error: null,
   };
   try {
     for (let i = 0; i < 40; i++) {
@@ -110,6 +110,31 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
       result.browserClicked = !!(clicked && clicked.ok);
     } catch (be) {
       result.browserError = String((be as Error).message || be);
+    }
+
+    // node-pty under Electron's ABI (readiness #16 — the native-module trap, the
+    // #1 way an Electron terminal fails to even start on someone else's machine).
+    // node-pty 1.x ships N-API prebuilds (prebuilds/win32-x64/…) that are ABI-
+    // stable across Node AND Electron, so no electron-rebuild is needed — but that
+    // only holds if the binary actually loads and spawns here. Prove it end-to-end:
+    // run a command through the real terminal (a live node-pty shell) over the same
+    // /control chain the CLI uses, and read the marker back off the screen.
+    try {
+      const token = 'WINMUX_PTY_' + 'OK';
+      await rpc(port, 'send', { data: 'echo ' + token, enter: true });
+      let screen = '';
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 400));
+        const rs = await rpc(port, 'read-screen', { lines: 60 });
+        screen = String((rs && rs.result && rs.result.screen) || '');
+        // The echoed command line itself contains the token; a match on a line
+        // that is not the command proves the shell ran it and printed the result.
+        const hits = (screen.match(new RegExp(token, 'g')) || []).length;
+        if (hits >= 2) break;
+      }
+      result.ptyOk = (screen.match(new RegExp(token, 'g')) || []).length >= 2;
+    } catch (pe) {
+      result.ptyError = String((pe as Error).message || pe);
     }
 
     const png = await w.webContents.capturePage();

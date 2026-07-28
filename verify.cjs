@@ -1516,6 +1516,14 @@ check('electron', PORT_GROUPS, async ({ t }) => {
     !!json && json.browserRefs >= 2, json && json.browserRefs);
   t('a snapshotted element was clickable through the CLI path',
     !!json && json.browserClicked === true, json && json.browserError);
+
+  // node-pty under Electron's ABI (#209): the smoke run drove the real terminal —
+  // a live node-pty shell — to run `echo <token>` and read the marker back off the
+  // screen. If node-pty's N-API prebuild had failed to load under Electron, the
+  // app would have crashed on boot; this proves the native module loads AND spawns
+  // a working shell in the packaged desktop face, not just in plain Node.
+  t('a real node-pty shell ran a command under Electron', !!json && json.ptyOk === true,
+    json && (json.ptyError || 'ptyOk=' + (json && json.ptyOk)));
 });
 
 // --- cli: the `winmux` command-line drives the live app -------------------

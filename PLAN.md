@@ -1050,7 +1050,7 @@ Data integrity (a crash must not corrupt state):
 15. **Config migration** — an update that changes saved-layout format migrates old state, doesn't throw.
 
 Robustness on machines that aren't ours (the clean-install reality):
-16. **node-pty native-module trap** — the compiled binary is tied to the Electron/Node version; the #1 way an Electron terminal breaks on someone else's machine. Handle in the build deliberately.
+16. **node-pty native-module trap** — the compiled binary is tied to the Electron/Node version; the #1 way an Electron terminal breaks on someone else's machine. **Resolved for runtime (2026-07-28, #209):** node-pty 1.x ships **N-API prebuilds** (`prebuilds/win32-x64/…`) that are ABI-stable across Node *and* Electron, so no `electron-rebuild` is needed — proven by the electron smoke test now running a real `echo` through a live node-pty shell under Electron end-to-end (`ptyOk`). **Remaining for Phase 12 (packaging):** electron-builder must `asarUnpack` `node_modules/node-pty/prebuilds/**` (and `build/Release/*.node` if present) so the `.node` binary is loadable from outside the asar in the installed app; add a clean-VM install test when packaging lands.
 17. **Shell/environment variety** — pwsh vs Windows PowerShell vs cmd vs WSL vs Git Bash, non-ASCII paths (Windows+PS+Unicode is a landmine), multi-monitor, DPI scaling.
 18. **Reconnect across real life** — laptop sleep/wake, wifi→cellular on phone, Tailscale re-auth; back off politely, just recover.
 
