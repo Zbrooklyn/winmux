@@ -650,6 +650,43 @@ The three faces, the CLI, the browser panel, and the markdown viewer are done an
 proven (Phases 1–10). What remains to reach a public v1.0 launch, and one thing
 beyond it:
 
+### Design law & north-star — calm surface, powerful underneath (Edward, 2026-07-28)
+
+**This governs every feature decision from here on.** Edward's call, locked.
+
+**The law:** the UI stays exactly as calm and polished as it looks today. *The polish is
+the adoption moat* — the market is full of dev tools that vomit panels, gauges, and graphs;
+a terminal that stays quiet and just works is the rare one everyone wants to adopt. A
+cluttered cockpit is the amateur floor, not the ceiling. **Adding power must not add
+surface.** Any feature that needs new chrome ships as *summoned / progressive*, never as
+default weight.
+
+**The north-star:** WinMux is not just a terminal — its parts (Claude-transcript reader,
+fleet view, browser control, scriptable CLI, phone cockpit over Tailscale) already sketch a
+**calm agent-operations control plane**: one place to watch, drive, and hand off a fleet of
+AI agents across every device you own. The ambition above launch-ready is to *become* that —
+without the surface ever getting busier.
+
+**How power is added without clutter (the four mechanisms):**
+1. **Existing rows carry state.** The sidebar (groups → sessions) already *is* the fleet
+   tree. A running agent just gives its existing row a quiet status dot — working /
+   waiting-for-you / done / errored. "Watch the fleet" = zero new UI.
+2. **Attention comes to you; you don't go looking.** No monitoring dashboard. When an agent
+   needs you, one calm notification reaches whatever device you're on; otherwise, silence.
+3. **The command layer is the invisible control plane.** The `winmux` CLI drives sessions
+   with commands, not buttons — automation and orchestration live in a keystroke, no chrome.
+4. **Progressive disclosure.** The default stays one calm terminal; deeper powers reveal only
+   when summoned (palette, shortcut, phone long-press). The 90% never meets the 10%.
+
+**The one named tradeoff:** a few ambitions genuinely want more surface (e.g. a "watch six
+agents side by side" grid on a big monitor). That is the only place the law and a capability
+pull apart — and it ships as an **opt-in view you summon, never the default**, decided
+deliberately by Edward. Everything else on the ceiling costs zero clutter.
+
+**The test every future feature must pass:** *does this add power without adding surface?*
+If it needs new default chrome, it's wrong — make it summoned, put it on a row that already
+exists, route it through attention, or push it into the command layer.
+
 ### Production-readiness checklist (Edward + Claude, 2026-07-28)
 
 The spine for a terminal: **it never loses my work · it's always honestly there · it
