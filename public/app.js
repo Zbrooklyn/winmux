@@ -65,7 +65,7 @@
     theme: 'system', palette: 'aurora', fontFamily: 'Cascadia Code', fontSize: 13, lineHeight: 1.2,
     cursorStyle: 'block', cursorBlink: true, scrollback: 5000,
     copyOnSelect: false, rightClickPaste: false, confirmClose: true,
-    defaultShell: '', startFolder: '',
+    defaultShell: '', startFolder: '', gpuRenderer: false,
   };
   var S = (function () {
     var s = {};
@@ -1051,6 +1051,17 @@
     var search = new SearchAddon.SearchAddon();
     term.loadAddon(search);
     term.open(host);
+    // GPU renderer — the big win on fast output (10 streaming agents lag the DOM
+    // renderer badly, measured). Load AFTER open(); fall back to the DOM renderer
+    // if a WebGL context can't be created (headless/remote/GPU-less). The buffer
+    // API (read-screen, serializeTerm) is renderer-independent, so nothing else moves.
+    try {
+      if (window.WebglAddon && S.gpuRenderer) {
+        var webgl = new WebglAddon.WebglAddon();
+        webgl.onContextLoss(function () { try { webgl.dispose(); } catch (e) {} });
+        term.loadAddon(webgl);
+      }
+    } catch (e) { /* DOM renderer stays — perfectly fine, just slower */ }
     host.addEventListener('contextmenu', function (e) {
       e.preventDefault();
       focusPane(t.paneId);
