@@ -644,6 +644,55 @@ Deferred to later phases: agent integration — Claude Code hooks, fleet/transcr
 shell-integration cwd/git (Phase 11); OSS distribution — installer, auto-update, winget,
 LICENSE, public repo (Phase 12); launch hardening (Phase 13).
 
+## Upcoming phases (roadmap — not yet built)
+
+The three faces, the CLI, the browser panel, and the markdown viewer are done and
+proven (Phases 1–10). What remains to reach a public v1.0 launch, and one thing
+beyond it:
+
+### Phase 11 — Agent integration
+Claude Code hooks, a live fleet/transcript view, and shell integration that keeps the
+prompt's cwd and git branch current. This is what makes WinMux an *agent* cockpit,
+not just a terminal.
+
+### Phase 12 — OSS distribution + a production-grade GitHub presence
+Two halves. The **packaging** half: a Windows installer, auto-update, a winget entry,
+LICENSE (MIT), and flipping the repo public. The **presentation** half — the repo has
+to read like a finished product the moment a stranger lands on it, because for OSS the
+README *is* the storefront:
+
+- A README written as a shipped product, not a dev log: what it is in one line, a
+  hero shot, install in one command, the phone/Tailscale story, the CLI, and the
+  agent angle.
+- **A full screenshot gallery, captured at real fidelity, covering every face and state:**
+  - **Desktop app** (Electron) — the cockpit with live terminals, split panes, the
+    group sidebar.
+  - **Mobile / phone** — the drill-in flow (groups → sessions → terminal) over the
+    Tailscale link.
+  - **Light mode and dark mode** — every headline shot in both themes; the app
+    follows the device, and the README should prove it.
+  - **The CLI** — a real capture of `winmux` driving the live app (list / send /
+    read-screen / new-tab).
+  - **The browser panel** — the Electron `<webview>` open and being scripted.
+  - **The markdown viewer** — a file open and live-updating.
+  - **The phone-connect flow** — the QR code and the keyed Tailscale link in Settings.
+- Every shot must be of the real running product (no mockups), scrubbed of any live
+  access key, and shown as if this were a mature, finished tool.
+
+### Phase 13 — Launch hardening
+Clear every known glitch (including the two tracked harness flakes, #180), prove a
+clean-machine install, and confirm every claimed state holds. This is the pass that
+takes it from "works for us" to "safe to put our name on in public."
+
+### Phase 14 — Android companion app (post-v1.0, "eventually")
+A native Android APK that is the phone face as a real installable app instead of a
+browser tab. You connect by **pasting the Tailscale link** — or **scanning the QR
+code** the desktop already generates — and it opens the full WinMux phone experience
+(groups, sessions, live terminals) natively, with the connection remembered so it
+reconnects on its own. This is a separate product surface beyond the v1.0 launch, not
+a blocker for it; it reuses the existing phone server and trusted-device model, so no
+new backend is required — the app is a native client over the same door.
+
 ## Risks
 
 - Scope drift back into the agent-cockpit demo (medium) — containment: this file is the scope; anything not listed above is a new decision.
