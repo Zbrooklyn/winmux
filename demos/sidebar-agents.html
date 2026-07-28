@@ -103,6 +103,33 @@
   .qrb.y{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,var(--border))}
   .qrb.y:hover{background:color-mix(in srgb,var(--ok) 18%,transparent)}
   .qrb.n:hover{background:color-mix(in srgb,var(--text) 10%,transparent);color:var(--text)}
+  /* #5 informative hover — a fixed popover to the right of the sidebar (escapes overflow) */
+  .srow .qr{display:none}
+  .peekpop{position:fixed;z-index:60;width:306px;background:var(--bg1);border:1px solid var(--border-s);border-radius:11px;box-shadow:0 18px 50px rgba(0,0,0,.55);padding:13px 14px 14px;display:none}
+  .peekpop.on{display:block}
+  .peekpop .ph{display:flex;align-items:center;gap:8px}
+  .peekpop .pn{font-family:var(--mono);font-size:13px;font-weight:600;flex:1}
+  .peekpop .pill{font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;padding:2px 7px;border-radius:5px}
+  .peekpop .pill.need{color:var(--err);background:color-mix(in srgb,var(--err) 16%,transparent)}
+  .peekpop .pill.work{color:var(--work);background:color-mix(in srgb,var(--work) 15%,transparent)}
+  .peekpop .pill.idle{color:var(--muted);background:color-mix(in srgb,var(--text) 8%,transparent)}
+  .peekpop .pproj{font-size:11.5px;color:var(--faint);margin-top:5px}
+  .peekpop .prule{height:1px;background:var(--border);margin:11px 0}
+  .peekpop .pask{font-size:12.5px;line-height:1.5;color:var(--text)}
+  .peekpop .pask.hot{color:#f2b0b3}
+  .peekpop .plabel{font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:12px 0 5px}
+  .peekpop .otail{background:var(--bg0);border:1px solid var(--border);border-radius:7px;padding:8px 9px;font-family:var(--mono);font-size:10.5px;line-height:1.6;color:var(--faint);white-space:pre-wrap}
+  .peekpop .otail b{color:var(--muted);font-weight:400}.peekpop .otail .q{color:#f2b0b3}
+  .peekpop .pmeta{display:flex;gap:10px;font-size:11px;color:var(--faint);margin-top:11px;font-variant-numeric:tabular-nums}
+  .peekpop .pmeta .mk{color:var(--muted)}
+  .peekpop .pbar{height:4px;border-radius:2px;background:var(--bg3);overflow:hidden;margin-top:11px}
+  .peekpop .pbar i{display:block;height:100%;background:var(--work)}
+  .peekpop .acts{display:flex;gap:8px;margin-top:13px}
+  .peekpop .abtn{flex:1;font:inherit;font-size:12px;font-weight:600;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
+  .peekpop .abtn:hover{background:color-mix(in srgb,var(--text) 9%,transparent);color:var(--text)}
+  .peekpop .abtn.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,var(--border))}
+  .peekpop .abtn.ok:hover{background:color-mix(in srgb,var(--ok) 16%,transparent)}
+  .peekpop .abtn .kk{font-family:var(--mono);font-size:10px;opacity:.7}
 
   .sx-foot{flex:0 0 auto;display:flex;align-items:center;gap:4px;padding:8px 10px;border-top:1px solid var(--border);justify-content:space-between}
 
@@ -268,6 +295,8 @@
   <div class="workspace"><span class="ws-hint">winmux · Claude Code — verify.cjs running…</span></div>
 </div>
 
+<div id="peek" class="peekpop" aria-hidden="true"></div>
+
 <script>
   var list = document.getElementById('list');
 
@@ -377,6 +406,58 @@
   }
   seg.addEventListener('click', function(e){ var b = e.target.closest('button'); if (b) apply(b.dataset.mode); });
   apply('attn');
+
+  // #5 — informative hover: a fixed popover to the right of the sidebar.
+  (function(){
+    var peek = document.getElementById('peek');
+    var sidebar = document.querySelector('.sessions');
+    var hideT;
+    var EX = {
+      'steady-imports|Claude Code': {ask:'Apply 3 pending migrations to the <b>production</b> Supabase database (add_orders_index, backfill_status, drop_legacy_cols)? This can’t be undone automatically.', lines:'<b>$ supabase db push</b>\nConnecting to project prod-xyz…\n3 migrations pending.\n<span class="q">Continue? (y/n)</span> ▋'},
+      'bbw-klaviyo|Codex': {ask:'Overwrite <b>flows/welcome-series.liquid</b>? Your local copy has uncommitted edits that would be lost.', lines:'Editing flows/welcome-series.liquid\n! working tree has changes\n<span class="q">Overwrite? (y/n)</span> ▋'},
+      'winmux|Claude Code': {activity:'Running the verification harness — 142 of 201 checks passed so far.', lines:'<b>&gt; node verify.cjs</b>\nPASS  colour (:9912)\nPASS  survive (:9916)\n142 / 201 checks passed…', prog:70},
+      'amud-aleph-site|Claude Code': {activity:'Reading the project brief before starting.', lines:'<b>$ claude</b>\nReading MASTER-BRIEF.md…'}
+    };
+    function stateOf(row){ var d=row.querySelector('.dot'); return d.classList.contains('needsyou')?'need':(d.classList.contains('working')?'work':'idle'); }
+    function build(row){
+      var name=row.querySelector('.sname').textContent.trim();
+      var grp=row.closest('.grp').querySelector('.pname').textContent.trim();
+      var ageEl=row.querySelector('.sage'); var age=ageEl?ageEl.textContent:'';
+      var st=stateOf(row), ex=EX[grp+'|'+name]||{};
+      var pill=st==='need'?'<span class="pill need">Needs you</span>':(st==='work'?'<span class="pill work">Working</span>':'<span class="pill idle">Idle</span>');
+      var body=st==='need'?'<div class="pask hot">'+(ex.ask||'Waiting for your input.')+'</div>':'<div class="pask">'+(ex.activity||(st==='work'?'Working…':'No command running.'))+'</div>';
+      var tail=ex.lines?'<div class="plabel">Last output</div><div class="otail">'+ex.lines+'</div>':'';
+      var bar=(st==='work'&&ex.prog)?'<div class="pbar"><i style="width:'+ex.prog+'%"></i></div>':'';
+      var meta='<div class="pmeta"><span><span class="mk">'+(st==='need'?'waiting':st==='work'?'running':'idle')+'</span> '+age+'</span></div>';
+      var acts=st==='need'
+        ?'<div class="acts"><button class="abtn ok" data-a="y">Approve <span class="kk">y</span></button><button class="abtn" data-a="n">Deny <span class="kk">n</span></button><button class="abtn">Open</button></div>'
+        :'<div class="acts"><button class="abtn" style="flex:1">Open terminal</button></div>';
+      peek.innerHTML='<div class="ph"><span class="pn">'+name+'</span>'+pill+'</div><div class="pproj">'+grp+'</div><div class="prule"></div>'+body+tail+bar+meta+acts;
+      peek.querySelectorAll('.abtn[data-a]').forEach(function(b){
+        b.addEventListener('click', function(){
+          var yes=b.dataset.a==='y';
+          row.querySelector('.dot').className='dot working';
+          var stt=row.querySelector('.sstat'); stt.className='sstat work'; stt.innerHTML=yes?'Resuming — applied':'Resuming — skipped';
+          if(ageEl) ageEl.textContent='now';
+          row.removeAttribute('data-need'); hide();
+        });
+      });
+    }
+    function show(row){
+      clearTimeout(hideT); build(row);
+      var sb=sidebar.getBoundingClientRect(), rr=row.getBoundingClientRect();
+      peek.style.left=(sb.right+10)+'px'; peek.classList.add('on');
+      var top=Math.min(rr.top-8, window.innerHeight-peek.offsetHeight-12);
+      peek.style.top=Math.max(10, top)+'px';
+    }
+    function hide(){ peek.classList.remove('on'); }
+    document.querySelectorAll('.srow').forEach(function(row){
+      row.addEventListener('mouseenter', function(){ show(row); });
+      row.addEventListener('mouseleave', function(){ hideT=setTimeout(hide, 150); });
+    });
+    peek.addEventListener('mouseenter', function(){ clearTimeout(hideT); });
+    peek.addEventListener('mouseleave', hide);
+  })();
 </script>
 </body>
 </html>
