@@ -744,6 +744,66 @@ integration, hyperlinks, config) — but do NOT try to out-Warp Warp on autocomp
 Kitty on images. Our win is being the only terminal that is remote-first and agent-native. Table
 stakes to earn credibility; differentiators to earn adoption.
 
+## Workspaces & Project Groups — the feature plan (2026-07-28)
+
+The least-specified part of the product, planned properly. Governed by the design law (calm
+surface — this lives in the sidebar + save/load popover + CLI, no new panels) and the authority
+split (storage/format/CLI = backend/pre-approved; new save/load UI = Edward-gated).
+
+### Concept model (three nouns, kept clean)
+- **Session** — one terminal: a shell, a cwd, an optional running program, a name.
+- **Project (Group)** — a named set of sessions tied to a working context (a repo/folder), with
+  identity (name, colour, optional icon).
+- **Workspace** — a saved *configuration*: a set of projects + their sessions + pane layout +
+  each session's cwd/shell/startup command. The thing you name, save, load, share, and version.
+
+### Current state (grounded in code) — works, but browser-local
+Real and working: groups (create/switch), named layouts (save/load, up to 20, as templates),
+live-reattach on reload. **But storage is all `localStorage`, not files:** `ct-groups` (the group
+structure + active), `ct-layouts` (named configs), `ct-live` (working state w/ session ids),
+`ct-settings`. Consequences: **per-device (no sync)**, not versionable/shareable/backup-able,
+fragile (a cache-clear wipes it), invisible (no file to edit), and **two disconnected systems**
+(GUI localStorage layouts vs the new `winmux open <file.json>`).
+
+### The foundation decision — config-as-code (files as source of truth)
+Make a **workspace a real file** (JSON, human-readable). That single change fixes sync (a synced
+folder → the phone sees it), versioning, sharing, and backup at once, and **unifies the two
+systems**: the same file the GUI save/load reads/writes is the one `winmux open` consumes.
+`localStorage` demotes to a cache of recent state, not the system of record.
+
+### Feature set (organized; [B]=backend/pre-approved, [G]=gated/renders)
+- **A. Storage & source of truth:** workspace files (JSON) as SoT [B]; localStorage as cache [B];
+  import/export [B]; migrate existing localStorage groups/layouts into files on first run [B].
+- **B. Project (group) management:** create / rename / delete / reorder [G]; identity — name,
+  colour, optional icon, root folder [G]; group actions — open-all / close-all / duplicate /
+  archive (hide without deleting) [G]; move a session between groups [G].
+- **C. Sessions in a group:** per session — shell, cwd, startup command, name [B/G]; pane layout
+  (splits) saved with the group [B]; reorder [G].
+- **D. Workspace configurations:** save current arrangement as a named workspace [B+G]; load /
+  switch workspace [G]; set a default/startup workspace [B]; update/overwrite an existing one [B];
+  the switch lives in the existing save/load popover + command palette, not a new panel.
+- **E. Templates & workspaces-as-code:** hand-writable/versionable workspace file (DONE via
+  `winmux open`) [B]; the GUI writes the SAME format [B]; optional variables (e.g. `${repo}`) [B].
+- **F. Sync & sharing:** files in a synced folder → cross-device [B]; share a workspace with a
+  teammate [B]; per-machine path handling so a shared/synced workspace still opens when folders
+  differ across machines [B].
+- **G. Lifecycle & restore:** auto-restore last workspace (or ask) on launch [B+G]; live-reattach
+  to running sessions (DONE via `ct-live`) [B]; survive a full close (ties to the detached-server
+  fix) [B]; reopen-closed-session (LRU exists) [B].
+- **H. Cockpit integration:** a group is a unit of agent work — group-level rollup (session count,
+  how many need you) rides the existing sidebar row [G]; feeds the attention bus [B].
+
+### Owner decisions (genuinely Edward's — do not decide silently)
+1. **Flat vs nested groups?** Flat keeps the sidebar calm (recommend flat + archive); nesting adds
+   power but weight.
+2. **Where do workspace files live?** `~/.winmux/workspaces/` (tidy, per-user) · project-local
+   (`.winmux/` in a repo, versions with the code) · a user-chosen folder (Dropbox for auto-sync).
+   Recommend: default `~/.winmux/workspaces/`, allow a user-set synced folder.
+3. **Per-machine paths** on a synced/shared workspace: relative paths · `${VARS}` · per-machine
+   overrides. Recommend: relative-to-a-declared-root + a small per-machine override map.
+4. **Unify now or later?** Fold the GUI localStorage layouts into the file format now (one system),
+   or ship files alongside and migrate later. Recommend: unify — two systems is the current bug.
+
 ## Upcoming phases (roadmap — not yet built)
 
 The three faces, the CLI, the browser panel, and the markdown viewer are done and
