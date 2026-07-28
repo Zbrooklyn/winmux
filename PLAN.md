@@ -644,6 +644,29 @@ Deferred to later phases: agent integration — Claude Code hooks, fleet/transcr
 shell-integration cwd/git (Phase 11); OSS distribution — installer, auto-update, winget,
 LICENSE, public repo (Phase 12); launch hardening (Phase 13).
 
+### Phase 10 extensions — deepen the two surfaces (decided 2026-07-28)
+
+**Browser automation verbs — pre-approved backend, essentially free.** WinMux uses Electron's
+native `<webview>`, NOT Playwright — deliberately: real Playwright would bundle a second
+Chromium (~150 MB) plus a heavy automation dep on top of the Electron we already ship. The
+webview already exposes `executeJavaScript()` (that's how `snapshot`/`click` work), so these
+add **zero new dependencies, ~0 bundle size, no new process** — a few dozen lines riding the
+browser we already ship. The cost is Electron, and it's already paid. Verbs to add:
+- **`type` / `fill`** — enter text into a field (today you can click but not type).
+- **`get-text`** — read/scrape the page's visible text (big for an agent reading a page).
+- **`eval`** — run a JS snippet in the page.
+- **`wait`** — wait for a selector before acting.
+
+These turn the panel from "click things" into a genuinely agent-drivable browser — wmux's one
+Electron-hard feature, deepened. All backend → pre-approved to build under the authority split.
+
+**Markdown reader richness — Edward-gated (it renders).** The viewer works (subset render +
+1.5s live-update). Improvements that would complete it: **tables**, **clickable links** (a link
+could open in the browser panel — a nice tie-in), **images**, **syntax-highlighted code**, and
+**scroll-position preservation on live-update** (no jump). These change what renders and carry
+taste (how tables/links look), so per the authority split they are Edward's gate: Claude builds
+the parser/`/api/md` side freely and brings the visual for Edward's eye before shipping.
+
 ## Upcoming phases (roadmap — not yet built)
 
 The three faces, the CLI, the browser panel, and the markdown viewer are done and
