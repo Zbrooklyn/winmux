@@ -731,6 +731,20 @@ Clear every known glitch (including the two tracked harness flakes, #180), prove
 clean-machine install, and confirm every claimed state holds. This is the pass that
 takes it from "works for us" to "safe to put our name on in public."
 
+**Instant-feel / connection latency (Edward flagged 2026-07-28: sometimes a visible
+"loading" beat).** "Instant" is part of feeling finished — a connect flicker reads as
+unpolished. Do this by measurement, not guesswork (measure-before-optimizing): instrument
+the real connect path — click → websocket open → the shell's first byte → first xterm paint
+— and find which segment actually costs the time. Likely suspects, in order: (1) **PowerShell
+cold-start** (loading the user profile/modules on a fresh `node-pty` spawn — usually the
+biggest cost), (2) per-terminal socket handshake + xterm mount, (3) Tailscale round-trip on
+the phone, (4) the reconnect grace window looking like "loading" when it is actually the
+safety net. Fixes to weigh once measured: **pre-warm a spare PowerShell** so a new tab
+attaches to an already-ready shell instead of cold-starting; an **instant skeleton/cursor**
+so the unavoidable milliseconds never *feel* like waiting; trim any redundant handshake
+round-trips. Target: a new tab and a reconnect both feel immediate on desktop, and as close
+as the network allows on the phone.
+
 ### Phase 14 — Android companion app (post-v1.0, "eventually")
 A native Android APK that is the phone face as a real installable app instead of a
 browser tab. You connect by **pasting the Tailscale link** — or **scanning the QR
