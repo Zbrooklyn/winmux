@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WinMux — Sidebar with agents (demo)</title>
+<style>
+  /* ---- exact tokens from cockpit.css (dark) ---- */
+  :root{
+    --bg0:#1e1e1e; --bg1:#262626; --bg2:#2d2d2d; --bg3:#333; --border:#363636; --border-s:#4a4a4a;
+    --text:#dadada; --muted:#a8a8a8; --faint:#6b6b6b;
+    --accent:#8a5cf5; --accent-soft:rgba(138,92,245,.16);
+    --ok:#44cf6e; --work:#e9973f; --err:#fb464c; --idle:#6b6b6b; --term-bg:#1a1a1a;
+    --mono:"Cascadia Code","Cascadia Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg0);color:var(--text);font-family:'Inter',system-ui,'Segoe UI',Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;font-size:13px;overflow:hidden}
+  .mono{font-family:var(--mono)}
+  svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .app{display:flex;height:100vh}
+
+  /* ---- sidebar (verbatim cockpit.css + index.html overrides) ---- */
+  .sessions{width:264px;background:var(--bg1);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;flex:0 0 auto}
+  .sx-head{flex:0 0 auto;display:flex;align-items:center;gap:6px;height:40px;padding:0 8px 0 14px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);background:var(--bg1);border-bottom:1px solid var(--border)}
+  .sx-head .n{margin-left:auto}
+  .sxsp{flex:1}
+  .sxbtn{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:var(--faint);cursor:pointer}
+  .sxbtn:hover{background:color-mix(in srgb,var(--text) 8%,transparent);color:var(--text)}
+  .sxbtn svg{width:16px;height:16px}
+
+  /* deck — flattened desktop treatment from index.html override */
+  .sx-deck{display:flex;gap:0;padding:6px 14px 12px}
+  .stat{flex:1;text-align:center;background:transparent;border:none;border-radius:0;padding:0}
+  .stat + .stat{border-left:1px solid var(--border)}
+  .stat .v{font-size:18px;font-weight:680;line-height:1}
+  .stat .l{font-size:9.5px;color:var(--faint);margin-top:3px;text-transform:uppercase;letter-spacing:.05em}
+  .stat.work .v{color:var(--work)}.stat.need .v{color:var(--err)}.stat.idle .v{color:var(--muted)}
+  .stat[data-zero] .v{color:var(--faint)}
+
+  .sx-list{flex:1;overflow-y:auto}
+
+  /* group row */
+  .prow{position:relative;display:flex;align-items:center;gap:12px;padding:15px 12px 15px 14px;cursor:pointer;border-left:3px solid transparent;border-bottom:1px solid color-mix(in srgb,var(--border) 45%,transparent)}
+  .prow:hover{background:color-mix(in srgb,var(--text) 5%,transparent)}
+  .prow[data-active]{background:var(--accent-soft);border-left-color:transparent}
+  .prow .pfolder{width:34px;height:34px;border-radius:9px;background:var(--bg2);display:flex;align-items:center;justify-content:center;color:var(--muted);flex:0 0 auto;position:relative}
+  .prow[data-active] .pfolder{background:color-mix(in srgb,var(--accent) 22%,transparent);color:var(--accent)}
+  .prow .pfolder svg{width:18px;height:18px;stroke-width:1.8}
+  .prow .pfolder .pdot{position:absolute;top:-3px;right:-3px;width:10px;height:10px;border-radius:50%;border:2px solid transparent}
+  .prow .pinfo{flex:1;min-width:0}
+  .prow .pname{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .prow .psub{font-size:12px;color:var(--faint);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .prow .psub .hot{color:var(--err);font-weight:600}
+  .prow .ptrail{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+  .prow .pexpand{display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;cursor:pointer;color:var(--faint);transition:background .12s,color .12s}
+  .prow .pexpand svg{width:16px;height:16px;transition:transform .14s ease}
+  .prow .pexpand:hover{background:color-mix(in srgb,var(--text) 9%,transparent);color:var(--text)}
+  .prow .pexpand[data-open2] svg{transform:rotate(90deg)}
+
+  /* session rows inside an expanded group */
+  .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .dot.working{background:var(--work);box-shadow:0 0 0 3px color-mix(in srgb,var(--work) 20%,transparent);animation:pulse 1.6s ease-in-out infinite}
+  .dot.needsyou{background:var(--err)} .dot.idle{background:var(--idle)}
+  @keyframes pulse{50%{opacity:.4}} @media (prefers-reduced-motion:reduce){.dot{animation:none}}
+  .srow{display:flex;gap:9px;padding:9px 12px 10px 24px;cursor:pointer;border-left:3px solid transparent;border-bottom:1px solid color-mix(in srgb,var(--border) 35%,transparent)}
+  .srow:hover{background:color-mix(in srgb,var(--text) 5%,transparent)}
+  .srow[data-active]{background:var(--accent-soft);border-left-color:var(--accent)}
+  .srow>.dot{margin-top:5px}
+  .srow .sinfo{flex:1;min-width:0}
+  .srow .srtop{display:flex;align-items:center;gap:7px}
+  .srow .sname{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+  .srow .sstat{font-size:11.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .srow .sstat.hot{color:var(--err)} .srow .sstat.work{color:var(--work)} .srow .sstat.mut{color:var(--muted)}
+  .srow .sstat .m2{color:var(--faint)}
+  .srow .sbar{height:3px;border-radius:2px;background:var(--bg3);overflow:hidden;margin-top:7px;max-width:82%}
+  .srow .sbar i{display:block;height:100%;background:var(--work)}
+
+  .sx-foot{flex:0 0 auto;display:flex;align-items:center;gap:4px;padding:8px 10px;border-top:1px solid var(--border);justify-content:space-between}
+
+  /* faint workspace to the right, so the sidebar reads in-context */
+  .workspace{flex:1;background:var(--bg0);display:flex;align-items:center;justify-content:center}
+  .ws-hint{font-family:var(--mono);font-size:12px;color:#333}
+
+  ::-webkit-scrollbar{width:11px}::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--text) 12%,transparent);border-radius:8px;border:3px solid transparent;background-clip:padding-box}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sessions" aria-label="Groups">
+    <div class="sx-head">
+      <span>Groups</span><span class="n">5</span><span class="sxsp"></span>
+      <span class="sxbtn" title="Command palette"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></span>
+      <span class="sxbtn" title="Notifications"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></span>
+    </div>
+
+    <div class="sx-deck">
+      <div class="stat work"><div class="v">3</div><div class="l">Working</div></div>
+      <div class="stat need"><div class="v">1</div><div class="l">Needs you</div></div>
+      <div class="stat idle"><div class="v">4</div><div class="l">Idle</div></div>
+    </div>
+
+    <div class="sx-list">
+
+      <!-- winmux: active + expanded -->
+      <div class="prow" data-active>
+        <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--work)"></span></span>
+        <div class="pinfo"><div class="pname">winmux</div><div class="psub">2 sessions · 1 working</div></div>
+        <span class="ptrail"><span class="pexpand" data-open2 title="Hide sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
+      </div>
+      <div class="skids">
+        <div class="srow" data-active>
+          <span class="dot working"></span>
+          <div class="sinfo">
+            <div class="srtop"><span class="sname mono">Claude Code</span></div>
+            <div class="sstat work">Working · <span class="m2">winmux</span></div>
+            <div class="sbar"><i style="width:70%"></i></div>
+          </div>
+        </div>
+        <div class="srow">
+          <span class="dot idle"></span>
+          <div class="sinfo">
+            <div class="srtop"><span class="sname mono">pwsh</span></div>
+            <div class="sstat mut">Idle · <span class="m2">winmux</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- steady-imports: expanded, has a blocked agent -->
+      <div class="prow">
+        <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--err)"></span></span>
+        <div class="pinfo"><div class="pname">steady-imports</div><div class="psub"><span class="hot">1 needs you</span></div></div>
+        <span class="ptrail"><span class="pexpand" data-open2 title="Hide sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
+      </div>
+      <div class="skids">
+        <div class="srow">
+          <span class="dot needsyou"></span>
+          <div class="sinfo">
+            <div class="srtop"><span class="sname mono">Claude Code</span></div>
+            <div class="sstat hot">Needs you · <span class="m2">steady-imports</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- bbw-klaviyo: collapsed, working -->
+      <div class="prow">
+        <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--work)"></span></span>
+        <div class="pinfo"><div class="pname">bbw-klaviyo</div><div class="psub">2 sessions · 1 working</div></div>
+        <span class="ptrail"><span class="pexpand" title="Show sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
+      </div>
+
+      <!-- amud-aleph-site: collapsed, working -->
+      <div class="prow">
+        <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--work)"></span></span>
+        <div class="pinfo"><div class="pname">amud-aleph-site</div><div class="psub">1 session · 1 working</div></div>
+        <span class="ptrail"><span class="pexpand" title="Show sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
+      </div>
+
+      <!-- chatmail: collapsed, idle (no dot) -->
+      <div class="prow">
+        <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:transparent"></span></span>
+        <div class="pinfo"><div class="pname">chatmail</div><div class="psub">2 sessions · idle</div></div>
+        <span class="ptrail"><span class="pexpand" title="Show sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
+      </div>
+
+    </div>
+
+    <div class="sx-foot">
+      <span class="sxbtn" title="New terminal"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>
+      <span class="sxbtn" title="New group"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><path d="M12 10v6M9 13h6"/></svg></span>
+      <span class="sxbtn" title="Save layout"><svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg></span>
+      <span class="sxbtn" title="Load layout"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg></span>
+      <span class="sxbtn" title="Keyboard shortcuts"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 015.8 1c0 2-3 2.5-3 2.5"/><path d="M12 17h.01"/></svg></span>
+      <span class="sxbtn" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg></span>
+    </div>
+  </aside>
+
+  <div class="workspace"><span class="ws-hint">winmux · Claude Code — verify.cjs running…</span></div>
+</div>
+</body>
+</html>
