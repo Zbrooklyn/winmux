@@ -29,7 +29,7 @@ async function createWindow(): Promise<void> {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webviewTag: false,
+      webviewTag: true,          // the browser panel (Phase 10) is a <webview>
     },
   });
   await win.loadURL('http://127.0.0.1:' + port + '/');
