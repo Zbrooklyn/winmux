@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WinMux — Sidebar with agents (demo)</title>
+<title>WinMux — Sidebar with agents (interactive demo)</title>
 <style>
   /* ---- exact tokens from cockpit.css (dark) ---- */
   :root{
@@ -59,6 +59,10 @@
   .prow .pexpand:hover{background:color-mix(in srgb,var(--text) 9%,transparent);color:var(--text)}
   .prow .pexpand[data-open2] svg{transform:rotate(90deg)}
 
+  /* expand/collapse */
+  .skids{display:none}
+  .skids.open{display:block}
+
   /* session rows inside an expanded group */
   .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
   .dot.working{background:var(--work);box-shadow:0 0 0 3px color-mix(in srgb,var(--work) 20%,transparent);animation:pulse 1.6s ease-in-out infinite}
@@ -109,7 +113,7 @@
         <div class="pinfo"><div class="pname">winmux</div><div class="psub">2 sessions · 1 working</div></div>
         <span class="ptrail"><span class="pexpand" data-open2 title="Hide sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
       </div>
-      <div class="skids">
+      <div class="skids open">
         <div class="srow" data-active>
           <span class="dot working"></span>
           <div class="sinfo">
@@ -133,7 +137,7 @@
         <div class="pinfo"><div class="pname">steady-imports</div><div class="psub"><span class="hot">1 needs you</span></div></div>
         <span class="ptrail"><span class="pexpand" data-open2 title="Hide sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
       </div>
-      <div class="skids">
+      <div class="skids open">
         <div class="srow">
           <span class="dot needsyou"></span>
           <div class="sinfo">
@@ -149,6 +153,23 @@
         <div class="pinfo"><div class="pname">bbw-klaviyo</div><div class="psub">2 sessions · 1 working</div></div>
         <span class="ptrail"><span class="pexpand" title="Show sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
       </div>
+      <div class="skids">
+        <div class="srow">
+          <span class="dot working"></span>
+          <div class="sinfo">
+            <div class="srtop"><span class="sname mono">Codex</span></div>
+            <div class="sstat work">Working · <span class="m2">bbw-klaviyo</span></div>
+            <div class="sbar"><i style="width:45%"></i></div>
+          </div>
+        </div>
+        <div class="srow">
+          <span class="dot idle"></span>
+          <div class="sinfo">
+            <div class="srtop"><span class="sname mono">bash</span></div>
+            <div class="sstat mut">Idle · <span class="m2">bbw-klaviyo</span></div>
+          </div>
+        </div>
+      </div>
 
       <!-- amud-aleph-site: collapsed, working -->
       <div class="prow">
@@ -156,12 +177,38 @@
         <div class="pinfo"><div class="pname">amud-aleph-site</div><div class="psub">1 session · 1 working</div></div>
         <span class="ptrail"><span class="pexpand" title="Show sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
       </div>
+      <div class="skids">
+        <div class="srow">
+          <span class="dot working"></span>
+          <div class="sinfo">
+            <div class="srtop"><span class="sname mono">Claude Code</span></div>
+            <div class="sstat work">Working · <span class="m2">amud-aleph-site</span></div>
+            <div class="sbar"><i style="width:30%"></i></div>
+          </div>
+        </div>
+      </div>
 
       <!-- chatmail: collapsed, idle (no dot) -->
       <div class="prow">
         <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:transparent"></span></span>
         <div class="pinfo"><div class="pname">chatmail</div><div class="psub">2 sessions · idle</div></div>
         <span class="ptrail"><span class="pexpand" title="Show sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
+      </div>
+      <div class="skids">
+        <div class="srow">
+          <span class="dot idle"></span>
+          <div class="sinfo">
+            <div class="srtop"><span class="sname mono">Claude Code</span></div>
+            <div class="sstat mut">Idle · <span class="m2">chatmail</span></div>
+          </div>
+        </div>
+        <div class="srow">
+          <span class="dot idle"></span>
+          <div class="sinfo">
+            <div class="srtop"><span class="sname mono">pwsh</span></div>
+            <div class="sstat mut">Idle · <span class="m2">chatmail</span></div>
+          </div>
+        </div>
       </div>
 
     </div>
@@ -178,5 +225,42 @@
 
   <div class="workspace"><span class="ws-hint">winmux · Claude Code — verify.cjs running…</span></div>
 </div>
+
+<script>
+  // Chevron: expand / collapse a group's sessions in place (matches app.js data-expand).
+  document.querySelectorAll('.pexpand').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var kids = btn.closest('.prow').nextElementSibling; // the .skids
+      if (!kids || !kids.classList.contains('skids')) return;
+      var open = kids.classList.toggle('open');
+      if (open) { btn.setAttribute('data-open2', ''); btn.title = 'Hide sessions'; }
+      else { btn.removeAttribute('data-open2'); btn.title = 'Show sessions'; }
+    });
+  });
+
+  // Group row body: switch the active project (moves the soft-purple selection).
+  document.querySelectorAll('.prow').forEach(function (row) {
+    row.addEventListener('click', function () {
+      document.querySelectorAll('.prow[data-active]').forEach(function (r) { r.removeAttribute('data-active'); });
+      row.setAttribute('data-active', '');
+    });
+  });
+
+  // Session row: select it (and mark its project active).
+  document.querySelectorAll('.srow').forEach(function (s) {
+    s.addEventListener('click', function (e) {
+      e.stopPropagation();
+      document.querySelectorAll('.srow[data-active]').forEach(function (r) { r.removeAttribute('data-active'); });
+      s.setAttribute('data-active', '');
+      var kids = s.closest('.skids');
+      var prow = kids && kids.previousElementSibling;
+      if (prow && prow.classList.contains('prow')) {
+        document.querySelectorAll('.prow[data-active]').forEach(function (r) { r.removeAttribute('data-active'); });
+        prow.setAttribute('data-active', '');
+      }
+    });
+  });
+</script>
 </body>
 </html>
