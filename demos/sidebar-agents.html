@@ -104,9 +104,10 @@
   .qrb.y:hover{background:color-mix(in srgb,var(--ok) 18%,transparent)}
   .qrb.n:hover{background:color-mix(in srgb,var(--text) 10%,transparent);color:var(--text)}
   /* #5 informative hover — a fixed popover to the right of the sidebar (escapes overflow) */
-  .srow .qr{display:none}
-  .peekpop{position:fixed;z-index:60;width:306px;background:var(--bg1);border:1px solid var(--border-s);border-radius:11px;box-shadow:0 18px 50px rgba(0,0,0,.55);padding:13px 14px 14px;display:none}
-  .peekpop.on{display:block}
+  .srow .qr, .srow:hover .qr{display:none!important}  /* superseded by the peek card */
+  .peekpop{position:fixed;z-index:60;width:306px;background:var(--bg1);border:1px solid var(--border-s);border-radius:11px;box-shadow:0 18px 50px rgba(0,0,0,.55);padding:13px 14px 14px;visibility:hidden;opacity:0;transform:translateX(-6px);pointer-events:none;transition:opacity .13s ease,transform .13s ease,visibility 0s .13s}
+  .peekpop.on{visibility:visible;opacity:1;transform:none;pointer-events:auto;transition:opacity .13s ease,transform .13s ease}
+  @media (prefers-reduced-motion:reduce){.peekpop{transition:none}}
   .peekpop .ph{display:flex;align-items:center;gap:8px}
   .peekpop .pn{font-family:var(--mono);font-size:13px;font-weight:600;flex:1}
   .peekpop .pill{font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;padding:2px 7px;border-radius:5px}
@@ -384,6 +385,7 @@
     }
     row.classList.add('jfocus');
     row.scrollIntoView({ block: 'nearest' });
+    if (window.__peekShow) window.__peekShow(row);
   }
   document.addEventListener('keydown', function (e) {
     if ((e.key === 'j' || e.key === 'J') && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); nextBlocked(); }
@@ -443,20 +445,25 @@
         });
       });
     }
-    function show(row){
-      clearTimeout(hideT); build(row);
+    var showT;
+    function place(row){
       var sb=sidebar.getBoundingClientRect(), rr=row.getBoundingClientRect();
-      peek.style.left=(sb.right+10)+'px'; peek.classList.add('on');
+      peek.style.left=(sb.right+10)+'px';
       var top=Math.min(rr.top-8, window.innerHeight-peek.offsetHeight-12);
       peek.style.top=Math.max(10, top)+'px';
     }
-    function hide(){ peek.classList.remove('on'); }
+    function show(row){ clearTimeout(hideT); clearTimeout(showT); build(row); place(row); peek.classList.add('on'); }
+    function hide(){ clearTimeout(showT); peek.classList.remove('on'); }
     document.querySelectorAll('.srow').forEach(function(row){
-      row.addEventListener('mouseenter', function(){ show(row); });
-      row.addEventListener('mouseleave', function(){ hideT=setTimeout(hide, 150); });
+      // hover-intent: wait ~180ms so dragging across rows doesn't flicker
+      row.addEventListener('mouseenter', function(){ clearTimeout(hideT); clearTimeout(showT); showT=setTimeout(function(){ show(row); }, 180); });
+      row.addEventListener('mouseleave', function(){ clearTimeout(showT); hideT=setTimeout(hide, 150); });
     });
     peek.addEventListener('mouseenter', function(){ clearTimeout(hideT); });
     peek.addEventListener('mouseleave', hide);
+    document.addEventListener('keydown', function(e){ if(e.key==='Escape') hide(); });
+    // keyboard trigger: expose so the J-jump can open the peek on the focused agent
+    window.__peekShow=show; window.__peekHide=hide;
   })();
 </script>
 </body>
