@@ -572,6 +572,30 @@ function handle(req, res, viaPhone) {
     }));
     return;
   }
+
+  // The command channel for the `winmux` CLI. Desk-door only: the phone must
+  // never be able to drive the app. Forwards to a connected /control client.
+  if (urlPath === '/rpc') {
+    if (viaPhone) { res.writeHead(403); return res.end('winmux: /rpc is available only at the PC, not over the network'); }
+    if (req.method !== 'POST') { res.writeHead(405); return res.end('POST only'); }
+    let body = '';
+    req.on('data', (d) => { body += d; if (body.length > 1e6) req.destroy(); });
+    req.on('end', async () => {
+      let msg; try { msg = JSON.parse(body || '{}'); } catch (e) { res.writeHead(400); return res.end(JSON.stringify({ ok: false, error: 'bad JSON' })); }
+      if (!msg || typeof msg.cmd !== 'string') { res.writeHead(400); return res.end(JSON.stringify({ ok: false, error: 'missing cmd' })); }
+      try {
+        const result = await callApp(msg.cmd, msg.args);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, result }));
+      } catch (e) {
+        const code = /no app connected/.test(e.message) ? 409 : /in time/.test(e.message) ? 504 : 422;
+        res.writeHead(code, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    });
+    return;
+  }
+
   if (urlPath === '/') urlPath = '/index.html';
   const filePath = path.normalize(path.join(PUBLIC, urlPath));
   if (!filePath.startsWith(PUBLIC)) { res.writeHead(403); res.end('Forbidden'); return; }
@@ -739,6 +763,34 @@ function findFolder(name, kids, near, done) {
 // connection. It keeps running while nobody is attached, remembers what it
 // printed, and is picked up again by id when the browser returns.
 const SESSIONS = new Map();
+
+// Control clients: the running app(s) a `winmux` CLI command drives. The CLI
+// never connects here — it POSTs /rpc on the desk door and the server forwards
+// the command to the most-recently-active app over its /control socket. Only the
+// desk door (127.0.0.1) carries /control, so this is a local-only channel.
+const CONTROL = new Map();               // id -> { ws, lastSeen }
+let controlSeq = 0;
+const RPC = new Map();                   // reqId -> { resolve, reject, timer }
+let rpcSeq = 0;
+
+function pickControl() {
+  let best = null;
+  for (const c of CONTROL.values()) if (!best || c.lastSeen > best.lastSeen) best = c;
+  return best;
+}
+
+// Forward one command to a live app and await its correlated reply. Rejects if
+// no app is connected or the app does not answer in time.
+function callApp(cmd, args) {
+  return new Promise((resolve, reject) => {
+    const c = pickControl();
+    if (!c || c.ws.readyState !== c.ws.OPEN) return reject(new Error('no app connected'));
+    const reqId = ++rpcSeq;
+    const timer = setTimeout(() => { RPC.delete(reqId); reject(new Error('the app did not answer in time')); }, 8000);
+    RPC.set(reqId, { resolve, reject, timer });
+    c.ws.send(JSON.stringify({ rpc: reqId, cmd, args: args || {} }));
+  });
+}
 // How long an unattended shell waits for you before giving up. Long enough to
 // cover a commute or a meeting; short enough that a forgotten tab doesn't leave
 // a PowerShell running on this PC all week.
@@ -786,6 +838,25 @@ function attach(s, ws) {
 // The desk door's socket. The phone door gets its own, key-checked, in setPhone.
 const wss = new WebSocketServer({ server, path: '/pty' });
 wss.on('connection', onShellConnection);
+
+// The control socket — only on the desk door, so only this PC's app can be
+// driven by the local `winmux` CLI. Each app registers; the server forwards
+// /rpc commands here and matches replies by reqId.
+const ctlWss = new WebSocketServer({ server, path: '/control' });
+ctlWss.on('connection', (ws) => {
+  const id = ++controlSeq;
+  CONTROL.set(id, { ws, lastSeen: Date.now() });
+  ws.on('message', (raw) => {
+    let m; try { m = JSON.parse(raw.toString()); } catch { return; }
+    const c = CONTROL.get(id); if (c) c.lastSeen = Date.now();
+    if (m && m.rpc && RPC.has(m.rpc)) {          // a reply to a forwarded command
+      const pend = RPC.get(m.rpc); RPC.delete(m.rpc); clearTimeout(pend.timer);
+      if (m.ok) pend.resolve(m.result); else pend.reject(new Error(m.error || 'the app rejected the command'));
+    }
+  });
+  ws.on('close', () => CONTROL.delete(id));
+  ws.on('error', () => CONTROL.delete(id));
+});
 function onShellConnection(ws, req) {
   // Which remembered device this terminal belongs to, so that forgetting a
   // device closes the shell it is holding right now rather than at its leisure.
@@ -885,6 +956,17 @@ async function start() {
     throw new Error('refused: port ' + PORT + ' is already tunnelled by tailscale serve');
   }
   await new Promise((resolve) => server.listen(PORT, HOST, () => { announce(); resolve(); }));
+  // Advertise the running port so the `winmux` CLI can find it. Best-effort:
+  // the app still runs if the home dir is unwritable.
+  try {
+    const dir = path.join(os.homedir(), '.winmux');
+    fs.mkdirSync(dir, { recursive: true });
+    const inst = path.join(dir, 'instance.json');
+    fs.writeFileSync(inst, JSON.stringify({ port: PORT, host: HOST, pid: process.pid, started: Date.now() }));
+    const cleanup = () => { try { fs.unlinkSync(inst); } catch (e) {} };
+    process.on('exit', cleanup);
+    process.on('SIGINT', () => { cleanup(); process.exit(0); });
+  } catch (e) { /* discovery is best-effort */ }
   return { port: PORT, host: HOST };
 }
 
