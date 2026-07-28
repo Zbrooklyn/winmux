@@ -667,6 +667,24 @@ could open in the browser panel — a nice tie-in), **images**, **syntax-highlig
 taste (how tables/links look), so per the authority split they are Edward's gate: Claude builds
 the parser/`/api/md` side freely and brings the visual for Edward's eye before shipping.
 
+### Terminal-core gaps — what the terminal itself is still missing (audited 2026-07-28)
+
+Grounded in the actual code (xterm 5.5 + `fit` + `search` only). **Already solid, don't re-do:**
+search-with-highlight, font family/size/zoom, cursor style+blink, 5000-line scrollback, right-click
+menu (copy/paste/clear), copy-on-select + right-click-paste options, confirm-close, bell→notifications,
+split/zoom/pin/broadcast, four shell profiles, reconnect/survive, drag-folder-to-path, `allowProposedApi`.
+
+Missing, by area (— `[backend]` = pre-approved to build; `[gated]` = renders → Edward's eye; `[split]` = build the engine, gate the pixel):
+- **Performance & rendering:** WebGL/canvas renderer — only the DOM renderer today, which **lags on fast output**; one addon, biggest perf win `[backend]`. `unicode11` width (emoji/CJK columns) `[backend]`. Ligatures **claimed but not active** — no ligatures addon loaded; verify/fix `[backend]`.
+- **Fonts & display (clean-install bug):** the font is **not bundled** — CSS references `"Cascadia Code"` with no `@font-face`/file, so a clean machine **falls back to Consolas**, and there are **no Nerd Font / powerline glyphs**, so modern prompts (starship, oh-my-posh, git icons) render as tofu. Bundle Cascadia Code (+ a Nerd Font variant) via `@font-face` `[backend]`. Inline images (sixel/kitty) — advanced, deferred.
+- **Interaction & selection:** clickable links (URLs/paths) — no web-links addon; a link could open in the browser panel `[gated]`. Paste safety — a multi-line "run these N lines?" guard, the footgun `[gated]`. Block/rectangular + word/line selection `[gated]`. Configurable keybindings `[gated]`. Terminal reset (soft/hard) `[split]`.
+- **Shell & semantic integration:** OSC-133 command marks — jump-between-commands, rerun-last, exit-code awareness `[split]`. OSC-7 live cwd + OSC-0/2 **auto-title** (tab shows the running program, e.g. `vim`, not just `PowerShell`) `[split]`. Command blocks / semantic zones (Warp-style: group a command with its output, collapse — summoned) `[gated]`. All of this also feeds the cockpit's cwd / git / "what's it doing" on rows.
+- **Accessibility:** screen-reader mode (`screenReaderMode`) — an OSS/production bar `[backend]`.
+- **Persistence:** `serialize` addon to capture scrollback for the resume feature `[backend]`.
+- **Agent-aligned (cockpit):** AI error quick-fix — detect an error in output, offer a fix via the attention bus `[split]`. Inline autocomplete/suggestions (Warp/Fig-style) — big, parked.
+
+Highest value-per-effort, all `[backend]`: **WebGL renderer** (fast-output perf), **bundle the font + Nerd glyphs** (clean-install + prompt icons), **unicode11**, **ligatures fix**, **screenReaderMode**.
+
 ## Upcoming phases (roadmap — not yet built)
 
 The three faces, the CLI, the browser panel, and the markdown viewer are done and
