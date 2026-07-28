@@ -48,6 +48,12 @@ const HELP = [
   '  read-screen [--id N] [--lines N] print a terminal\'s visible text',
   '  focus <id>                       focus a terminal',
   '',
+  '  browser open <url>               open the browser panel at a URL (desktop app)',
+  '  browser snapshot                 list the page\'s interactive elements as @refs',
+  '  browser click <@ref>             click an element from the snapshot',
+  '  browser back|forward|reload|url  navigate the browser panel',
+  '  browser screenshot [file]        save a PNG of the page',
+  '',
   '  --json                           raw JSON output where relevant',
 ].join('\n');
 
@@ -82,9 +88,26 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
       return out(r.screen);
     }
     if (cmd === 'focus') { if (!argv[1]) die('focus needs a terminal id'); return out(await rpc('focus', { target: argv[1] })); }
-    if (cmd === 'browser' || cmd === 'agent' || cmd === 'markdown') {
-      die(cmd + ' arrives in a later phase (Phase 10/11). Run `winmux help` for what works today.');
+    if (cmd === 'browser') {
+      const sub = argv[1] || 'open';
+      if (sub === 'open') { if (!argv[2]) die('browser open needs a URL'); return out(await rpc('browser', { sub: 'open', url: argv[2] })); }
+      if (sub === 'click') { if (!argv[2]) die('browser click needs a ref, e.g. @e1'); return out(await rpc('browser', { sub: 'click', ref: argv[2] })); }
+      if (sub === 'snapshot') {
+        const r = await rpc('browser', { sub: 'snapshot' });
+        if (has(argv, '--json')) return out(r);
+        return out((r.url ? r.url + '\n' : '') + (r.tree || '(nothing interactive on the page)'));
+      }
+      if (sub === 'screenshot') {
+        const r = await rpc('browser', { sub: 'screenshot' });
+        const dest = argv[2] || 'winmux-browser.png';
+        const b64 = String(r.dataUrl || '').replace(/^data:image\/png;base64,/, '');
+        fs.writeFileSync(dest, Buffer.from(b64, 'base64'));
+        return out('saved ' + dest);
+      }
+      if (['back', 'forward', 'reload', 'url'].indexOf(sub) >= 0) return out(await rpc('browser', { sub }));
+      die('unknown browser subcommand: ' + sub + ' (open|snapshot|click|back|forward|reload|url|screenshot)');
     }
+    if (cmd === 'agent') die('agent arrives in Phase 11. Run `winmux help` for what works today.');
     die('unknown command: ' + cmd + '. Run `winmux help`.');
   } catch (e) { die(e.message); }
 })();
