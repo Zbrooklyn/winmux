@@ -2542,7 +2542,16 @@
   // Three shapes, same app: full desktop · half-width (tabs collapse to icons) ·
   // phone (one screen at a time — the terminal list, or one terminal full-screen).
   var currentMode = null;
-  function modeFor(w) { return w <= 620 ? 'narrow' : (w < 1120 ? 'half' : 'full'); }
+  // A phone is narrow in ANY orientation. Width alone can't tell a landscape phone
+  // (~745px wide) from a desktop, so also treat a touch device whose SHORT edge is
+  // phone-sized as narrow. Coarse pointer + min-dimension <=500px is a phone (in
+  // portrait or landscape); it excludes real desktops (fine pointer), desktop
+  // touchscreens (short edge >500), and tablets (short edge ~600+).
+  function isPhone() {
+    return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches) &&
+      Math.min(window.innerWidth, window.innerHeight) <= 500;
+  }
+  function modeFor(w) { return (isPhone() || w <= 620) ? 'narrow' : (w < 1120 ? 'half' : 'full'); }
   function setView(v) {
     root.setAttribute('data-view', v);
     if (v === 'focus') {

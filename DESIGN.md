@@ -117,6 +117,14 @@ Edward decides instantly from **rendered options**, not from words. So:
   slides up from the bottom edge as a full-width sheet with a drag handle and a dimmed backdrop,
   instead of a desktop popover anchored to a cursor. One shared path: `placeMenu()` routes to the
   sheet whenever `currentMode === 'narrow'`, so all menus stay consistent. (Live.)
+- **A phone is narrow in any orientation (Edward's pick).** The narrow layout used to trigger on
+  width alone (≤620px), so a rotated phone (~745px wide) fell back to the full desktop layout —
+  28px targets, 9.5px labels, window min/max/close reappearing. Width can't tell a landscape phone
+  from a desktop, so `modeFor` now also treats a **touch device whose short edge ≤500px** as narrow
+  (`(pointer: coarse)` + `min(innerWidth, innerHeight) ≤ 500`). A landscape phone keeps the mobile
+  layout (wider terminals, thumb targets, drill-in intact); real desktops (fine pointer), desktop
+  touchscreens (short edge >500), and tablets (short edge ~600+) are unaffected — verified: phone
+  landscape 745×384 → narrow & clean, desktop-1000 mouse → half, narrow-500 mouse → narrow. app.js. (Live.)
 - **Second adversarial sweep — the surfaces the first pass missed.** A full-surface phone audit
   (every view + every overlay, screenshot + measured) caught what the five roots didn't: the
   **sessions-view back** ("‹ Groups") was a 26px-tall target (only the focus-view back had been
