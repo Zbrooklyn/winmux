@@ -182,7 +182,7 @@ async function server(port) {
   if (await inUse('127.0.0.1', port)) return { port, borrowed: true, stop() {} };
   const proc = spawn(process.execPath, ['server.cjs'], {
     cwd: ROOT,
-    env: Object.assign({}, process.env, { PORT: String(port), WINMUX_TRUST_FILE: trustFile(port) }),
+    env: Object.assign({}, process.env, { PORT: String(port), WINMUX_TRUST_FILE: trustFile(port), WINMUX_NO_INSTANCE: '1' }),
     stdio: 'ignore',
   });
   await waitUp(port, 15000);
@@ -193,7 +193,7 @@ async function server(port) {
 // itself. Never borrows a running server — the choice IS the thing under test.
 function serverAuto() {
   return new Promise((resolve, reject) => {
-    const env = Object.assign({}, process.env, { WINMUX_TRUST_FILE: trustFile('auto') });
+    const env = Object.assign({}, process.env, { WINMUX_TRUST_FILE: trustFile('auto'), WINMUX_NO_INSTANCE: '1' });
     delete env.PORT;
     const proc = spawn(process.execPath, ['server.cjs'], {
       cwd: ROOT, env, stdio: ['ignore', 'pipe', 'ignore'],
@@ -1459,18 +1459,18 @@ check('electron', PORT_GROUPS, async ({ t }) => {
 // run as a child process and must make that page do things. The instance file
 // is pointed at THIS check's server so the CLI targets it, not @edward's live one.
 check('cli', PORT_CLI, async ({ browser, base, t, shot }) => {
+  // Target THIS check's server directly via WINMUX_PORT — never the shared
+  // instance file, which the harness's many servers would race over (and which
+  // is @edward's real running app's file).
   const winmux = (args) => new Promise((resolve) => {
-    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args], { cwd: ROOT, env: process.env });
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_CLI), WINMUX_HOST: '127.0.0.1' }) });
     let o = '', e = '';
     proc.stdout.on('data', (d) => o += d);
     proc.stderr.on('data', (d) => e += d);
     proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
   });
   const parse = (s) => { try { return JSON.parse(s); } catch (e) { return null; } };
-
-  const instFile = path.join(os.homedir(), '.winmux', 'instance.json');
-  fs.mkdirSync(path.dirname(instFile), { recursive: true });
-  fs.writeFileSync(instFile, JSON.stringify({ port: PORT_CLI, host: '127.0.0.1', pid: 0, started: 0 }));
 
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });

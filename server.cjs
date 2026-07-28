@@ -968,8 +968,9 @@ async function start() {
   }
   await new Promise((resolve) => server.listen(PORT, HOST, () => { announce(); resolve(); }));
   // Advertise the running port so the `winmux` CLI can find it. Best-effort:
-  // the app still runs if the home dir is unwritable.
-  try {
+  // the app still runs if the home dir is unwritable. WINMUX_NO_INSTANCE lets a
+  // test harness spin up many servers without clobbering the real one's file.
+  if (!process.env.WINMUX_NO_INSTANCE) try {
     const dir = path.join(os.homedir(), '.winmux');
     fs.mkdirSync(dir, { recursive: true });
     const inst = path.join(dir, 'instance.json');

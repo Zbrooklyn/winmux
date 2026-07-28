@@ -11,6 +11,8 @@ function die(msg) { process.stderr.write('winmux: ' + msg + '\n'); process.exit(
 function out(v) { process.stdout.write((typeof v === 'string' ? v : JSON.stringify(v, null, 2)) + '\n'); }
 
 function instance() {
+  // An explicit target wins — for scripting a specific instance (and the harness).
+  if (process.env.WINMUX_PORT) return { port: Number(process.env.WINMUX_PORT), host: process.env.WINMUX_HOST || '127.0.0.1' };
   const f = path.join(os.homedir(), '.winmux', 'instance.json');
   try { return JSON.parse(fs.readFileSync(f, 'utf8')); }
   catch (e) { die('WinMux is not running (no ~/.winmux/instance.json). Start it with `npm start` or the desktop app.'); }
