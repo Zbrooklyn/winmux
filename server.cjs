@@ -835,14 +835,17 @@ function attach(s, ws) {
   });
 }
 
-// The desk door's socket. The phone door gets its own, key-checked, in setPhone.
-const wss = new WebSocketServer({ server, path: '/pty' });
+// The desk door's sockets. The phone door gets its own, key-checked, in
+// setPhone. Both desk sockets are noServer + one upgrade router below, because
+// two {server,path} WebSocketServers on one HTTP server fight over the upgrade
+// event (the first 400s the other's path).
+const wss = new WebSocketServer({ noServer: true });
 wss.on('connection', onShellConnection);
 
 // The control socket — only on the desk door, so only this PC's app can be
 // driven by the local `winmux` CLI. Each app registers; the server forwards
 // /rpc commands here and matches replies by reqId.
-const ctlWss = new WebSocketServer({ server, path: '/control' });
+const ctlWss = new WebSocketServer({ noServer: true });
 ctlWss.on('connection', (ws) => {
   const id = ++controlSeq;
   CONTROL.set(id, { ws, lastSeen: Date.now() });
@@ -856,6 +859,14 @@ ctlWss.on('connection', (ws) => {
   });
   ws.on('close', () => CONTROL.delete(id));
   ws.on('error', () => CONTROL.delete(id));
+});
+
+// Route desk-door upgrades to the right socket server by path.
+server.on('upgrade', (req, socket, head) => {
+  let p = '/'; try { p = new URL(req.url, 'http://x').pathname; } catch (e) {}
+  if (p === '/pty') wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+  else if (p === '/control') ctlWss.handleUpgrade(req, socket, head, (ws) => ctlWss.emit('connection', ws, req));
+  else socket.destroy();
 });
 function onShellConnection(ws, req) {
   // Which remembered device this terminal belongs to, so that forgetting a

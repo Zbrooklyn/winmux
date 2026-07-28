@@ -2680,4 +2680,83 @@
   }
   applyMode();
   setTimeout(layoutAllTabs, 100);
+
+  // --- Control channel: let the local `winmux` CLI drive this app -----------
+  // The server forwards CLI commands here over /control; we run them against
+  // the real layout and reply. Desk-door only (the server never exposes
+  // /control on the phone side), so this is a local-only capability.
+  function serializeTerm(t, maxLines) {
+    if (!t || !t.term) return '';
+    var buf = t.term.buffer.active, out = [], n = buf.length;
+    var start = maxLines ? Math.max(0, n - maxLines) : 0;
+    for (var i = start; i < n; i++) { var line = buf.getLine(i); out.push(line ? line.translateToString(true) : ''); }
+    return out.join('\n').replace(/\s+$/, '');
+  }
+  function termByTarget(target) {
+    if (!target) return activeTerm();
+    var all = allTerms();
+    for (var i = 0; i < all.length; i++) if (String(all[i].id) === String(target)) return all[i];
+    return null;
+  }
+  function runControl(cmd, args) {
+    args = args || {};
+    if (cmd === 'list') {
+      var act = activeTerm();
+      return { sessions: allTerms().map(function (t) {
+        return { id: t.id, title: termName(t), shell: t.shell, cwd: t.cwd || '', group: t.groupId, active: t === act };
+      }) };
+    }
+    if (cmd === 'read-screen') {
+      var tr = termByTarget(args.target);
+      if (!tr) throw new Error('no such terminal');
+      return { id: tr.id, title: termName(tr), screen: serializeTerm(tr, args.lines || 0) };
+    }
+    if (cmd === 'send') {
+      var ts = termByTarget(args.target);
+      if (!ts) throw new Error('no such terminal');
+      var data = String(args.data == null ? '' : args.data);
+      if (args.enter) data += '\r';
+      if (ts.ws && ts.ws.readyState === WebSocket.OPEN) ts.ws.send(JSON.stringify({ t: 'i', d: data }));
+      else throw new Error('that terminal is not connected');
+      return { id: ts.id, sent: data.length };
+    }
+    if (cmd === 'new-tab') {
+      var pn = paneById(activePaneId) || panes[0];
+      if (!pn) throw new Error('no pane to add a tab to');
+      var nt = newTerm(pn, args.shell || startShell(), args.cwd);
+      focusPane(pn.id);
+      return { id: nt && nt.id };
+    }
+    if (cmd === 'split') {
+      var sp = paneById(activePaneId) || panes[0];
+      if (!sp) throw new Error('no pane to split');
+      (args.dir === 'down' ? splitDown : splitRight)(sp, args.shell || startShell(), args.cwd);
+      return { ok: true, dir: args.dir === 'down' ? 'down' : 'right' };
+    }
+    if (cmd === 'focus') {
+      var tf = termByTarget(args.target);
+      if (!tf) throw new Error('no such terminal');
+      var pf = paneById(tf.paneId) || paneById(activePaneId);
+      if (pf) { activateTerm(pf, tf.id); focusPane(pf.id); }
+      return { id: tf.id };
+    }
+    throw new Error('unknown command: ' + cmd);
+  }
+  (function connectControl() {
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    function open() {
+      var cws;
+      try { cws = new WebSocket(proto + '//' + location.host + '/control' + location.search); }
+      catch (e) { setTimeout(open, 2000); return; }
+      cws.onmessage = function (ev) {
+        var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+        if (!m || !m.rpc) return;
+        try { cws.send(JSON.stringify({ rpc: m.rpc, ok: true, result: runControl(m.cmd, m.args) })); }
+        catch (e) { cws.send(JSON.stringify({ rpc: m.rpc, ok: false, error: String(e && e.message || e) })); }
+      };
+      cws.onclose = function () { setTimeout(open, 1500); };   // survive server restarts
+      cws.onerror = function () { try { cws.close(); } catch (e) {} };
+    }
+    open();
+  })();
 })();
