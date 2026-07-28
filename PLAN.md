@@ -680,6 +680,20 @@ because a persistent agent cockpit is the whole point.
   full command history visible and ready to type into. WinMux already keeps scrollback in the
   session registry for reconnection (Phase 4); this adds a disk write + a replay-on-open.
 
+**Cross-device viewing — today vs. the ask (verified 2026-07-27).** WinMux is one server,
+so the desktop app and the phone (over Tailscale) share the *same live shells* — the phone
+is not a synced copy, it attaches to the real sessions. But each terminal has a **single
+active socket**: `attach()` closes any existing socket with "picked up elsewhere" (code
+4004) and hands the session to the newest client. So opening the *same* terminal on the
+phone **takes it over** from the desktop (tmux-attach model) rather than mirroring live on
+both; *different* terminals on each device coexist fine. The genuine follow-you-around
+upside already works: start at the desk, pick the same session up on the phone. What is NOT
+built (and is a real design choice, not a bug): **true multi-viewer mirroring** (the same
+terminal live on both screens at once) and a **layout that syncs across devices** (the phone
+currently manages its own tab/group arrangement; only the underlying shells are shared).
+Building it means the session holding a *set* of sockets and fanning pty output to all of
+them, plus resize arbitration — worth doing deliberately, not a quick toggle.
+
 **Claude Code / Codex resume (design).** These agents already persist their conversation to
 disk and support native resume (`claude --resume <id>`, Codex equivalent). WinMux layers a
 one-click "Resume" on top: detect a tab was running the agent, remember its session id + cwd,
