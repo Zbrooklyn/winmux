@@ -57,6 +57,9 @@ const PORT_COLOUR = 9918;
 const PORT_GROUPS = 9919;
 // Reopening the page must reattach to the running shell, not orphan it.
 const PORT_RELOAD = 9920;
+// The CLI check needs its own server + a connected app, on a port nobody else
+// is driving, so `winmux new-tab` counts don't race another group's terminals.
+const PORT_CLI = 9921;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1448,6 +1451,55 @@ check('electron', PORT_GROUPS, async ({ t }) => {
   t('the frameless tab bar resolves to a real drag handle',
     !!json && json.ptabsRegion === 'drag', json && json.ptabsRegion);
   t('the smoke run hit no error', !!json && !json.error, json && json.error);
+});
+
+// --- cli: the `winmux` command-line drives the live app -------------------
+// The CLI POSTs /rpc, which forwards over /control to a connected app. So this
+// check IS the app: a real headless page connected to /control, then the CLI is
+// run as a child process and must make that page do things. The instance file
+// is pointed at THIS check's server so the CLI targets it, not @edward's live one.
+check('cli', PORT_CLI, async ({ browser, base, t, shot }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args], { cwd: ROOT, env: process.env });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => o += d);
+    proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+  const parse = (s) => { try { return JSON.parse(s); } catch (e) { return null; } };
+
+  const instFile = path.join(os.homedir(), '.winmux', 'instance.json');
+  fs.mkdirSync(path.dirname(instFile), { recursive: true });
+  fs.writeFileSync(instFile, JSON.stringify({ port: PORT_CLI, host: '127.0.0.1', pid: 0, started: 0 }));
+
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);          // the app connects to /control
+
+  const list1 = await winmux(['list', '--json']);
+  const p1 = parse(list1.out);
+  t('list reaches the live app', list1.code === 0 && p1 && Array.isArray(p1.sessions), { code: list1.code, err: list1.err });
+  t('the app reports its starting terminal', p1 && p1.sessions.length >= 1, p1 && p1.sessions.length);
+
+  const marker = 'CLI_OK_' + PORT_CLI;
+  const sent = await winmux(['send', '"' + marker + '"', '--enter']);
+  t('send exits clean', sent.code === 0, sent.err);
+  await page.waitForTimeout(3000);
+  const rd = await winmux(['read-screen', '--lines', '60']);
+  t('read-screen shows what send ran', rd.code === 0 && rd.out.indexOf(marker) >= 0, rd.out.slice(-160));
+
+  const before = p1 ? p1.sessions.length : 0;
+  await winmux(['new-tab']);
+  await page.waitForTimeout(1500);
+  const p2 = parse((await winmux(['list', '--json'])).out);
+  t('new-tab adds a terminal the app can see', p2 && p2.sessions.length === before + 1, { before, after: p2 && p2.sessions.length });
+  await shot(page, 'cli-drove-it');
+
+  // With no app open the CLI must fail clearly and fast, never hang.
+  await page.close();
+  await new Promise((r) => setTimeout(r, 800));
+  const orphan = await winmux(['list']);
+  t('with no app open the CLI fails clearly, fast', orphan.code !== 0 && /no app connected/i.test(orphan.err), orphan.err);
 });
 
 // -------------------------------------------------------------------- main
