@@ -744,6 +744,64 @@ integration, hyperlinks, config) — but do NOT try to out-Warp Warp on autocomp
 Kitty on images. Our win is being the only terminal that is remote-first and agent-native. Table
 stakes to earn credibility; differentiators to earn adoption.
 
+## Build order — by priority × effort (execution index, 2026-07-28)
+
+The whole backlog, prioritized. Legend — **effort:** S = hours / M = one focused session /
+L = multi-session or a migration. **authority:** `[B]` backend, pre-approved · `[G]` renders,
+Edward's eye · `[split]` build the engine `[B]`, gate the pixel `[G]`. Detail for each lives in
+the sections below.
+
+**Tier 0 — DONE this session (7 backend wins + 1 flake):** key-rotation-on-forget, `winmux
+status`, clean-JSON CLI, pty pre-warm, atomic trust write, graceful shutdown, workspaces-as-code
+(`winmux open`); trust forget-terminal flake hardened.
+
+**P1 — Launch-critical (ship a credible v1.0; fixes the measured/real breaks):**
+- Terminal-parity pass — GPU renderer + bundle font/Nerd-glyphs + ligatures + unicode11 +
+  screenReaderMode — **L `[B]`**. Fixes the *measured* 10-session jank AND the clean-install
+  Consolas/tofu bug. Interlocks via the renderer + a harness migration; its own session.
+- Session survival — detached server the app attaches to — **M–L `[B]`**. Closing never kills
+  live agents; biggest "real software" gap; de-risks the 10-agent workload.
+- node-pty native-module handling in the build — **M `[B]`**. The #1 way an Electron terminal
+  fails to even start on someone else's machine (OSS-launch killer).
+- Security hardening — server input safety (`/rpc`, findpath) + scrollback-as-secrets decision —
+  **M `[B]`**. OSS veto category.
+- Phase 12 OSS distribution — installer · auto-update · winget · MIT LICENSE · public repo —
+  **M–L `[B]`**. The launch machinery itself.
+- Production README + full screenshot gallery (desktop/mobile, light/dark, CLI, browser, markdown,
+  QR) — **M `[G]`+asset**. The OSS storefront.
+- Phase 13 launch hardening — clear known glitches (incl. the phone `#open-settings` test flake),
+  clean-machine install proof, every-state pass — **M `[split]`**.
+
+**P2 — High value (credibility table-stakes + the moat):**
+- Attention bus — which of N sessions needs you (idle/permission/error → notification, phone
+  approve/deny) — **M `[split]`**. The 10-session blindness fix; core differentiator.
+- Workspace config-as-code — files as source of truth, unify GUI+CLI, cross-device sync — **M–L
+  `[B]`**. (See the Workspace plan below; 4 owner decisions first.)
+- Shell integration — OSC-7 cwd · OSC-133 marks/exit-codes · OSC-0/2 auto-title — **M–L `[split]`**.
+  Table-stakes AND the feeder for cwd/git/"what's it doing" on rows.
+- Cockpit differentiators (each **S–M**, high moat): transcript "what's it doing" line `[split]` ·
+  remote permission-approval from phone `[split]` · clipboard sync `[B]` · `winmux` MCP server `[B]`.
+- First-run onboarding — **M `[G]`**. OSS adoption.
+- Config file + custom keybindings + theme import — **M `[split]`**. Table-stakes.
+- Clickable hyperlinks (URLs/paths → browser panel) — **S–M `[G]`**. Table-stakes.
+- Connection-status honesty (calm connected/reconnecting/offline) — **S–M `[G]`**.
+
+**P3 — Polish / cheap add-ons:**
+- Browser automation verbs (type/fill/get-text/eval/wait) — **S `[B]`**. Free, rides the webview.
+- Markdown richness (tables, links, images, syntax highlight, scroll-preserve) — **S–M `[G]`**.
+- Paste-safety guard · terminal reset · block/word selection · command marks/rerun — **S–M**.
+- Config migration · diagnostics/copy-logs · pre-warm pool >1 — **S `[B]`**.
+
+**P4 — Deferred / post-v1.0:**
+- Android companion app — **L `[B]`+new surface** (Phase 14).
+- Command blocks (Warp) · AI error quick-fix · autocomplete · inline images · quick-select hints ·
+  true multi-viewer mirror + cross-device layout sync · opt-in fleet grid — **L**, later moat.
+- Code signing — **M** (not a gate, but eases install).
+
+**Recommended sequence next:** (1) terminal-parity pass — biggest *measured* win; (2) detached
+server — de-risks the whole agent workload; (3) workspace config-as-code — settle the 4 owner
+decisions, then build; (4) attention bus; then roll into Phase 12/13 for the launch.
+
 ## Workspaces & Project Groups — the feature plan (2026-07-28)
 
 The least-specified part of the product, planned properly. Governed by the design law (calm
