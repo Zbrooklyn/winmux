@@ -39,8 +39,29 @@ function rpc(cmd, args) {
   });
 }
 
+// A plain GET against the server (not the /rpc control path) — for read-only
+// endpoints like /api/info that answer without a connected app.
+function get(urlPath) {
+  const inst = instance();
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      host: (inst.host && inst.host !== '0.0.0.0') ? inst.host : '127.0.0.1',
+      port: inst.port, path: urlPath, method: 'GET',
+    }, (res) => {
+      let b = ''; res.on('data', (d) => b += d);
+      res.on('end', () => {
+        let j; try { j = JSON.parse(b); } catch (e) { return reject(new Error('bad reply: ' + b.slice(0, 120))); }
+        resolve(j);
+      });
+    });
+    req.on('error', (e) => reject(new Error('cannot reach WinMux: ' + e.message)));
+    req.end();
+  });
+}
+
 const HELP = [
   'winmux <command> [args]', '',
+  '  status                           the running server + fleet (sessions, phone)',
   '  list                             the open terminals (id, title, shell, cwd)',
   '  new-tab [shell]                  open a new tab in the active pane',
   '  split [right|down] [shell]       split the active pane',
@@ -66,30 +87,47 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
   const argv = process.argv.slice(2);
   const cmd = argv[0];
   if (!cmd || cmd === '-h' || cmd === '--help' || cmd === 'help') { out(HELP); return; }
+  // Human-friendly by default; raw JSON with --json, uniformly across verbs.
+  const emit = (human, data) => (has(argv, '--json') ? out(data) : out(human));
   try {
+    if (cmd === 'status') {
+      const i = await get('/api/info');
+      if (has(argv, '--json')) return out(i);
+      return out([
+        'WinMux ' + (i.host || '127.0.0.1') + ':' + i.port + '  (pid ' + i.pid + ')',
+        '  sessions: ' + i.sessions + (i.detached ? '  (' + i.detached + ' detached, waiting to reattach)' : ''),
+        '  phone:    ' + (i.phone || 'off'),
+        '  shells:   ' + (Array.isArray(i.shells) ? i.shells.join(', ') : ''),
+      ].join('\n'));
+    }
     if (cmd === 'list') {
       const r = await rpc('list');
       if (has(argv, '--json')) return out(r);
       if (!r.sessions.length) return out('(no terminals open)');
       return out(r.sessions.map((s) => (s.active ? '* ' : '  ') + s.id + '  ' + s.title + '  [' + s.shell + ']  ' + (s.cwd || '')).join('\n'));
     }
-    if (cmd === 'new-tab') { return out(await rpc('new-tab', { shell: argv[1] })); }
+    if (cmd === 'new-tab') {
+      const r = await rpc('new-tab', { shell: argv[1] });
+      return emit('opened a new tab' + (r && r.id ? ' (' + r.id + ')' : ''), r);
+    }
     if (cmd === 'split') {
       const dir = (argv[1] === 'down' || argv[1] === 'right') ? argv[1] : 'right';
       const shell = (argv[1] === 'down' || argv[1] === 'right') ? argv[2] : argv[1];
-      return out(await rpc('split', { dir, shell }));
+      const r = await rpc('split', { dir, shell });
+      return emit('split ' + dir + (r && r.id ? ' (' + r.id + ')' : ''), r);
     }
     if (cmd === 'send') {
       const text = argv[1];
       if (text == null || text.startsWith('--')) die('send needs text: winmux send "Get-Date" --enter');
-      return out(await rpc('send', { data: text, enter: has(argv, '--enter'), target: flag(argv, '--id') }));
+      const r = await rpc('send', { data: text, enter: has(argv, '--enter'), target: flag(argv, '--id') });
+      return emit('sent', r);
     }
     if (cmd === 'read-screen') {
       const r = await rpc('read-screen', { target: flag(argv, '--id'), lines: Number(flag(argv, '--lines')) || 0 });
       if (has(argv, '--json')) return out(r);
       return out(r.screen);
     }
-    if (cmd === 'focus') { if (!argv[1]) die('focus needs a terminal id'); return out(await rpc('focus', { target: argv[1] })); }
+    if (cmd === 'focus') { if (!argv[1]) die('focus needs a terminal id'); return emit('focused ' + argv[1], await rpc('focus', { target: argv[1] })); }
     if (cmd === 'browser') {
       const sub = argv[1] || 'open';
       if (sub === 'open') { if (!argv[2]) die('browser open needs a URL'); return out(await rpc('browser', { sub: 'open', url: argv[2] })); }
@@ -112,7 +150,7 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
     if (cmd === 'markdown' || cmd === 'md') {
       if (!argv[1]) die('markdown needs a file, e.g. winmux markdown README.md');
       const abs = path.resolve(process.cwd(), argv[1]);
-      return out(await rpc('markdown', { path: abs }));
+      return emit('opened ' + argv[1] + ' in the viewer', await rpc('markdown', { path: abs }));
     }
     if (cmd === 'agent') die('agent arrives in Phase 11. Run `winmux help` for what works today.');
     die('unknown command: ' + cmd + '. Run `winmux help`.');

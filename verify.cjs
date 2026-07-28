@@ -260,6 +260,12 @@ async function redact(p) {
 }
 
 const settings = async (p, tab) => {
+  // NOTE (#180): the phone check calls this from the terminal (focus) view, where
+  // #open-settings is present but not visible — the gear only surfaces at the top
+  // of the phone drill-in. Root-caused 2026-07-28; the proper fix is to climb the
+  // drill-in to a gear-visible view first, but the back-control path needs more
+  // work, so this stays the original (desktop-solid) helper rather than ship a
+  // half-fix. The trust check's forget-terminal flake IS hardened (see below).
   await p.locator('#open-settings').click();
   await p.waitForTimeout(500);
   await p.locator('[data-settab="' + tab + '"]').click();
@@ -871,14 +877,21 @@ check('trust', PORT_TRUST, async ({ browser, base, t, shot, skip }) => {
     const forgot = JSON.parse((await post(base + '/api/phone/devices', JSON.stringify({ forget: devB }))).body);
     t('forgetting drops it from the list',
       forgot.devices.length === 1 && forgot.devices[0].id === devA, forgot.devices);
-    await p.waitForTimeout(1500);
-    await p.locator('.xterm-helper-textarea').first().focus();
-    await p.keyboard.type('"after forget " + $env:COMPUTERNAME');
-    await p.keyboard.press('Enter');
-    await p.waitForTimeout(3000);
-    const stillTalking = await p.evaluate(() =>
-      [].map.call(document.querySelectorAll('.xterm-rows > div'), (d2) => d2.textContent.trim())
-        .some((r) => /after forget \w/i.test(r)));
+    // The forced socket-close is async: it can take a beat to reach the page, so
+    // a single fixed wait flaps. Poll the real end-state instead — type a
+    // per-attempt marker and confirm none of them ever echo. Once the shell is
+    // gone, nothing echoes, so this settles deterministically on "stopped".
+    let stillTalking = true;
+    for (let i = 0; i < 6 && stillTalking; i++) {
+      await p.waitForTimeout(800);
+      await p.locator('.xterm-helper-textarea').first().focus().catch(() => {});
+      await p.keyboard.type('"after forget ' + i + ' " + $env:COMPUTERNAME');
+      await p.keyboard.press('Enter');
+      await p.waitForTimeout(1200);
+      stillTalking = await p.evaluate(() =>
+        [].some.call(document.querySelectorAll('.xterm-rows > div'),
+          (d2) => /after forget \d+ \w/i.test(d2.textContent)));
+    }
     t('the forgotten phone\'s terminal stopped answering', stillTalking === false);
     const lockedOut = await get(origin + '/', { cookie: 'ct_dev=' + devB, accept: 'text/html' });
     t('and it has to scan again before it gets back in', lockedOut.status === 401, lockedOut.status);

@@ -33,6 +33,7 @@ Settings → Phone to get a Tailscale link + QR for your phone.
 
 With WinMux running, the `winmux` command scripts the live app:
 
+    winmux status                   # the running server + fleet (sessions, phone)
     winmux list                     # the open terminals
     winmux new-tab                  # open a tab in the active pane
     winmux split down               # split the active pane

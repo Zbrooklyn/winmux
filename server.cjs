@@ -222,6 +222,7 @@ function forgetDevice(id) {
     if (phone.wss) for (const ws of phone.wss.clients) {
       if (ws._ctDev === id) { try { ws.close(4003, 'device forgotten'); } catch (e) {} }
     }
+    rotatePhoneKey();
   }
   return gone;
 }
@@ -230,6 +231,16 @@ function forgetAllDevices() {
   saveTrust();
   endSessionsOfDevice('');
   if (phone.wss) for (const ws of phone.wss.clients) { try { ws.close(4003, 'devices forgotten'); } catch (e) {} }
+  rotatePhoneKey();
+}
+// Forgetting a device must also invalidate any access key it still holds, or a
+// revoked phone walks straight back in on the link it already has and re-mints
+// itself. Trusted phones ride their device cookie (ct_dev), not the key, so
+// rotating here locks out only the forgotten one. A no-op while the door is shut.
+function rotatePhoneKey() {
+  if (!phone.on) return;
+  phone.token = crypto.randomBytes(16).toString('hex');
+  console.log('phone access: key rotated after a device was forgotten');
 }
 // What Settings is allowed to see. The id is a credential — it goes to the PC,
 // which is the only place that can revoke anything, and never back out over the
@@ -885,6 +896,40 @@ server.on('upgrade', (req, socket, head) => {
   else if (p === '/control') ctlWss.handleUpgrade(req, socket, head, (ws) => ctlWss.emit('connection', ws, req));
   else socket.destroy();
 });
+// A pre-warmed spare shell. Spawning a PowerShell (profile + modules) is the slow
+// part of opening a tab; the loading beat you see is mostly that. So we keep one
+// already-booted at the default shell + home dir, sitting OFF the books (never in
+// SESSIONS, so it is not counted as a live terminal), and hand it over the instant
+// a matching tab opens — then boot the next spare. WINMUX_NO_PREWARM=1 turns it off.
+let spare = null;
+const DEFAULT_SHELL_KEY = 'powershell';
+
+function spawnSession(shell, cwd) {
+  const term = pty.spawn(shell.exec, shell.args, { name: 'xterm-256color', cols: 80, rows: 24, cwd, env: process.env });
+  const s = { id: crypto.randomBytes(16).toString('hex'), term, dev: '', shell: shell.label, cwd, buf: '', ws: null, timer: null };
+  term.onData((d) => {
+    s.buf += d;
+    if (s.buf.length > SCROLLBACK) s.buf = s.buf.slice(-SCROLLBACK);
+    if (s.ws && s.ws.readyState === s.ws.OPEN) s.ws.send(Buffer.from(d, 'utf8'));
+  });
+  term.onExit(() => {
+    if (spare === s) { spare = null; ensureSpare(); return; }   // a spare died before it was ever used
+    if (!SESSIONS.has(s.id)) return;
+    SESSIONS.delete(s.id);
+    if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+    if (s.ws && s.ws.readyState === s.ws.OPEN) {
+      try { s.ws.send(JSON.stringify({ type: 'meta', exited: true })); } catch (e) {}
+      try { s.ws.close(4005, 'shell exited'); } catch (e) {}
+    }
+  });
+  return s;
+}
+
+function ensureSpare() {
+  if (spare || process.env.WINMUX_NO_PREWARM) return;
+  try { spare = spawnSession(shellByKey(DEFAULT_SHELL_KEY), os.homedir()); } catch (e) { spare = null; }
+}
+
 function onShellConnection(ws, req) {
   // Which remembered device this terminal belongs to, so that forgetting a
   // device closes the shell it is holding right now rather than at its leisure.
@@ -912,41 +957,30 @@ function onShellConnection(ws, req) {
   // Honour a requested start folder only when it really is one.
   let cwd = os.homedir();
   try { if (want && fs.statSync(want).isDirectory()) cwd = want; } catch (e) {}
-  let term;
-  try {
-    term = pty.spawn(shell.exec, shell.args, { name: 'xterm-256color', cols: 80, rows: 24, cwd, env: process.env });
-  } catch (e) {
-    ws.send(JSON.stringify({ type: 'meta', error: 'Failed to start ' + shell.label + ': ' + e.message }));
-    ws.close();
-    return;
-  }
 
-  const s = {
-    id: crypto.randomBytes(16).toString('hex'),
-    term, dev, shell: shell.label, cwd, buf: '', ws: null, timer: null,
-  };
-  SESSIONS.set(s.id, s);
-  term.onData((d) => {
-    s.buf += d;
-    if (s.buf.length > SCROLLBACK) s.buf = s.buf.slice(-SCROLLBACK);
-    if (s.ws && s.ws.readyState === s.ws.OPEN) s.ws.send(Buffer.from(d, 'utf8'));
-  });
-  // The shell itself exiting is the only real ending, and the client is told so
-  // explicitly — otherwise it would sit there politely trying to reconnect to a
-  // process that chose to leave.
-  term.onExit(() => {
-    if (!SESSIONS.has(s.id)) return;
-    SESSIONS.delete(s.id);
-    if (s.timer) { clearTimeout(s.timer); s.timer = null; }
-    if (s.ws && s.ws.readyState === s.ws.OPEN) {
-      try { s.ws.send(JSON.stringify({ type: 'meta', exited: true })); } catch (e) {}
-      try { s.ws.close(4005, 'shell exited'); } catch (e) {}
+  // Hand over the pre-warmed spare when the request matches it (the common case:
+  // the default shell at home) — that is the instant open. Otherwise boot one
+  // cold. Either way, refill the spare so the next tab is instant too. The spare's
+  // onData/onExit were wired at spawn, so adopting it is just claiming the object.
+  let s;
+  if (spare && key === DEFAULT_SHELL_KEY && cwd === os.homedir()) {
+    s = spare; spare = null;
+  } else {
+    try {
+      s = spawnSession(shell, cwd);
+    } catch (e) {
+      ws.send(JSON.stringify({ type: 'meta', error: 'Failed to start ' + shell.label + ': ' + e.message }));
+      ws.close();
+      return;
     }
-  });
+  }
+  s.dev = dev;
+  SESSIONS.set(s.id, s);
+  ensureSpare();
 
   // `lost` says we were asked for a session that is no longer here, so the app
   // can say that plainly instead of pretending this fresh shell is the old one.
-  ws.send(JSON.stringify({ type: 'meta', sid: s.id, shell: shell.label, cwd, resumed: false, lost: !!sid }));
+  ws.send(JSON.stringify({ type: 'meta', sid: s.id, shell: s.shell, cwd: s.cwd, resumed: false, lost: !!sid }));
   attach(s, ws);
 }
 
@@ -984,6 +1018,9 @@ async function start() {
     throw new Error('refused: port ' + PORT + ' is already tunnelled by tailscale serve');
   }
   await new Promise((resolve) => server.listen(PORT, HOST, () => { announce(); resolve(); }));
+  // Boot the first spare shell now, so the very first tab opens instantly too.
+  ensureSpare();
+  process.on('exit', () => { if (spare) { try { spare.term.kill(); } catch (e) {} } });
   // Advertise the running port so the `winmux` CLI can find it. Best-effort:
   // the app still runs if the home dir is unwritable. WINMUX_NO_INSTANCE lets a
   // test harness spin up many servers without clobbering the real one's file.
