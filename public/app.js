@@ -234,11 +234,38 @@
     placeMenu(m, r.left, r.bottom + 4);
   }
   function copySel(t) { try { var s = t.term.getSelection(); if (s && navigator.clipboard) navigator.clipboard.writeText(s); } catch (e) {} }
+  // Paste safety (#214). A pasted block with newlines runs every line as its own
+  // command the instant it lands — a footgun, and a worse one in front of an
+  // agent. A single trailing newline (paste one command + run it) is fine; two
+  // or more lines is the danger. If the shell has bracketed paste on, xterm
+  // already neutralises it (the shell holds it as literal text), so those pass
+  // straight through; only a raw multi-line paste stops to ask.
+  function isMultiLinePaste(txt) {
+    if (!txt) return false;
+    return /\r?\n/.test(txt.replace(/\r?\n$/, ''));   // ignore one trailing newline
+  }
+  function bracketedActive(t) {
+    try { return !!(t.term && t.term.modes && t.term.modes.bracketedPasteMode); } catch (e) { return false; }
+  }
+  function sendToShell(t, txt) {
+    if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'i', d: txt }));
+  }
+  function deliverPaste(t, txt) {
+    if (!txt) return;
+    if (isMultiLinePaste(txt) && !bracketedActive(t)) {
+      var n = txt.replace(/\r?\n$/, '').split(/\r?\n/).length;
+      confirmDialog('Paste ' + n + ' lines?',
+        'This paste is ' + n + ' lines and will run each one as a command the moment it lands. Paste anyway?',
+        'Paste', function () { sendToShell(t, txt); try { t.term.focus(); } catch (e) {} });
+    } else {
+      sendToShell(t, txt);
+    }
+  }
   function pasteInto(t) {
     try {
       if (navigator.clipboard && navigator.clipboard.readText) {
         navigator.clipboard.readText().then(function (txt) {
-          if (txt && t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'i', d: txt }));
+          deliverPaste(t, txt);
           try { t.term.focus(); } catch (e) {}
         }).catch(function () {});
       }
@@ -1301,6 +1328,23 @@
       }
       if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'i', d: d }));
     });
+    // Guard the native paste path too — Ctrl+V, middle-click, a browser paste —
+    // which bypasses pasteInto() and would otherwise reach the shell raw. A
+    // single-line or bracketed-safe paste is left to xterm; a raw multi-line
+    // paste is intercepted and routed through the same confirm. Capture phase so
+    // it preempts xterm's own paste handler.
+    try {
+      var pta = term.textarea;
+      if (pta) {
+        pta.addEventListener('paste', function (e) {
+          var cd = e.clipboardData || window.clipboardData;
+          var txt = cd ? cd.getData('text') : '';
+          if (!isMultiLinePaste(txt) || bracketedActive(t)) return;   // safe — let xterm handle it
+          e.preventDefault(); e.stopPropagation();
+          deliverPaste(t, txt);
+        }, true);
+      }
+    } catch (e) {}
     // A real terminal bell (\a) from the shell = this terminal wants attention.
     try {
       term.onBell(function () {

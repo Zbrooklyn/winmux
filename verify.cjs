@@ -63,6 +63,9 @@ const PORT_CLI = 9921;
 // The markdown check opens a viewer surface and edits the file under it, so it
 // needs a server whose /api/md nobody else is racing and a /control of its own.
 const PORT_MD = 9922;
+// The paste check fires real paste events at a live terminal and reads whether
+// the multi-line guard stopped to ask, so it wants a shell nobody else touches.
+const PORT_PASTE = 9923;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1566,6 +1569,40 @@ check('cli', PORT_CLI, async ({ browser, base, t, shot }) => {
 // file (/api/md), the app renders a tiny markdown subset, and it re-pulls on a
 // timer so a file the agent is writing updates live. This check drives the real
 // CLI path (like `cli`) and then edits the file on disk to prove the live pull.
+// Paste safety (#214): a multi-line paste stops to ask before it can run every
+// line; a single-line paste is unbothered.
+check('paste', PORT_PASTE, async ({ browser, base, t }) => {
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(3500);
+  const firePaste = (text) => page.evaluate((txt) => {
+    const ta = document.querySelector('.xterm-helper-textarea');
+    if (!ta) return false;
+    const dt = new DataTransfer();
+    dt.setData('text/plain', txt);
+    ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    return true;
+  }, text);
+  const dlg = () => page.evaluate(() => {
+    const d = document.getElementById('dlg-ovl'), body = document.getElementById('dlg-body');
+    return { open: !!(d && d.hasAttribute('data-open')), text: body ? body.textContent : '' };
+  });
+
+  await firePaste('echo one\necho two\necho three');
+  await page.waitForTimeout(400);
+  const multi = await dlg();
+  t('a multi-line paste stops to ask before it runs', multi.open && /Paste 3 lines/.test(multi.text), multi);
+  t('the warning says these lines will run as commands', /run each one as a command/.test(multi.text));
+
+  await page.evaluate(() => { const c = document.querySelector('#dlg-body [data-cancel]'); if (c) c.click(); });
+  await page.waitForTimeout(300);
+  t('cancelling the paste closes the dialog and sends nothing', (await dlg()).open === false);
+
+  await firePaste('echo just-one-line');
+  await page.waitForTimeout(400);
+  t('a single-line paste is not interrupted', (await dlg()).open === false);
+});
+
 check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
   const winmux = (args) => new Promise((resolve) => {
     const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
