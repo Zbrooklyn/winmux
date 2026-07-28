@@ -667,6 +667,27 @@ Then closing the window leaves the shells (and any agent) running, and reopening
 by session id (the reload path already reattaches this way). This belongs with Phase 11
 because a persistent agent cockpit is the whole point.
 
+**Session capture & restore — the two levels (design, verified feasible 2026-07-27).**
+"Restore a session" means two distinct promises; WinMux should offer both:
+
+- **Level 1 — keep it alive (true restore).** With the detached server above, a close
+  doesn't end anything: reopen is the *same* live shell, full scrollback, anything mid-run
+  still running. This is the real "pick up exactly where I left off." The only thing no
+  terminal can do is resurrect a *dead* process's in-memory state (a half-open vim buffer) —
+  the answer is to keep it alive, not revive it.
+- **Level 2 — replay the history (visual restore).** Persist each session's scrollback to
+  disk and repaint it on reopen, so even a session whose process ended comes back with its
+  full command history visible and ready to type into. WinMux already keeps scrollback in the
+  session registry for reconnection (Phase 4); this adds a disk write + a replay-on-open.
+
+**Claude Code / Codex resume (design).** These agents already persist their conversation to
+disk and support native resume (`claude --resume <id>`, Codex equivalent). WinMux layers a
+one-click "Resume" on top: detect a tab was running the agent, remember its session id + cwd,
+and on reopen offer to run the resume command in the right folder. WinMux already ships a
+Claude-transcript reader (the fleet viewer, Phases 51–59 / `claude-fleet.ts`), so the ability
+to identify the session and offer resume is largely already in the codebase — this is a small
+layer over a feature that already exists, not a new persistence system.
+
 ### Phase 12 — OSS distribution + a production-grade GitHub presence
 Two halves. The **packaging** half: a Windows installer, auto-update, a winget entry,
 LICENSE (MIT), and flipping the repo public. The **presentation** half — the repo has
