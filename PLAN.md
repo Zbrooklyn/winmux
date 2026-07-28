@@ -655,6 +655,18 @@ Claude Code hooks, a live fleet/transcript view, and shell integration that keep
 prompt's cwd and git branch current. This is what makes WinMux an *agent* cockpit,
 not just a terminal.
 
+**Session survival across a full app close (known gap, verified 2026-07-27).** Today the
+Electron app boots `server.cjs` *in-process*, so fully closing the window quits the server
+and kills every live shell — including a running `claude`/`codex`. The tab/group layout is
+restored on reopen, but the shells come back fresh (no scrollback, nothing still running).
+Minimizing keeps everything; only a full close ends it (the phone's grace-window reconnect
+already survives a backgrounded tab). Fix: run the terminal server as a **detached
+background process** the app attaches to on launch, instead of hosting it in-process — the
+detached server already exists (`winmux.ps1 remote`), it just isn't the desktop default.
+Then closing the window leaves the shells (and any agent) running, and reopening reattaches
+by session id (the reload path already reattaches this way). This belongs with Phase 11
+because a persistent agent cockpit is the whole point.
+
 ### Phase 12 — OSS distribution + a production-grade GitHub presence
 Two halves. The **packaging** half: a Windows installer, auto-update, a winget entry,
 LICENSE (MIT), and flipping the repo public. The **presentation** half — the repo has
