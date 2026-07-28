@@ -2688,9 +2688,12 @@
   function serializeTerm(t, maxLines) {
     if (!t || !t.term) return '';
     var buf = t.term.buffer.active, out = [], n = buf.length;
-    var start = maxLines ? Math.max(0, n - maxLines) : 0;
-    for (var i = start; i < n; i++) { var line = buf.getLine(i); out.push(line ? line.translateToString(true) : ''); }
-    return out.join('\n').replace(/\s+$/, '');
+    for (var i = 0; i < n; i++) { var line = buf.getLine(i); out.push(line ? line.translateToString(true) : ''); }
+    // Drop the blank viewport rows below the cursor, THEN take the last N —
+    // otherwise "last N lines" of a top-anchored shell is all trailing blanks.
+    while (out.length && out[out.length - 1] === '') out.pop();
+    if (maxLines && out.length > maxLines) out = out.slice(out.length - maxLines);
+    return out.join('\n');
   }
   function termByTarget(target) {
     if (!target) return activeTerm();

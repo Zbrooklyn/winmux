@@ -4,6 +4,7 @@
   "private": true,
   "description": "WinMux — a terminal multiplexer for Windows: one node-pty server with three faces (native Electron app, browser, and phone over Tailscale).",
   "main": "server.cjs",
+  "bin": { "winmux": "bin/winmux.cjs" },
   "scripts": {
     "start": "node server.cjs",
     "remote": "powershell -NoProfile -ExecutionPolicy Bypass -File winmux.ps1 start",
