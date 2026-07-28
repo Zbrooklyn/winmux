@@ -687,6 +687,20 @@ deliberately by Edward. Everything else on the ceiling costs zero clutter.
 If it needs new default chrome, it's wrong — make it summoned, put it on a row that already
 exists, route it through attention, or push it into the command layer.
 
+**Authority split (Edward, locked 2026-07-28) — who approves what.**
+- **Anything that renders — new UI, a visible control, a screen, an on-row affordance →
+  Edward's gate.** Bring it to him before it ships.
+- **Anything backend / mechanism — engines, data layers, CLI verbs, transports, persistence,
+  orchestration, plumbing → pre-approved.** Standing authorization to build when we get to it,
+  no fresh ask.
+- **Hybrid features split cleanly:** build the engine to completion under standing approval;
+  the thin visible bit it eventually surfaces through waits for Edward's yes. Build the engine
+  freely, gate the glass. (This *speeds us up* — mechanisms sit built and ready, so an approved
+  surface ships instantly instead of from scratch.) Example: the whole "what's it doing"
+  transcript-analysis layer and the remote-permission-approval routing are pre-approved to
+  build; the row line and the notification's visible design are gated. Workspaces-as-code is
+  pure backend — fully pre-approved, no surface at all.
+
 ### Depth ideas — power without surface (backlog under the design law, 2026-07-28)
 
 Every item lives in one of the four no-clutter channels, so each already passes the "does
