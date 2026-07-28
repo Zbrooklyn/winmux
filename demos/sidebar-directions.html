@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WinMux · Agent attention: 4 design directions</title>
+<style>
+  :root{
+    --bg0:#1e1e1e; --bg1:#262626; --bg2:#2d2d2d; --bg3:#333; --border:#363636; --border-s:#4a4a4a;
+    --text:#dadada; --muted:#a8a8a8; --faint:#6b6b6b;
+    --accent:#8a5cf5; --accent-soft:rgba(138,92,245,.16);
+    --ok:#44cf6e; --work:#e9973f; --err:#fb464c; --idle:#6b6b6b; --term-bg:#1a1a1a;
+    --mono:"Cascadia Code","Cascadia Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg0);color:var(--text);font-family:'Inter',system-ui,'Segoe UI',Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;font-size:13px;padding:26px 24px 60px}
+  .mono{font-family:var(--mono)}
+  svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  h1{font-size:17px;font-weight:650;margin:0 0 4px}
+  .lede{color:var(--muted);font-size:12.5px;margin:0 0 24px;max-width:720px;line-height:1.55}
+
+  .grid{display:grid;grid-template-columns:repeat(2,minmax(380px,1fr));gap:22px;max-width:1000px}
+  .dir{display:flex;flex-direction:column}
+  .dhead{margin-bottom:11px}
+  .dtag{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+  .dtitle{font-size:15px;font-weight:600;margin:5px 0 4px}
+  .dwhy{font-size:12px;color:var(--muted);line-height:1.5}
+  .dphone{font-size:11px;color:var(--faint);margin-top:6px}
+  .dphone b{color:var(--ok);font-weight:600}
+  .dphone b.no{color:var(--err)}
+  .frame{background:var(--bg1);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+
+  /* shared sidebar bits */
+  .sbar{width:100%}
+  .prow{display:flex;align-items:center;gap:11px;padding:12px 12px 12px 14px}
+  .prow[data-active]{background:var(--accent-soft)}
+  .pfolder{width:30px;height:30px;border-radius:8px;background:var(--bg2);display:flex;align-items:center;justify-content:center;color:var(--muted);flex:0 0 auto;position:relative}
+  .prow[data-active] .pfolder{background:color-mix(in srgb,var(--accent) 22%,transparent);color:var(--accent)}
+  .pfolder svg{width:16px;height:16px;stroke-width:1.8}
+  .pdot{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%}
+  .pname{font-weight:600;font-size:14px}
+  .psub{font-size:11.5px;color:var(--faint);margin-top:2px}
+  .psub .hot{color:var(--err);font-weight:600}
+  .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .dot.needsyou{background:var(--err)} .dot.working{background:var(--work)} .dot.idle{background:var(--idle)}
+  .srow{display:flex;gap:9px;padding:9px 12px 10px 24px}
+  .srow>.dot{margin-top:5px}
+  .sname{font-size:13px;font-weight:600}
+  .sstat{font-size:11.5px;margin-top:2px}
+  .sstat.hot{color:var(--err)} .sstat.work{color:var(--work)} .sstat.mut{color:var(--muted)}
+  .sstat .m2{color:var(--faint)}
+  .sage{font-size:10.5px;color:var(--faint);margin-left:auto;flex:0 0 auto}
+  .divln{height:1px;background:color-mix(in srgb,var(--border) 45%,transparent)}
+
+  /* ============ A — inline expand (flat accordion) ============ */
+  .expand{padding:2px 12px 12px 24px;animation:none}
+  .expand .ask{font-size:12px;color:#e79a9d;line-height:1.5;padding:2px 0 8px}
+  .expand .out{font-family:var(--mono);font-size:10.5px;color:var(--faint);line-height:1.6;white-space:pre-wrap;padding-bottom:9px}
+  .expand .out .q{color:#e79a9d}
+  .expand .act{display:flex;gap:16px;font-size:12px;font-weight:600}
+  .expand .act a{cursor:pointer}
+  .expand .act .yes{color:var(--ok)} .expand .act .no{color:var(--muted)} .expand .act .open{color:var(--faint);margin-left:auto}
+
+  /* ============ B — the pane is the answer ============ */
+  .split{display:flex;min-height:230px}
+  .split .side{width:150px;border-right:1px solid var(--border);flex:0 0 auto}
+  .split .side .prow{padding:11px 10px 11px 12px;gap:9px}
+  .split .side .pname{font-size:12.5px}
+  .split .main{flex:1;background:var(--term-bg);display:flex;flex-direction:column}
+  .split .term{flex:1;font-family:var(--mono);font-size:11px;color:#c8c8c8;line-height:1.7;padding:12px 14px;white-space:pre-wrap}
+  .split .term .dim{color:#6d6d6d}
+  .split .term .q{color:#e79a9d}
+  .split .actbar{display:flex;align-items:center;gap:12px;padding:9px 14px;border-top:1px solid #2a2a2a;background:#202020;font-size:12px}
+  .split .actbar .lbl{color:var(--err);font-weight:600;font-size:11px}
+  .split .actbar .b{margin-left:0;color:var(--muted);font-weight:600;cursor:pointer}
+  .split .actbar .b.yes{color:var(--ok)}
+  .split .actbar .sp{flex:1}
+  .split .actbar .kbd{font-size:10px;color:var(--faint)}
+
+  /* ============ C — detail rail (a real region) ============ */
+  .rail{display:flex;min-height:250px}
+  .rail .side{width:150px;border-right:1px solid var(--border);flex:0 0 auto}
+  .rail .side .prow{padding:11px 10px 11px 12px;gap:9px}
+  .rail .side .pname{font-size:12.5px}
+  .rail .panel{flex:1;padding:14px 15px}
+  .rail .ph{display:flex;align-items:center;gap:8px;margin-bottom:3px}
+  .rail .ph .nm{font-family:var(--mono);font-size:13px;font-weight:600;flex:1}
+  .rail .ph .st{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--err)}
+  .rail .pj{font-size:11.5px;color:var(--faint);margin-bottom:12px}
+  .rail .ask{font-size:12.5px;line-height:1.5;color:#e79a9d;margin-bottom:12px}
+  .rail .lbl{font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin-bottom:5px}
+  .rail .out{font-family:var(--mono);font-size:10.5px;color:var(--faint);line-height:1.6;white-space:pre-wrap;margin-bottom:14px}
+  .rail .out .q{color:#e79a9d}
+  .rail .act{display:flex;gap:8px}
+  .rail .btn{flex:1;font-size:12px;font-weight:600;padding:7px;border-radius:7px;border:1px solid var(--border);background:var(--bg2);color:var(--muted);text-align:center;cursor:pointer}
+  .rail .btn.yes{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,var(--border))}
+
+  /* ============ D — refined calm popover ============ */
+  .flatpop-stage{position:relative;min-height:230px;padding:0}
+  .flatpop-stage .sbar{width:170px;border-right:1px solid var(--border)}
+  .flatpop-stage .sbar .prow{padding:11px 10px 11px 12px;gap:9px}
+  .flatpop-stage .sbar .pname{font-size:12.5px}
+  .flatpop{position:absolute;left:184px;top:44px;width:230px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:11px 12px}
+  .flatpop .nm{font-family:var(--mono);font-size:12.5px;font-weight:600;margin-bottom:2px}
+  .flatpop .pj{font-size:11px;color:var(--faint);margin-bottom:9px}
+  .flatpop .ask{font-size:12px;line-height:1.45;color:#e79a9d;margin-bottom:11px}
+  .flatpop .act{display:flex;gap:14px;font-size:12px;font-weight:600}
+  .flatpop .act .yes{color:var(--ok);cursor:pointer} .flatpop .act .no{color:var(--muted);cursor:pointer} .flatpop .act .open{color:var(--faint);margin-left:auto;cursor:pointer}
+  .flatpop::before{content:"";position:absolute;left:-5px;top:16px;width:9px;height:9px;background:var(--bg2);border-left:1px solid var(--border);border-bottom:1px solid var(--border);transform:rotate(45deg)}
+</style>
+</head>
+<body>
+  <h1>Agent attention: four ways to surface a blocked agent</h1>
+  <p class="lede">Same moment in each: <b class="mono" style="color:#e79a9d">steady-imports · Claude Code</b> is blocked on a production migration. The question is the <em>form</em>. Which one feels like WinMux (flat, calm, integrated) rather than a technical popup bolted on? Phone-fit noted on each.</p>
+
+  <div class="grid">
+
+    <!-- ===================== A ===================== -->
+    <div class="dir">
+      <div class="dhead">
+        <div class="dtag">Direction A</div>
+        <div class="dtitle">Inline expand: flat accordion</div>
+        <div class="dwhy">The blocked row opens in place, right in the list, like the group accordion already does. No box, no shadow. The detail is part of the calm surface.</div>
+        <div class="dphone">Phone: <b>works natively</b>. It's just the list expanding.</div>
+      </div>
+      <div class="frame">
+        <div class="sbar">
+          <div class="prow"><span class="pfolder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--err)"></span></span><div><div class="pname">steady-imports</div><div class="psub"><span class="hot">1 needs you</span></div></div></div>
+          <div class="srow" data-active><span class="dot needsyou"></span><div style="flex:1"><div style="display:flex"><span class="sname mono">Claude Code</span><span class="sage">8m</span></div><div class="sstat hot">Needs you</div></div></div>
+          <div class="expand">
+            <div class="ask">Apply 3 pending migrations to the <b>production</b> database? This can’t be undone automatically.</div>
+            <div class="out">3 migrations pending.
+<span class="q">Continue? (y/n)</span> ▋</div>
+            <div class="act"><a class="yes">Approve</a><a class="no">Deny</a><a class="open">Open ›</a></div>
+          </div>
+          <div class="divln"></div>
+          <div class="prow"><span class="pfolder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--work)"></span></span><div><div class="pname">winmux</div><div class="psub">2 sessions · 1 working</div></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== B ===================== -->
+    <div class="dir">
+      <div class="dhead">
+        <div class="dtag">Direction B</div>
+        <div class="dtitle">The pane is the answer</div>
+        <div class="dwhy">Selecting the agent shows it where you'd actually look: in the terminal. A slim action bar sits at the pane's bottom. The sidebar stays pristine; nothing floats.</div>
+        <div class="dphone">Phone: <b>works natively</b>. Tap the agent, you're in its terminal.</div>
+      </div>
+      <div class="frame">
+        <div class="split">
+          <div class="side">
+            <div class="prow" data-active><span class="dot needsyou" style="margin-top:0"></span><div><div class="pname mono">Claude Code</div></div></div>
+            <div class="prow"><span class="dot working" style="margin-top:0"></span><div><div class="pname mono" style="color:var(--muted)">Codex</div></div></div>
+            <div class="prow"><span class="dot idle" style="margin-top:0"></span><div><div class="pname mono" style="color:var(--muted)">pwsh</div></div></div>
+          </div>
+          <div class="main">
+            <div class="term"><span class="dim">$ supabase db push</span>
+<span class="dim">Connecting to project prod-xyz…</span>
+3 migrations pending:
+  add_orders_index, backfill_status, drop_legacy_cols
+<span class="q">Continue? (y/n)</span> ▋</div>
+            <div class="actbar"><span class="lbl">Needs you</span><span class="b yes">Approve</span><span class="b">Deny</span><span class="sp"></span><span class="kbd mono">⌘↵ approve</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== C ===================== -->
+    <div class="dir">
+      <div class="dhead">
+        <div class="dtag">Direction C</div>
+        <div class="dtitle">Detail rail: a real region</div>
+        <div class="dwhy">A proper panel in the layout (like the changes dock), not an overlay. Persistent, flat, bordered like the rest of the shell. It belongs to the frame.</div>
+        <div class="dphone">Phone: <b class="no">adapts</b>. The rail becomes a full screen after tap (no room side-by-side).</div>
+      </div>
+      <div class="frame">
+        <div class="rail">
+          <div class="side">
+            <div class="prow" data-active><span class="dot needsyou" style="margin-top:0"></span><div><div class="pname mono">Claude Code</div></div></div>
+            <div class="prow"><span class="dot working" style="margin-top:0"></span><div><div class="pname mono" style="color:var(--muted)">Codex</div></div></div>
+            <div class="prow"><span class="dot idle" style="margin-top:0"></span><div><div class="pname mono" style="color:var(--muted)">pwsh</div></div></div>
+          </div>
+          <div class="panel">
+            <div class="ph"><span class="nm">Claude Code</span><span class="st">Needs you · 8m</span></div>
+            <div class="pj">steady-imports</div>
+            <div class="ask">Apply 3 pending migrations to the production database? Can’t be undone automatically.</div>
+            <div class="lbl">Last output</div>
+            <div class="out">3 migrations pending.
+<span class="q">Continue? (y/n)</span> ▋</div>
+            <div class="act"><span class="btn yes">Approve</span><span class="btn">Deny</span><span class="btn">Open</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== D ===================== -->
+    <div class="dir">
+      <div class="dhead">
+        <div class="dtag">Direction D</div>
+        <div class="dtitle">Refined calm popover</div>
+        <div class="dwhy">The popover, but in WinMux's language: no heavy drop-shadow, one flat step off the surface, hairline border, a small pointer, tighter and quieter. The elegant version of what I built.</div>
+        <div class="dphone">Phone: <b class="no">can't</b>. A side popover has nowhere to go on a narrow screen.</div>
+      </div>
+      <div class="frame">
+        <div class="flatpop-stage" style="display:flex">
+          <div class="sbar">
+            <div class="prow"><span class="pfolder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--err)"></span></span><div><div class="pname">steady-imports</div><div class="psub"><span class="hot">1 needs you</span></div></div></div>
+            <div class="srow" data-active><span class="dot needsyou"></span><div style="flex:1"><div style="display:flex"><span class="sname mono">Claude Code</span><span class="sage">8m</span></div><div class="sstat hot">Needs you</div></div></div>
+            <div class="prow"><span class="pfolder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--work)"></span></span><div><div class="pname">winmux</div><div class="psub">2 · 1 working</div></div></div>
+          </div>
+          <div class="flatpop">
+            <div class="nm">Claude Code</div>
+            <div class="pj">steady-imports · 8m</div>
+            <div class="ask">Apply 3 migrations to <b>production</b>? Can’t be undone.</div>
+            <div class="act"><span class="yes">Approve</span><span class="no">Deny</span><span class="open">Open ›</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
