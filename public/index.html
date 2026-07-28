@@ -39,10 +39,15 @@
      mockup's prefers-color-scheme media query because of the attribute selector. */
   :root[data-theme="light"] { --bg0:#fff; --bg1:#f6f6f6; --bg2:#eeeef0; --bg3:#e6e6e8; --border:#e2e2e2; --border-s:#c4c4c4; --text:#232323; --muted:#5c5c5c; --faint:#666666; --accent-ink:#6b3fd4; --term-bg:#fbfbfb; }
   :root[data-theme="dark"]  { --bg0:#1e1e1e; --bg1:#262626; --bg2:#2d2d2d; --bg3:#333; --border:#363636; --border-s:#4a4a4a; --text:#dadada; --muted:#a8a8a8; --faint:#969696; --accent-ink:#ab90ff; --term-bg:#1a1a1a; }
-  /* Accent-as-text needs more lift than accent-as-surface: the mockup's #8a5cf5
-     reads 3.6:1 behind the "Mux" wordmark and the favicon-strip initials. Those
-     two use --accent-ink; every accent *fill* still uses the mockup's --accent. */
-  .nhead .brand b, .tfav .fav-b { color: var(--accent-ink); }
+  /* Brand wordmark: Edward's call is the base saturated --accent (#8a5cf5, the
+     "dark purple") in dark mode. It reads ~3.6:1 there — a deliberate taste
+     choice for a 3-letter accent beside the high-contrast "Win". In light mode
+     #8a5cf5 is too light on white, so the brand switches to the darker --accent-ink
+     (#6b3fd4). The favicon-strip initials keep the legibility lift in both modes. */
+  .tfav .fav-b { color: var(--accent-ink); }
+  .nhead .brand b { color: var(--accent); }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .nhead .brand b { color: var(--accent-ink); } }
+  :root[data-theme="light"] .nhead .brand b { color: var(--accent-ink); }
   .ofmi[data-on]::after { content: "✓"; margin-left: auto; color: var(--accent); font-weight: 700; }
   /* Split layout: wsrow holds columns; each column stacks panes vertically. */
   .wscol { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); }

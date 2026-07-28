@@ -334,11 +334,10 @@ check('brand', PORT_BUSY, async ({ browser, base, t, shot }) => {
   await p.waitForTimeout(4000);
 
   t('tab title is WinMux', (await p.title()) === 'WinMux');
-  const chip = await p.evaluate(() => {
-    const el = document.querySelector('#version-chip');
-    return el && el.getAttribute('title');
-  });
-  t('version chip says WinMux', /^WinMux v1\.0/.test(chip || ''), chip);
+  // The header no longer carries a version chip — @edward's call: the version
+  // lives only in Settings → About (asserted just below), not the chrome.
+  t('the version chip was removed from the header',
+    (await p.locator('#version-chip').count()) === 0);
 
   await settings(p, 'About');
   const about = (await p.locator('#settings-pane').textContent()).replace(/\s+/g, ' ').trim();
