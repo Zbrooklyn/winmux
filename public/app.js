@@ -2043,7 +2043,7 @@
       });
       if (stack.length) cols.push(stack);
     });
-    return { cols: cols, group: (groupById(activeGroupId) || {}).name || '' };
+    return { v: SCHEMA_VERSION, cols: cols, group: (groupById(activeGroupId) || {}).name || '' };
   }
   // The live layout — with each tab's session id — so a full page reload can land
   // back in the running shells instead of orphaning them. Saved on the way out and
@@ -2059,8 +2059,36 @@
     groups.push(g); sortGroups(); saveGroups();
     return g;
   }
+  // The stored-layout schema version. Bump it whenever the snapshot() shape
+  // changes, and add a step to migrateLayout() to bring old blobs forward. The
+  // point (#212): an update that changes the format must never brick a returning
+  // user — old state is upgraded, or safely discarded, never thrown on.
+  var SCHEMA_VERSION = 1;
+  function migrateLayout(desc) {
+    if (!desc || typeof desc !== 'object') return null;
+    var v = desc.v || 0;                      // pre-versioning blobs are v0 (== v1 shape)
+    if (v > SCHEMA_VERSION) return null;       // written by a newer WinMux — don't guess, start clean
+    // Future upgrades chain here, e.g. if (v < 2) desc = up1to2(desc);
+    return desc;
+  }
+  // Restores a layout, and is crash-safe on every path: a bad or future-format
+  // blob is refused before anything is torn down, and if the rebuild itself
+  // throws the app still lands on a working terminal instead of a blank frame.
   function restoreLayout(desc) {
-    if (!desc || !desc.cols || !desc.cols.length) return;
+    desc = migrateLayout(desc);
+    if (!desc || !desc.cols || !desc.cols.length) return false;
+    try {
+      restoreLayoutUnsafe(desc);
+      return true;
+    } catch (e) {
+      // Half-torn-down is worse than a fresh start — guarantee at least one shell.
+      try {
+        if (!panes.length) { var col = makeCol(); var fp = makePane(col); newTerm(fp, startShell()); focusPane(fp.id); updateChrome(); }
+      } catch (e2) {}
+      return false;
+    }
+  }
+  function restoreLayoutUnsafe(desc) {
     clearZoom();
     panes.forEach(function (p) { p.terms.forEach(function (t) { killShell(t); try { t.term.dispose(); } catch (e) {} }); });
     panes = [];
@@ -2863,7 +2891,9 @@
   var restored = false;
   try {
     var liveState = JSON.parse(localStorage.getItem('ct-live') || 'null');
-    if (liveState && liveState.cols && liveState.cols.length) { restoreLayout(liveState); restored = true; }
+    // restoreLayout validates, migrates, and is crash-safe; trust its verdict so a
+    // refused or failed restore falls through to a clean default rather than a lie.
+    if (liveState) restored = restoreLayout(liveState);
   } catch (e) {}
   if (!restored) {
     var first = makePane(makeCol());

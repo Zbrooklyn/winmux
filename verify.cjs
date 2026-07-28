@@ -66,6 +66,9 @@ const PORT_MD = 9922;
 // The paste check fires real paste events at a live terminal and reads whether
 // the multi-line guard stopped to ask, so it wants a shell nobody else touches.
 const PORT_PASTE = 9923;
+// The migrate check seeds a saved layout from a hypothetical future WinMux and
+// proves the app still boots to a working terminal, so it needs its own server.
+const PORT_MIGRATE = 9924;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1569,6 +1572,27 @@ check('cli', PORT_CLI, async ({ browser, base, t, shot }) => {
 // file (/api/md), the app renders a tiny markdown subset, and it re-pulls on a
 // timer so a file the agent is writing updates live. This check drives the real
 // CLI path (like `cli`) and then edits the file on disk to prove the live pull.
+// Config/layout migration (#212): a saved layout written by a future WinMux, or
+// a corrupt one, must never brick a returning user — the app boots to a working
+// terminal either way, not a blank frame.
+check('migrate', PORT_MIGRATE, async ({ browser, base, t }) => {
+  const oneTab = { active: 0, tabs: [{ shell: 'powershell', cwd: '', group: '', title: '', sid: '' }] };
+  const boot = async (blob) => {
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+    await ctx.addInitScript((b) => { try { localStorage.setItem('ct-live', JSON.stringify(b)); } catch (e) {} }, blob);
+    const p = await ctx.newPage();
+    await p.goto(base, { waitUntil: 'domcontentloaded' });
+    await p.waitForTimeout(4500);
+    const n = await p.evaluate(() => document.querySelectorAll('.pane .xterm').length);
+    await ctx.close();
+    return n;
+  };
+  t('a normal saved layout restores its panes', (await boot({ v: 1, group: '', cols: [[oneTab], [oneTab]] })) === 2);
+  t('a layout from a future version does not brick — it falls back to a terminal',
+    (await boot({ v: 999, group: '', cols: [[oneTab], [oneTab], [oneTab]] })) >= 1);
+  t('a corrupt saved layout does not brick either', (await boot({ v: 1, group: '', cols: [[{ active: 0, tabs: 'x' }]] })) >= 1);
+});
+
 // Paste safety (#214): a multi-line paste stops to ask before it can run every
 // line; a single-line paste is unbothered.
 check('paste', PORT_PASTE, async ({ browser, base, t }) => {
