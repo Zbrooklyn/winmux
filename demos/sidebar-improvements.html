@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WinMux — Sidebar improvements (visual aids)</title>
+<style>
+  :root{
+    --bg0:#1e1e1e; --bg1:#262626; --bg2:#2d2d2d; --bg3:#333; --border:#363636;
+    --text:#dadada; --muted:#a8a8a8; --faint:#6b6b6b;
+    --accent:#8a5cf5; --accent-soft:rgba(138,92,245,.16);
+    --ok:#44cf6e; --work:#e9973f; --err:#fb464c; --idle:#6b6b6b;
+    --mono:"Cascadia Code","Cascadia Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg0);color:var(--text);font-family:'Inter',system-ui,'Segoe UI',Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;font-size:13px;padding:26px 22px 40px}
+  .mono{font-family:var(--mono)}
+  svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  h1{font-size:16px;font-weight:650;margin:0 0 3px}
+  .lede{color:var(--muted);font-size:12.5px;margin:0 0 22px}
+
+  .cards{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start}
+  .card{width:296px;background:var(--bg1);border:1px solid var(--border);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+  .chead{padding:13px 15px 12px;border-bottom:1px solid var(--border)}
+  .ctag{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+  .ctitle{font-size:14px;font-weight:600;margin:5px 0 4px}
+  .cwhy{font-size:12px;color:var(--muted);line-height:1.5}
+  .chint{margin-top:9px;font-size:11px;color:var(--faint);display:flex;align-items:center;gap:6px}
+  .chint .k{font-family:var(--mono);font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 5px}
+
+  /* mini sidebar (real cockpit classes) */
+  .mini{background:var(--bg1)}
+  .prow{position:relative;display:flex;align-items:center;gap:11px;padding:13px 12px 13px 14px;cursor:pointer;border-bottom:1px solid color-mix(in srgb,var(--border) 45%,transparent);transition:background .12s}
+  .prow:hover{background:color-mix(in srgb,var(--text) 5%,transparent)}
+  .prow[data-active]{background:var(--accent-soft)}
+  .pfolder{width:30px;height:30px;border-radius:8px;background:var(--bg2);display:flex;align-items:center;justify-content:center;color:var(--muted);flex:0 0 auto;position:relative}
+  .prow[data-active] .pfolder{background:color-mix(in srgb,var(--accent) 22%,transparent);color:var(--accent)}
+  .pfolder svg{width:16px;height:16px;stroke-width:1.8}
+  .pdot{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%}
+  .pinfo{flex:1;min-width:0}
+  .pname{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .psub{font-size:11.5px;color:var(--faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .psub .hot{color:var(--err);font-weight:600}
+
+  .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .dot.working{background:var(--work);box-shadow:0 0 0 3px color-mix(in srgb,var(--work) 20%,transparent);animation:pulse 1.6s ease-in-out infinite}
+  .dot.needsyou{background:var(--err)} .dot.idle{background:var(--idle)}
+  @keyframes pulse{50%{opacity:.4}} @media (prefers-reduced-motion:reduce){.dot{animation:none}}
+  .srow{display:flex;gap:9px;padding:9px 12px 10px 22px;border-bottom:1px solid color-mix(in srgb,var(--border) 35%,transparent);transition:background .12s}
+  .srow>.dot{margin-top:5px}
+  .sinfo{flex:1;min-width:0}
+  .srtop{display:flex;align-items:center;gap:7px}
+  .sname{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+  .sstat{font-size:11.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sstat.hot{color:var(--err)} .sstat.work{color:var(--work)} .sstat.mut{color:var(--muted)}
+  .sstat .m2{color:var(--faint)}
+  .sage{font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums;flex:0 0 auto}
+
+  /* #4 sort toggle */
+  .seg{display:inline-flex;background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:2px;gap:2px}
+  .seg button{font:inherit;font-size:11px;color:var(--muted);background:transparent;border:0;border-radius:5px;padding:4px 9px;cursor:pointer}
+  .seg button[data-on]{background:var(--accent);color:#fff}
+  .mv{transition:transform .28s cubic-bezier(.2,.7,.2,1)}
+
+  /* #5 quick reply */
+  .qr{display:none;align-items:center;gap:5px;flex:0 0 auto}
+  .srow:hover .qr{display:flex}
+  .qrb{font:inherit;font-size:11px;font-weight:600;width:22px;height:22px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .qrb.y{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,var(--border))}
+  .qrb.y:hover{background:color-mix(in srgb,var(--ok) 18%,transparent)}
+  .qrb.n:hover{background:color-mix(in srgb,var(--text) 10%,transparent);color:var(--text)}
+
+  /* #6 focus ring */
+  .srow.jfocus{box-shadow:inset 0 0 0 2px var(--accent);border-radius:7px}
+  .jbtn{font:inherit;font-size:11px;color:var(--text);background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:5px 10px;cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+  .jbtn:hover{background:color-mix(in srgb,var(--text) 8%,transparent)}
+  .jbtn .k{font-family:var(--mono);font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 5px}
+</style>
+</head>
+<body>
+  <h1>Three sidebar improvements — one visual aid each</h1>
+  <p class="lede">Each is the real WinMux sidebar styling. Interact with them to judge whether it's worth the added surface.</p>
+
+  <div class="cards">
+
+    <!-- ============ #4 Attention-first ordering ============ -->
+    <div class="card">
+      <div class="chead">
+        <div class="ctag">#4 · adds nothing but reorders</div>
+        <div class="ctitle">Attention-first ordering</div>
+        <div class="cwhy">Projects with a blocked agent float to the top, so the one that needs you is always at eye level.</div>
+        <div class="chint">
+          <div class="seg" id="seg4">
+            <button data-mode="manual">Manual</button>
+            <button data-mode="attn" data-on>Attention-first</button>
+          </div>
+        </div>
+      </div>
+      <div class="mini" id="list4">
+        <div class="prow" data-k="steady" data-need>
+          <span class="pfolder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--err)"></span></span>
+          <div class="pinfo"><div class="pname">steady-imports</div><div class="psub"><span class="hot">1 needs you</span></div></div>
+        </div>
+        <div class="prow" data-k="winmux">
+          <span class="pfolder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--work)"></span></span>
+          <div class="pinfo"><div class="pname">winmux</div><div class="psub">2 sessions · 1 working</div></div>
+        </div>
+        <div class="prow" data-k="chatmail">
+          <span class="pfolder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:transparent"></span></span>
+          <div class="pinfo"><div class="pname">chatmail</div><div class="psub">2 sessions · idle</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ #5 Answer without switching ============ -->
+    <div class="card">
+      <div class="chead">
+        <div class="ctag">#5 · adds a control (hover-only)</div>
+        <div class="ctitle">Answer without switching</div>
+        <div class="cwhy">Hover a blocked agent to reveal <b>y / n</b> and unblock it right from the sidebar — no need to open the terminal.</div>
+        <div class="chint">Hover the red row, then click <span class="k">y</span> or <span class="k">n</span></div>
+      </div>
+      <div class="mini">
+        <div class="prow" data-active>
+          <span class="pfolder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--err)"></span></span>
+          <div class="pinfo"><div class="pname">steady-imports</div><div class="psub"><span class="hot">1 needs you</span></div></div>
+        </div>
+        <div class="srow" id="qrow">
+          <span class="dot needsyou" id="qdot"></span>
+          <div class="sinfo">
+            <div class="srtop"><span class="sname mono">Claude Code</span>
+              <span class="qr"><button class="qrb y" data-a="y">y</button><button class="qrb n" data-a="n">n</button></span>
+              <span class="sage" id="qage">8m</span>
+            </div>
+            <div class="sstat hot" id="qstat">Apply migration to prod? <span class="m2">(y/n)</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ #6 Jump to next blocked ============ -->
+    <div class="card">
+      <div class="chead">
+        <div class="ctag">#6 · zero surface, keyboard</div>
+        <div class="ctitle">Jump to next blocked</div>
+        <div class="cwhy">One key cycles focus through only the blocked agents, skipping everything that doesn't need you.</div>
+        <div class="chint"><button class="jbtn" id="jbtn">Next blocked <span class="k">J</span></button></div>
+      </div>
+      <div class="mini" id="list6">
+        <div class="srow" data-need>
+          <span class="dot needsyou"></span>
+          <div class="sinfo"><div class="srtop"><span class="sname mono">Claude Code</span><span class="sage">8m</span></div>
+          <div class="sstat hot">steady-imports · Apply migration? <span class="m2">(y/n)</span></div></div>
+        </div>
+        <div class="srow">
+          <span class="dot working"></span>
+          <div class="sinfo"><div class="srtop"><span class="sname mono">Claude Code</span><span class="sage">2m</span></div>
+          <div class="sstat work">winmux · verify.cjs <span class="m2">142/201</span></div></div>
+        </div>
+        <div class="srow" data-need>
+          <span class="dot needsyou"></span>
+          <div class="sinfo"><div class="srtop"><span class="sname mono">Codex</span><span class="sage">4m</span></div>
+          <div class="sstat hot">bbw-klaviyo · Overwrite welcome.liquid? <span class="m2">(y/n)</span></div></div>
+        </div>
+        <div class="srow">
+          <span class="dot idle"></span>
+          <div class="sinfo"><div class="srtop"><span class="sname mono">pwsh</span><span class="sage">25m</span></div>
+          <div class="sstat mut">chatmail · Idle</div></div>
+        </div>
+        <div class="srow" data-need>
+          <span class="dot needsyou"></span>
+          <div class="sinfo"><div class="srtop"><span class="sname mono">Claude Code</span><span class="sage">1m</span></div>
+          <div class="sstat hot">amud-aleph · Push to main? <span class="m2">(y/n)</span></div></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+  // #4 — reorder the project list by attention
+  (function () {
+    var list = document.getElementById('list4'), seg = document.getElementById('seg4');
+    var order = { manual: ['winmux', 'steady', 'chatmail'], attn: ['steady', 'winmux', 'chatmail'] };
+    function apply(mode) {
+      order[mode].forEach(function (k) {
+        var el = list.querySelector('[data-k="' + k + '"]');
+        var mv = el.querySelector('.mv') || el; el.classList.add('mv');
+        list.appendChild(el);
+      });
+      [].forEach.call(seg.querySelectorAll('button'), function (b) {
+        if (b.dataset.mode === mode) b.setAttribute('data-on', ''); else b.removeAttribute('data-on');
+      });
+    }
+    seg.addEventListener('click', function (e) { var b = e.target.closest('button'); if (b) apply(b.dataset.mode); });
+    apply('attn');
+  })();
+
+  // #5 — answer inline; the row visibly resolves
+  (function () {
+    var row = document.getElementById('qrow');
+    row.querySelectorAll('.qrb').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var yes = b.dataset.a === 'y';
+        document.getElementById('qdot').className = 'dot working';
+        document.getElementById('qstat').className = 'sstat work';
+        document.getElementById('qstat').innerHTML = yes ? 'Resuming — migration applied' : 'Resuming — skipped';
+        document.getElementById('qage').textContent = 'now';
+        row.querySelector('.qr').style.display = 'none';
+      });
+    });
+  })();
+
+  // #6 — hotkey / button cycles through only the blocked rows
+  (function () {
+    var blocked = [].slice.call(document.querySelectorAll('#list6 .srow[data-need]'));
+    var i = -1;
+    function next() {
+      if (i >= 0) blocked[i].classList.remove('jfocus');
+      i = (i + 1) % blocked.length;
+      blocked[i].classList.add('jfocus');
+      blocked[i].scrollIntoView({ block: 'nearest' });
+    }
+    document.getElementById('jbtn').addEventListener('click', next);
+    document.addEventListener('keydown', function (e) { if ((e.key === 'j' || e.key === 'J') && !e.metaKey && !e.ctrlKey) next(); });
+    next();
+  })();
+</script>
+</body>
+</html>
