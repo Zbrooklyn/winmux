@@ -500,6 +500,7 @@
   function dotClass(t) { return t.status === 'closed' ? 'error' : (t.status === 'needsyou' ? 'needsyou' : (t.status === 'working' ? 'working' : 'idle')); }
   function termName(t) { return t.tabEl ? t.tabEl.querySelector('.tt').textContent : labelFor(t.shell); }
   function statusLine(t) {
+    if (t.offline && t.state === 'reconnecting') return 'Offline — retrying';
     if (t.state === 'reconnecting') return 'Reconnecting…';
     if (t.status === 'closed' || t.state === 'closed') return 'Session ended';
     if (t.status === 'needsyou') return 'Needs you';
@@ -935,9 +936,14 @@
   function reflect(p) {
     var t = activeTermOf(p);
     var s = t ? t.state : 'idle';
-    p.pill.setAttribute('data-state', s === 'open' ? 'open' : (s === 'closed' ? 'closed' : (s === 'reconnecting' ? 'reconnecting' : 'idle')));
-    p.connText.textContent = s === 'open' ? 'connected'
-      : (s === 'closed' ? 'disconnected' : (s === 'reconnecting' ? 'reconnecting…' : 'connecting…'));
+    // A reconnect that has been failing for a few seconds stops calling itself
+    // "reconnecting…" and says "offline" — honest, and it keeps retrying underneath.
+    var offline = !!(t && t.offline && s === 'reconnecting');
+    var vis = offline ? 'offline' : (s === 'open' ? 'open' : (s === 'closed' ? 'closed' : (s === 'reconnecting' ? 'reconnecting' : 'idle')));
+    p.pill.setAttribute('data-state', vis);
+    p.connText.textContent = vis === 'offline' ? 'offline — retrying'
+      : (s === 'open' ? 'connected'
+      : (s === 'closed' ? 'disconnected' : (s === 'reconnecting' ? 'reconnecting…' : 'connecting…')));
   }
   function focusPane(id) {
     activePaneId = id;
@@ -1250,6 +1256,9 @@
 
       ws.onopen = function () {
         retries = 0;
+        // Back online — cancel the pending offline escalation and clear the flag.
+        if (t.offlineTimer) { clearTimeout(t.offlineTimer); t.offlineTimer = null; }
+        t.offline = false;
         t.state = 'open';
         if (t.status === 'closed') setStatus(t, 'idle');
         if (pn().activeTermId === id) reflect(pn());
@@ -1299,6 +1308,21 @@
           return;
         }
         t.state = 'reconnecting';
+        // A blip clears in a few seconds; past that the server is genuinely not
+        // answering, so escalate to an honest "offline" while still retrying. Time-
+        // based, not retry-count based, so a focus/online wake that resets the
+        // backoff can't keep us in a permanent "reconnecting…" that never tells
+        // the truth. Armed once per outage; cleared the moment we reconnect.
+        if (!t.offlineTimer && !t.offline) {
+          t.offlineTimer = setTimeout(function () {
+            t.offlineTimer = null;
+            if (t.state === 'reconnecting') {
+              t.offline = true;
+              if (pn().activeTermId === id) reflect(pn());
+              renderSidebar();
+            }
+          }, 4000);
+        }
         if (pn().activeTermId === id) reflect(pn());
         if (!told) { told = true; term.write('\r\n\x1b[90m[connection lost — reconnecting…]\x1b[0m\r\n'); }
         renderSidebar();

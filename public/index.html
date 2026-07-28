@@ -75,6 +75,12 @@
      in-progress rather than as a second flavour of broken. */
   .connpill[data-state="reconnecting"] .dot { background:var(--work); animation:connpulse 1.2s ease-in-out infinite; }
   @keyframes connpulse { 0%,100% { opacity:1 } 50% { opacity:.35 } }
+  /* Offline is the honest escalation of reconnecting: we have been trying for a
+     few seconds and the server is not answering. Steady red, not a pulse — a
+     pulse says "in progress", and after this long that would be a small lie. We
+     keep retrying underneath; this only stops the person from wondering. */
+  .connpill[data-state="offline"] .dot { background:var(--err); }
+  .connpill[data-state="offline"] { color:var(--err); }
   /* Reduce means remove, not shorten. cockpit.css opts its two keyframe animations
      out, but nothing covered the fifteen transitions, so asking for reduced motion
      measurably changed nothing. Duration is near-zero rather than `none` so any code
