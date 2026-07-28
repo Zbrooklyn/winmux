@@ -415,6 +415,25 @@
   .devmain { flex: 1 1 auto; min-width: 0; }
   .devname { font-size: 12.5px; color: var(--text); }
   .devmeta { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+  /* Phase 10 — the browser panel. A right-side dock over the workspace, shown
+     only when driven (winmux browser open / the toolbar globe). Electron-only:
+     it hosts a real <webview>; on the web it never appears. */
+  .wmb { position: fixed; top: 40px; right: 0; bottom: 0; width: 46%; min-width: 360px;
+    display: none; flex-direction: column; background: var(--bg0);
+    border-left: 1px solid var(--border); z-index: 40; box-shadow: -8px 0 24px rgba(0,0,0,.28); }
+  .wmb[data-open] { display: flex; }
+  .wmb-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+    height: 38px; padding: 0 8px; background: var(--bg1); border-bottom: 1px solid var(--border); }
+  .wmb-nav { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px;
+    border-radius: 6px; color: var(--muted); cursor: pointer; user-select: none; font-size: 14px; }
+  .wmb-nav:hover { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
+  .wmb-addr { flex: 1 1 auto; min-width: 0; height: 26px; padding: 0 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg0); color: var(--text);
+    font: 12.5px/1 "Segoe UI", system-ui, sans-serif; outline: none; }
+  .wmb-addr:focus { border-color: var(--accent); }
+  .wmb-close { margin-left: 2px; }
+  .wmb-view { flex: 1 1 auto; width: 100%; border: 0; background: #fff; }
 </style>
 </head>
 <body>

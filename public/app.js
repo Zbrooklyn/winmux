@@ -2701,6 +2701,80 @@
     for (var i = 0; i < all.length; i++) if (String(all[i].id) === String(target)) return all[i];
     return null;
   }
+  // --- Browser panel (Phase 10) — Electron-only <webview> dock -------------
+  var _wmb = null;
+  function isElectronApp() { return !!(window.winmux && window.winmux.isElectron); }
+  function ensureBrowserPanel() {
+    if (_wmb) return _wmb;
+    if (!isElectronApp()) return null;
+    var wrap = document.createElement('div');
+    wrap.className = 'wmb';
+    wrap.innerHTML =
+      '<div class="wmb-bar">' +
+        '<span class="wmb-nav wmb-back" title="Back" role="button">‹</span>' +
+        '<span class="wmb-nav wmb-fwd" title="Forward" role="button">›</span>' +
+        '<span class="wmb-nav wmb-reload" title="Reload" role="button">↻</span>' +
+        '<input class="wmb-addr" type="text" spellcheck="false" placeholder="Enter a URL" />' +
+        '<span class="wmb-nav wmb-close" title="Close panel" role="button">✕</span>' +
+      '</div>' +
+      '<webview class="wmb-view" src="about:blank" allowpopups></webview>';
+    document.body.appendChild(wrap);
+    var view = wrap.querySelector('.wmb-view');
+    var addr = wrap.querySelector('.wmb-addr');
+    wrap.querySelector('.wmb-back').addEventListener('click', function () { try { view.goBack(); } catch (e) {} });
+    wrap.querySelector('.wmb-fwd').addEventListener('click', function () { try { view.goForward(); } catch (e) {} });
+    wrap.querySelector('.wmb-reload').addEventListener('click', function () { try { view.reload(); } catch (e) {} });
+    wrap.querySelector('.wmb-close').addEventListener('click', function () { wrap.removeAttribute('data-open'); });
+    addr.addEventListener('keydown', function (e) { if (e.key === 'Enter') browserOpen(addr.value); });
+    view.addEventListener('did-navigate', function () { try { addr.value = view.getURL(); } catch (e) {} });
+    view.addEventListener('did-navigate-in-page', function () { try { addr.value = view.getURL(); } catch (e) {} });
+    _wmb = { wrap: wrap, view: view, addr: addr, ready: false, pending: null };
+    // A <webview> created inside a hidden panel attaches only once shown; a src
+    // change before that is dropped. Load through dom-ready, queueing until then.
+    view.addEventListener('dom-ready', function () {
+      _wmb.ready = true;
+      if (_wmb.pending) { var u = _wmb.pending; _wmb.pending = null; try { view.loadURL(u); } catch (e) {} }
+    });
+    return _wmb;
+  }
+  function browserWebview() { var b = ensureBrowserPanel(); return b ? b.view : null; }
+  function normalizeUrl(u) {
+    u = String(u || '').trim();
+    if (!u) return 'about:blank';
+    if (/^(https?|file|data|about|blob|chrome|view-source):/i.test(u)) return u;  // already a scheme URL
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) return u;                             // any other scheme://
+    if (/^(localhost|127\.0\.0\.1|\d+\.\d+\.\d+\.\d+)/.test(u)) return 'http://' + u;
+    return 'https://' + u;
+  }
+  function browserOpen(url) {
+    var b = ensureBrowserPanel(); if (!b) return null;
+    b.wrap.setAttribute('data-open', '');
+    var full = normalizeUrl(url);
+    b.addr.value = full;
+    // Showing the panel attaches the webview; load now if it's ready, else queue
+    // for dom-ready. Either path reliably navigates.
+    if (b.ready) { try { b.view.loadURL(full); } catch (e) { b.pending = full; } }
+    else { b.pending = full; }
+    return full;
+  }
+  // Runs INSIDE the webview: tag interactive nodes with @e refs, return a tree.
+  var SNAPSHOT_JS = '(function(){' +
+    'var sel="a[href],button,input,textarea,select,[role=button],[role=link],[role=tab],[onclick],summary";' +
+    'var nodes=[].slice.call(document.querySelectorAll(sel));var out=[];var i=0;' +
+    'nodes.forEach(function(el){var r=el.getBoundingClientRect();' +
+    'if(r.width<=0||r.height<=0)return;var st=getComputedStyle(el);if(st.visibility==="hidden"||st.display==="none")return;' +
+    'i++;el.setAttribute("data-wm-ref","e"+i);' +
+    'var role=el.getAttribute("role")||el.tagName.toLowerCase();' +
+    'var txt=(el.getAttribute("aria-label")||el.value||el.textContent||el.getAttribute("placeholder")||"").replace(/\\s+/g," ").trim().slice(0,80);' +
+    'out.push("@e"+i+" "+role+(txt?" \\""+txt+"\\"":""));});' +
+    'return {url:location.href,title:document.title,count:i,tree:out.join("\\n")};})()';
+  function CLICK_JS(ref) {
+    ref = String(ref).replace(/^@/, '');
+    return '(function(){var el=document.querySelector(\'[data-wm-ref="' + ref.replace(/"/g, '') + '"]\');' +
+      'if(!el)return {ok:false,error:"no such ref"};el.scrollIntoView({block:"center"});el.click();' +
+      'return {ok:true,ref:"' + ref + '"};})()';
+  }
+
   function runControl(cmd, args) {
     args = args || {};
     if (cmd === 'list') {
@@ -2743,6 +2817,23 @@
       if (pf) { activateTerm(pf, tf.id); focusPane(pf.id); }
       return { id: tf.id };
     }
+    if (cmd === 'browser') {
+      if (!isElectronApp()) throw new Error('the browser panel needs the WinMux desktop app');
+      var sub = args.sub || 'open';
+      var view = browserWebview();
+      if (sub === 'open') { return { url: browserOpen(args.url) }; }
+      if (!view) throw new Error('browser panel not ready');
+      if (sub === 'url') return { url: view.getURL() };
+      if (sub === 'back') { try { view.goBack(); } catch (e) {} return { ok: true }; }
+      if (sub === 'forward') { try { view.goForward(); } catch (e) {} return { ok: true }; }
+      if (sub === 'reload') { try { view.reload(); } catch (e) {} return { ok: true }; }
+      if (sub === 'snapshot') { return view.executeJavaScript(SNAPSHOT_JS); }   // a Promise — control layer awaits
+      if (sub === 'click') { return view.executeJavaScript(CLICK_JS(args.ref)); }
+      if (sub === 'screenshot') {
+        return view.capturePage().then(function (img) { return { dataUrl: img.toDataURL() }; });
+      }
+      throw new Error('unknown browser subcommand: ' + sub);
+    }
     throw new Error('unknown command: ' + cmd);
   }
   (function connectControl() {
@@ -2754,8 +2845,12 @@
       cws.onmessage = function (ev) {
         var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
         if (!m || !m.rpc) return;
-        try { cws.send(JSON.stringify({ rpc: m.rpc, ok: true, result: runControl(m.cmd, m.args) })); }
-        catch (e) { cws.send(JSON.stringify({ rpc: m.rpc, ok: false, error: String(e && e.message || e) })); }
+        // runControl may return a value or a Promise (browser snapshot/screenshot
+        // are async). Resolve both the same way.
+        Promise.resolve().then(function () { return runControl(m.cmd, m.args); }).then(
+          function (result) { cws.send(JSON.stringify({ rpc: m.rpc, ok: true, result: result })); },
+          function (e) { cws.send(JSON.stringify({ rpc: m.rpc, ok: false, error: String(e && e.message || e) })); }
+        );
       };
       cws.onclose = function () { setTimeout(open, 1500); };   // survive server restarts
       cws.onerror = function () { try { cws.close(); } catch (e) {} };
