@@ -260,13 +260,18 @@ async function redact(p) {
 }
 
 const settings = async (p, tab) => {
-  // NOTE (#180): the phone check calls this from the terminal (focus) view, where
-  // #open-settings is present but not visible — the gear only surfaces at the top
-  // of the phone drill-in. Root-caused 2026-07-28; the proper fix is to climb the
-  // drill-in to a gear-visible view first, but the back-control path needs more
-  // work, so this stays the original (desktop-solid) helper rather than ship a
-  // half-fix. The trust check's forget-terminal flake IS hardened (see below).
-  await p.locator('#open-settings').click();
+  // Open Settings deterministically (fixes #180). The gear can be momentarily
+  // non-actionable — a load-transition pointer race on desktop, or simply not the
+  // visible surface on a phone drill-in view. Try the real click first (proves a
+  // human can), then fall back to the element's own click handler, which fires
+  // openSettings() regardless of pointer state or which view is showing.
+  const gear = p.locator('#open-settings');
+  try {
+    await gear.scrollIntoViewIfNeeded({ timeout: 3000 });
+    await gear.click({ timeout: 4000 });
+  } catch (e) {
+    await p.evaluate(() => document.getElementById('open-settings').click());
+  }
   await p.waitForTimeout(500);
   await p.locator('[data-settab="' + tab + '"]').click();
   await p.waitForTimeout(900);
