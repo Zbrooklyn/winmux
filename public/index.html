@@ -459,6 +459,59 @@
     padding: 12px 14px; overflow: auto; } .wmm-body pre code { background: none; padding: 0; }
   .wmm-body blockquote { margin: .6em 0; padding: 2px 14px; border-left: 3px solid var(--border); color: var(--muted); }
   .wmm-body hr { border: 0; border-top: 1px solid var(--border); margin: 1.2em 0; }
+
+  /* Session preview panel (eyeball) — a new summoned surface. cockpit.css frozen;
+     .srow gets a hover-reveal eyeball, and .sxpv is an added detail panel. */
+  .srow { position: relative; }
+  .srow .speye { flex: 0 0 auto; width: 26px; height: 26px; display: flex; align-items: center;
+    justify-content: center; border-radius: 6px; color: var(--faint); cursor: pointer; align-self: center;
+    opacity: 0; transition: opacity .12s ease, background .12s ease, color .12s ease; }
+  .srow .speye svg { width: 16px; height: 16px; }
+  .srow:hover .speye, .srow.eye-on .speye, .srow .speye:focus-visible { opacity: 1; }
+  .srow.eye-on .speye { color: var(--accent); }
+  .srow .speye:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
+  .cockpit[data-mode="narrow"] .srow .speye { opacity: 1; }
+
+  .sxpv { position: fixed; top: 0; bottom: 0; left: 264px; width: 320px; z-index: 70;
+    background: var(--bg0); border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    visibility: hidden; opacity: 0; transform: translateX(-8px);
+    transition: opacity .14s ease, transform .14s ease; }
+  .sxpv.on { visibility: visible; opacity: 1; transform: none; }
+  .sxpv .pv-scroll { flex: 1; overflow-y: auto; padding: 18px 18px 12px; }
+  .sxpv .pv-head { margin-bottom: 16px; }
+  .sxpv .pv-id { display: flex; align-items: center; gap: 9px; }
+  .sxpv .pv-name { font-size: 16px; font-weight: 650; flex: 1; letter-spacing: -.01em; }
+  .sxpv .pv-chip { font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: .04em; flex: 0 0 auto; }
+  .sxpv .pv-chip.hot { color: var(--err); background: color-mix(in srgb, var(--err) 15%, transparent); }
+  .sxpv .pv-chip.work { color: var(--work); background: color-mix(in srgb, var(--work) 15%, transparent); }
+  .sxpv .pv-chip.mut { color: var(--muted); background: var(--bg2); }
+  .sxpv .pv-x { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+    border-radius: 6px; color: var(--faint); cursor: pointer; flex: 0 0 auto; }
+  .sxpv .pv-x svg { width: 15px; height: 15px; }
+  .sxpv .pv-x:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
+  .sxpv .pv-sub { font-size: 11.5px; color: var(--faint); margin-top: 6px; }
+  .sxpv .pv-lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--faint); margin: 0 0 9px; }
+  .sxpv .pv-primary { margin-bottom: 19px; }
+  .sxpv .pv-primary.hot { background: color-mix(in srgb, var(--err) 6%, transparent);
+    border: 1px solid color-mix(in srgb, var(--err) 22%, var(--border)); border-radius: 11px; padding: 13px 14px; }
+  .sxpv .pv-ask { font-size: 14px; line-height: 1.45; margin-bottom: 12px; }
+  .sxpv .pv-now { font-size: 14px; font-weight: 500; margin-bottom: 11px; }
+  .sxpv .pv-bar { height: 5px; border-radius: 3px; background: var(--bg2); overflow: hidden; }
+  .sxpv .pv-bar i { display: block; height: 100%; background: var(--work); border-radius: 3px; }
+  .sxpv .pv-btn { width: 100%; display: flex; justify-content: center; }
+  .sxpv .pv-meta { margin-bottom: 6px; }
+  .sxpv .pv-m { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+    padding: 7px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent); font-size: 12.5px; }
+  .sxpv .pv-m:last-child { border-bottom: none; }
+  .sxpv .pv-m .k { color: var(--faint); flex: 0 0 auto; }
+  .sxpv .pv-m .v { color: var(--text); font-weight: 500; text-align: right; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .sxpv .pv-m .v.mono { font-family: "Cascadia Code", Consolas, monospace; font-size: 11.5px; font-weight: 400; color: var(--muted); }
+  .sxpv .pv-foot { flex: 0 0 auto; padding: 12px 18px; border-top: 1px solid var(--border); }
+  .sxpv .pv-foot .btn.wide { width: 100%; display: flex; justify-content: center; font-weight: 600; }
+  @media (prefers-reduced-motion: reduce) { .sxpv { transition: none; } .srow .speye { transition: none; } }
 </style>
 </head>
 <body>

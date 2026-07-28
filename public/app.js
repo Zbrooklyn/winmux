@@ -144,6 +144,8 @@
   // The group row's expand chevron. cockpit.css rotates it 90° when the group is
   // open, so it has to start out pointing right.
   var CARET_RIGHT_SVG = '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>';
+  var EYE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+  var XCLOSE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>';
   var FOLDER_PLUS_SVG = '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><path d="M12 10v6M9 13h6"/></svg>';
   var PIN_SVG = '<svg viewBox="0 0 24 24"><path d="M9 3h6M12 3v7M7 10h10l-1.6 4H8.6zM12 14v7"/></svg>';
   var BACK_SVG = '<svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>';
@@ -496,7 +498,9 @@
       '<div class="sstat ' + statusTone(t) + '">' + statusLine(t) +
       (t.cwd ? ' · <span class="m2">' + esc(tailPath(t.cwd)) + '</span>' : '') + '</div>' +
       (t.status === 'working' ? '<div class="sbar"><i style="width:' + Math.round(t.prog || 8) + '%"></i></div>' : '') +
-      '</div></div>';
+      '</div>' +
+      '<span class="speye" data-eye="' + t.id + '" role="button" tabindex="0" title="Preview session" aria-label="Preview session">' + EYE_SVG + '</span>' +
+      '</div>';
   }
   // The group's own dot: the worst thing happening inside it.
   function groupStatus(ts) {
@@ -556,6 +560,8 @@
     renderNarrowSessions();
   }
   sxList.addEventListener('click', function (e) {
+    var eye = e.target.closest ? e.target.closest('[data-eye]') : null;
+    if (eye) { e.stopPropagation(); openPreview(parseInt(eye.getAttribute('data-eye'), 10)); return; }
     var ex = e.target.closest ? e.target.closest('[data-expand]') : null;
     if (ex) {
       // Peeking into a group must not switch to it.
@@ -569,6 +575,96 @@
     if (srow) { focusTerm(parseInt(srow.getAttribute('data-term'), 10)); return; }
     var row = e.target.closest ? e.target.closest('[data-switch]') : null;
     if (row) switchGroup(parseInt(row.getAttribute('data-switch'), 10));
+  });
+  // ── Session preview panel (eyeball) ──────────────────────────────────────
+  // A summoned detail panel: hover a row, click the eyeball, get a calm
+  // overview of that session. Rich fields (context window, tokens, tool-call
+  // payloads, timeline) light up once the agent engine feeds them; today it
+  // shows what the fleet already knows and offers Open to jump in.
+  var previewEl = null, previewTermId = null;
+  function previewNode() {
+    if (previewEl) return previewEl;
+    previewEl = document.createElement('div');
+    previewEl.className = 'sxpv';
+    document.body.appendChild(previewEl);
+    previewEl.addEventListener('click', function (e) {
+      var act = e.target.closest ? e.target.closest('[data-pv]') : null;
+      if (!act) return;
+      var k = act.getAttribute('data-pv');
+      if (k === 'close') closePreview();
+      else if (k === 'open' && previewTermId != null) { var id = previewTermId; closePreview(); focusTerm(id); }
+    });
+    return previewEl;
+  }
+  function previewHTML(t) {
+    var g = groupById(t.groupId) || {};
+    var stat = statusLine(t), tone = statusTone(t);
+    var chip = tone === 'hot' ? 'hot' : (tone === 'work' ? 'work' : 'mut');
+    var sub = esc(g.name || 'Session') + (t.shell ? ' · ' + esc(labelFor(t.shell)) : '');
+    var primary;
+    if (t.status === 'needsyou' || t.status === 'closed') {
+      primary = '<div class="pv-primary hot"><div class="pv-lbl">Waiting for you</div>' +
+        '<div class="pv-ask">This session is paused and needs your input.</div>' +
+        '<button class="btn primary pv-btn" data-pv="open">Open &amp; respond</button></div>';
+    } else if (t.status === 'working') {
+      primary = '<div class="pv-primary"><div class="pv-lbl">Now</div>' +
+        '<div class="pv-now">Working…</div>' +
+        '<div class="pv-bar"><i style="width:' + Math.round(t.prog || 8) + '%"></i></div></div>';
+    } else {
+      primary = '<div class="pv-primary"><div class="pv-lbl">Now</div><div class="pv-now">Idle — waiting for a command.</div></div>';
+    }
+    var rows = [['Status', esc(stat)]];
+    if (t.cwd) rows.push(['Directory', esc(t.cwd), true]);
+    var meta = '<div class="pv-lbl">Details</div><div class="pv-meta">' +
+      rows.map(function (r) { return '<div class="pv-m"><span class="k">' + r[0] + '</span><span class="v' + (r[2] ? ' mono' : '') + '">' + r[1] + '</span></div>'; }).join('') +
+      '</div>';
+    return '<div class="pv-scroll">' +
+      '<div class="pv-head"><div class="pv-id"><span class="pv-name">' + esc(termName(t)) + '</span>' +
+      '<span class="pv-chip ' + chip + '">' + esc(stat) + '</span>' +
+      '<span class="pv-x" data-pv="close" role="button" tabindex="0" title="Close" aria-label="Close preview">' + XCLOSE_SVG + '</span></div>' +
+      '<div class="pv-sub">' + sub + '</div></div>' +
+      primary + meta + '</div>' +
+      '<div class="pv-foot"><button class="btn wide" data-pv="open">Open session</button></div>';
+  }
+  function positionPreview() {
+    if (!previewEl) return;
+    var narrow = root.getAttribute('data-mode') === 'narrow';
+    if (narrow) { previewEl.style.left = '0px'; previewEl.style.width = '100%'; return; }
+    var sb = document.querySelector('.sessions');
+    var left = sb ? Math.round(sb.getBoundingClientRect().right) : 264;
+    previewEl.style.left = left + 'px';
+    previewEl.style.width = '';
+  }
+  function openPreview(id) {
+    var t = termById(id); if (!t) return;
+    previewTermId = id;
+    var el = previewNode();
+    el.innerHTML = previewHTML(t);
+    positionPreview();
+    el.classList.add('on');
+    [].forEach.call(sxList.querySelectorAll('.srow.eye-on'), function (r) { r.classList.remove('eye-on'); });
+    var row = sxList.querySelector('.srow[data-term="' + id + '"]');
+    if (row) row.classList.add('eye-on');
+  }
+  function closePreview() {
+    previewTermId = null;
+    if (previewEl) previewEl.classList.remove('on');
+    [].forEach.call(sxList.querySelectorAll('.srow.eye-on'), function (r) { r.classList.remove('eye-on'); });
+  }
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && previewEl && previewEl.classList.contains('on')) closePreview();
+  });
+  document.addEventListener('mousedown', function (e) {
+    if (!previewEl || !previewEl.classList.contains('on')) return;
+    if (previewEl.contains(e.target)) return;
+    if (e.target.closest && e.target.closest('[data-eye]')) return;
+    closePreview();
+  });
+  window.addEventListener('resize', positionPreview);
+  sxList.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    var eye = e.target.closest ? e.target.closest('[data-eye]') : null;
+    if (eye) { e.preventDefault(); openPreview(parseInt(eye.getAttribute('data-eye'), 10)); }
   });
   sxList.addEventListener('contextmenu', function (e) {
     var srow = e.target.closest ? e.target.closest('.srow[data-term]') : null;
