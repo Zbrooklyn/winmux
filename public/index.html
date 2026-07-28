@@ -333,6 +333,11 @@
   .cockpit[data-mode="narrow"] .stat .v { font-size: 20px; }
   .cockpit[data-mode="narrow"] .sx-head { font-size: 12.5px; }
   .cockpit[data-mode="narrow"] .nhead .live { font-size: 12px; }
+  /* The brand bar sat at ~66px on the phone: the 44px back-arrow tap target plus
+     cockpit.css's 11px top+bottom padding stacked up too tall. Keep the 44px hit
+     area, trim the bar's own vertical padding so the header reads proportional
+     (~56px) instead of chunky. */
+  .cockpit[data-mode="narrow"] .nhead { padding-top: 6px; padding-bottom: 6px; }
   /* Changes dock: folder bar on top, diff filling the rest. */
   .dock .pbody { display: flex; flex-direction: column; background: var(--bg0); }
   .dock .dwrap { position: relative; flex: 1; min-height: 0; }
