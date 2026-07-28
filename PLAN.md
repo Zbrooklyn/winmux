@@ -687,6 +687,53 @@ deliberately by Edward. Everything else on the ceiling costs zero clutter.
 If it needs new default chrome, it's wrong — make it summoned, put it on a row that already
 exists, route it through attention, or push it into the command layer.
 
+### Depth ideas — power without surface (backlog under the design law, 2026-07-28)
+
+Every item lives in one of the four no-clutter channels, so each already passes the "does
+this add power without adding surface?" test. Not committed scope — a shaped backlog to pull
+from. ⭐ = highest-leverage / most on-brand.
+
+**On rows you already have (zero new UI):**
+- ⭐ **"What is this agent doing right now"** — a one-line, transcript-derived summary on the
+  session row. WinMux already reads Claude transcripts (`claude-fleet.ts`), so this is fleet
+  awareness with no fleet panel.
+- Live status dot + idle heartbeat (working / waiting-for-you / done / errored / "last active").
+- Unread-output badge on sessions you're not looking at.
+- Cost / token meter per agent session (quiet, on row or hover) — fleet budget awareness, no dashboard.
+- Git branch + dirty state on repo rows (from shell integration).
+
+**Attention that comes to you (the anti-dashboard):**
+- ⭐ **Approve agent permission prompts from your phone** — Claude asks "can I run this?" while
+  you're away → one tap Approve/Deny on the lock screen. The feature people switch tools for.
+- Actionable notifications — reply to an agent from the notification itself.
+- "While you were away" digest (N finished, 1 needs you, 1 errored).
+- Long-command-done / command-failed pings with the result line; quiet hours.
+
+**The invisible command layer (power, no chrome):**
+- ⭐ **Workspaces-as-code / session templates** — `winmux open morning` spins up N repos, right
+  cwds, an agent started in each. Reproducible environments in one word.
+- **Fleet orchestration** — start N agents on N tasks from one command, watch the dots, get
+  pinged as each finishes. The control plane itself.
+- Cross-session run / broadcast; fuzzy-jump to any session (Ctrl+P for terminals); start/idle hooks.
+
+**Progressive disclosure (summoned, never default):**
+- Command palette as the universal "do anything" (keep buttons off the default surface).
+- Global scrollback search across all sessions; **peek** (preview a session's latest output
+  without switching); the opt-in fleet grid for a big monitor (the one named tradeoff).
+
+**Continuity — "all connected," all invisible:**
+- ⭐ **Clipboard sync** desktop↔phone (copy on the desk, paste on the phone).
+- Send-to-device (push a command/path between devices); seamless agent handoff (already roadmapped).
+
+**Terminal depth that stays calm:**
+- Command marks (jump between commands, rerun last, click a past command to rerun); clickable
+  paths/URLs/errors → editor or browser panel; collapse long output only when summoned.
+
+**The four highest-leverage, most on-brand:** transcript-derived "what's it doing" line ·
+remote permission approval from phone · workspaces-as-code · clipboard/send-to-device. Together
+they turn "a beautiful terminal" into "the calm cockpit I run all my agents from" — none of
+them touching the default surface.
+
 ### Production-readiness checklist (Edward + Claude, 2026-07-28)
 
 The spine for a terminal: **it never loses my work · it's always honestly there · it
