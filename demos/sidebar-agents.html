@@ -80,6 +80,10 @@
   .srow .sstat .m2{color:var(--faint)}
   .srow .sbar{height:3px;border-radius:2px;background:var(--bg3);overflow:hidden;margin-top:7px;max-width:82%}
   .srow .sbar i{display:block;height:100%;background:var(--work)}
+  .srow .sage{font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums;flex:0 0 auto}
+  .stat.need{cursor:pointer;border-radius:6px}
+  .stat.need:hover{background:color-mix(in srgb,var(--err) 12%,transparent)}
+  .prow .pdot.hot{cursor:pointer}
 
   .sx-foot{flex:0 0 auto;display:flex;align-items:center;gap:4px;padding:8px 10px;border-top:1px solid var(--border);justify-content:space-between}
 
@@ -117,15 +121,15 @@
         <div class="srow" data-active>
           <span class="dot working"></span>
           <div class="sinfo">
-            <div class="srtop"><span class="sname mono">Claude Code</span></div>
-            <div class="sstat work">Working · <span class="m2">winmux</span></div>
+            <div class="srtop"><span class="sname mono">Claude Code</span><span class="sage">2m</span></div>
+            <div class="sstat work">Running verify.cjs · <span class="m2">142/201 checks</span></div>
             <div class="sbar"><i style="width:70%"></i></div>
           </div>
         </div>
         <div class="srow">
           <span class="dot idle"></span>
           <div class="sinfo">
-            <div class="srtop"><span class="sname mono">pwsh</span></div>
+            <div class="srtop"><span class="sname mono">pwsh</span><span class="sage">25m</span></div>
             <div class="sstat mut">Idle · <span class="m2">winmux</span></div>
           </div>
         </div>
@@ -133,7 +137,7 @@
 
       <!-- steady-imports: expanded, has a blocked agent -->
       <div class="prow">
-        <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--err)"></span></span>
+        <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot hot" style="background:var(--err)"></span></span>
         <div class="pinfo"><div class="pname">steady-imports</div><div class="psub"><span class="hot">1 needs you</span></div></div>
         <span class="ptrail"><span class="pexpand" data-open2 title="Hide sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
       </div>
@@ -141,8 +145,8 @@
         <div class="srow">
           <span class="dot needsyou"></span>
           <div class="sinfo">
-            <div class="srtop"><span class="sname mono">Claude Code</span></div>
-            <div class="sstat hot">Needs you · <span class="m2">steady-imports</span></div>
+            <div class="srtop"><span class="sname mono">Claude Code</span><span class="sage">8m</span></div>
+            <div class="sstat hot">Apply migration to prod? <span class="m2">(y/n)</span></div>
           </div>
         </div>
       </div>
@@ -260,6 +264,33 @@
         prow.setAttribute('data-active', '');
       }
     });
+  });
+
+  // One click to the thing that needs you: jump to the first blocked agent,
+  // expanding its project if collapsed. Wired to the "Needs you" counter and
+  // to any red project dot.
+  function jumpToNeeds() {
+    var need = document.querySelector('.dot.needsyou');
+    if (!need) return;
+    var srow = need.closest('.srow');
+    var kids = srow.closest('.skids');
+    if (kids && !kids.classList.contains('open')) {
+      kids.classList.add('open');
+      var prow0 = kids.previousElementSibling;
+      var pex = prow0 && prow0.querySelector('.pexpand');
+      if (pex) { pex.setAttribute('data-open2', ''); pex.title = 'Hide sessions'; }
+    }
+    document.querySelectorAll('.srow[data-active]').forEach(function (r) { r.removeAttribute('data-active'); });
+    srow.setAttribute('data-active', '');
+    document.querySelectorAll('.prow[data-active]').forEach(function (r) { r.removeAttribute('data-active'); });
+    var prow = kids && kids.previousElementSibling;
+    if (prow) prow.setAttribute('data-active', '');
+    srow.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+  var needStat = document.querySelector('.stat.need');
+  if (needStat) needStat.addEventListener('click', jumpToNeeds);
+  document.querySelectorAll('.prow .pdot.hot').forEach(function (d) {
+    d.addEventListener('click', function (e) { e.stopPropagation(); jumpToNeeds(); });
   });
 </script>
 </body>
