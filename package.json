@@ -2,7 +2,7 @@
   "name": "winmux",
   "version": "0.1.0",
   "private": true,
-  "description": "WinMux — a terminal multiplexer for Windows: the wmux cockpit mockup turned into a real, functional PowerShell terminal (standalone, no Electron).",
+  "description": "WinMux — a terminal multiplexer for Windows: one node-pty server with three faces (native Electron app, browser, and phone over Tailscale).",
   "main": "server.cjs",
   "scripts": {
     "start": "node server.cjs",

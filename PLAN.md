@@ -535,6 +535,49 @@ reopening the page lands back in the running shell with the work intact.
 - The door's colour scheme (resolved: it follows the phone, because the app does. `cockpit.css:7` gives WinMux a `prefers-color-scheme: light` block, so the needs-key page hardcoding dark put a dark refusal in front of a light app — two different products. Found by opening the live link in a real browser, not by reading the CSS. Same four tokens, same values, switched on the media query; two checks measure the computed body background and colour in each scheme rather than trusting the stylesheet)
 - Bell while you are watching the tab (resolved: logged to notifications only; the attention ring is reserved for a tab you are NOT watching, so it never nags about output you can already see)
 
+## Phase 8 — The third face: a real desktop app (Electron shell)
+
+Status: **Live.** First phase of turning WinMux into a public open-source desktop product
+that replaces wmux (design spec: `docs/superpowers/specs/2026-07-27-winmux-electron-oss-product-design.md`;
+plan: `docs/superpowers/plans/2026-07-27-winmux-phase8-electron-shell.md`).
+
+Objective: WinMux had two faces — the desk browser and the phone over Tailscale, both clients
+of one `server.cjs`. Phase 8 adds the third: a native Windows app. The move that keeps the
+phone alive is that the Electron shell does **not** re-implement anything — it boots the exact
+same `server.cjs` **in-process** and points a frameless window at the same served cockpit. One
+server, three clients. The phone door is untouched.
+
+- **`server.cjs` boots in-process** — the trailing startup IIFE became an exported
+  `start(): Promise<{ port, host }>` plus a `require.main === module` guard. `node server.cjs`
+  auto-starts exactly as before (the phone path is byte-for-byte unchanged); Electron `require`s
+  it and calls `start()` to learn the chosen port. Proved by the whole existing harness staying
+  green on the server path, and by `remote` — a real phone-viewport browser running a live
+  PowerShell command over the Tailscale address — still passing after the refactor.
+- **A frameless native window** (`electron/main.ts`) loads `http://127.0.0.1:<port>/` — the same
+  cockpit the phone loads. New code is TypeScript compiled to `dist-electron/` (gitignored);
+  `server.cjs` and `public/*` stay plain JS and, apart from `start()`, untouched.
+- **Native window controls, no new UI** — the cockpit's existing `.wc` min/max/close buttons
+  already called a `window.winmux` bridge that was inert in a browser. `electron/preload.ts` now
+  injects the real bridge (`{ isElectron, minimize, maximize, close }`) over IPC to the main
+  process, so the same buttons drive the real window. Measured: maximize toggles, minimize works,
+  close quits.
+- **The frozen contract already had the drag regions.** `cockpit.css` (frozen) already marks
+  `.ptabs` as `-webkit-app-region: drag` and every interactive cluster (`.pctrls`, `.wc`,
+  `.tab-of`, `.ptab`) as `no-drag` — inert in a browser, live under Electron. Measured in the
+  real frameless window (`data-electron`, `mode:full`): the tab bar drags, every control stays
+  clickable. So no index.html supplement was needed — the plan's assumed addition would have
+  been dead CSS.
+- **The harness grew a third-face check.** `verify.cjs` gains an `electron` check: it launches
+  `dist-electron/main.js` in a new `WINMUX_SMOKE` mode (zero effect on production launches) that
+  self-checks the rendered cockpit, writes a JSON verdict + `verify-out/electron-shell.png`, and
+  quits. Playwright's `_electron` launcher hangs on the CDP handshake in this environment, so the
+  shell is driven directly via `require('electron')`. `npm run verify` now builds the shell first.
+  Green: 7/7 electron assertions, in isolation and in the full run.
+
+Deferred to later phases (per the spec): `winmux` CLI + RPC (Phase 9), the webview+CDP browser
+panel and markdown viewer (Phase 10), agent integration (Phase 11), and OSS distribution —
+installer, auto-update, winget, README/LICENSE, public repo (Phase 12).
+
 ## Risks
 
 - Scope drift back into the agent-cockpit demo (medium) — containment: this file is the scope; anything not listed above is a new decision.

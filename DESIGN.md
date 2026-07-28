@@ -46,6 +46,13 @@ Edward decides instantly from **rendered options**, not from words. So:
 
 ## Decisions log
 
+- **Window controls are real under Electron, unchanged in the browser.** The `.wc`
+  min/max/close buttons were always forward-wired to a `window.winmux` bridge that a plain
+  browser didn't provide (maximize fell back to fullscreen, minimize was inert). Phase 8's
+  `electron/preload.ts` injects the real bridge, so under the desktop app the same buttons drive
+  the native frameless window; in the phone/web browser they fall back exactly as before. No new
+  control, no cockpit.css change — the drag regions were already in the frozen stylesheet and are
+  simply inert outside Electron. (Live.)
 - **Control removal is Edward's call.** I always show a visual and ask; I never remove or
   merge a control on my own. (Confirmed after I wrongly stripped footer buttons.)
 - **KPI deck = flat counters**, not bordered cards. Left-aligned, hairline-separated, on the
