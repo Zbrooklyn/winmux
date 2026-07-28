@@ -10,6 +10,8 @@
     "stop": "powershell -NoProfile -ExecutionPolicy Bypass -File winmux.ps1 stop",
     "status": "powershell -NoProfile -ExecutionPolicy Bypass -File winmux.ps1 status",
     "link": "powershell -NoProfile -ExecutionPolicy Bypass -File winmux.ps1 link",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "dev:electron": "npm run build:electron && electron dist-electron/main.js",
     "verify": "node verify.cjs"
   },
   "dependencies": {
@@ -21,6 +23,9 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "playwright": "^1.62.0"
+    "@types/node": "^22.10.0",
+    "electron": "^33.2.0",
+    "playwright": "^1.62.0",
+    "typescript": "^5.7.2"
   }
 }

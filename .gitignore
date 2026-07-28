@@ -6,3 +6,4 @@ verify-out/
 winmux.log
 winmux.err.log
 .winmux-link.tmp
+dist-electron/
