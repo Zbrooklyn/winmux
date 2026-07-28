@@ -867,7 +867,7 @@ function announce() {
   }
 }
 
-(async () => {
+async function start() {
   if (!PORT_FORCED) {
     PORT = await pickPort();
     if (PORT !== PORT_REQUESTED) {
@@ -882,7 +882,16 @@ function announce() {
     console.error('network would reach WinMux without a key. Start it on a different port, or run');
     console.error('  tailscale serve status');
     console.error('to find the rule that points at 127.0.0.1:' + PORT + ' and turn that one off.');
-    process.exit(2);
+    throw new Error('refused: port ' + PORT + ' is already tunnelled by tailscale serve');
   }
-  server.listen(PORT, HOST, announce);
-})();
+  await new Promise((resolve) => server.listen(PORT, HOST, () => { announce(); resolve(); }));
+  return { port: PORT, host: HOST };
+}
+
+module.exports = { start };
+
+// Running `node server.cjs` directly auto-starts, exactly as before. When
+// required by the Electron main process, nothing runs until start() is called.
+if (require.main === module) {
+  start().catch((e) => { console.error(e.message); process.exit(2); });
+}
