@@ -16,10 +16,22 @@
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
   body{background:var(--bg0);color:var(--text);font-family:'Inter',system-ui,'Segoe UI',Roboto,sans-serif;
-    -webkit-font-smoothing:antialiased;font-size:13px;overflow:hidden}
+    -webkit-font-smoothing:antialiased;font-size:13px;overflow:hidden;display:flex;flex-direction:column;height:100vh}
   .mono{font-family:var(--mono)}
   svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-  .app{display:flex;height:100vh}
+
+  /* demo-only scaffolding strip (NOT product chrome) */
+  .demobar{flex:0 0 auto;display:flex;align-items:center;gap:16px;padding:9px 16px;background:#151515;border-bottom:1px solid #000;font-size:11.5px;color:var(--muted)}
+  .demobar .lab{color:var(--faint);text-transform:uppercase;letter-spacing:.05em;font-size:10px;font-weight:700}
+  .seg{display:inline-flex;background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:2px;gap:2px}
+  .seg button{font:inherit;font-size:11px;color:var(--muted);background:transparent;border:0;border-radius:5px;padding:4px 9px;cursor:pointer}
+  .seg button[data-on]{background:var(--accent);color:#fff}
+  .demobar .hint{display:flex;align-items:center;gap:6px}
+  .demobar .k{font-family:var(--mono);font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 5px}
+  .demobar .sp{flex:1}
+  .demobar .tag{color:var(--faint);font-size:10.5px}
+
+  .app{flex:1;display:flex;min-height:0}
 
   /* ---- sidebar (verbatim cockpit.css + index.html overrides) ---- */
   .sessions{width:264px;background:var(--bg1);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;flex:0 0 auto}
@@ -38,6 +50,8 @@
   .stat .l{font-size:9.5px;color:var(--faint);margin-top:3px;text-transform:uppercase;letter-spacing:.05em}
   .stat.work .v{color:var(--work)}.stat.need .v{color:var(--err)}.stat.idle .v{color:var(--muted)}
   .stat[data-zero] .v{color:var(--faint)}
+  .stat.need{cursor:pointer;border-radius:6px}
+  .stat.need:hover{background:color-mix(in srgb,var(--err) 12%,transparent)}
 
   .sx-list{flex:1;overflow-y:auto}
 
@@ -49,6 +63,7 @@
   .prow[data-active] .pfolder{background:color-mix(in srgb,var(--accent) 22%,transparent);color:var(--accent)}
   .prow .pfolder svg{width:18px;height:18px;stroke-width:1.8}
   .prow .pfolder .pdot{position:absolute;top:-3px;right:-3px;width:10px;height:10px;border-radius:50%;border:2px solid transparent}
+  .prow .pfolder .pdot.hot{cursor:pointer}
   .prow .pinfo{flex:1;min-width:0}
   .prow .pname{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .prow .psub{font-size:12px;color:var(--faint);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -59,11 +74,10 @@
   .prow .pexpand:hover{background:color-mix(in srgb,var(--text) 9%,transparent);color:var(--text)}
   .prow .pexpand[data-open2] svg{transform:rotate(90deg)}
 
-  /* expand/collapse */
   .skids{display:none}
   .skids.open{display:block}
 
-  /* session rows inside an expanded group */
+  /* session rows */
   .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
   .dot.working{background:var(--work);box-shadow:0 0 0 3px color-mix(in srgb,var(--work) 20%,transparent);animation:pulse 1.6s ease-in-out infinite}
   .dot.needsyou{background:var(--err)} .dot.idle{background:var(--idle)}
@@ -71,6 +85,7 @@
   .srow{display:flex;gap:9px;padding:9px 12px 10px 24px;cursor:pointer;border-left:3px solid transparent;border-bottom:1px solid color-mix(in srgb,var(--border) 35%,transparent)}
   .srow:hover{background:color-mix(in srgb,var(--text) 5%,transparent)}
   .srow[data-active]{background:var(--accent-soft);border-left-color:var(--accent)}
+  .srow.jfocus{box-shadow:inset 0 0 0 2px var(--accent)}
   .srow>.dot{margin-top:5px}
   .srow .sinfo{flex:1;min-width:0}
   .srow .srtop{display:flex;align-items:center;gap:7px}
@@ -81,20 +96,41 @@
   .srow .sbar{height:3px;border-radius:2px;background:var(--bg3);overflow:hidden;margin-top:7px;max-width:82%}
   .srow .sbar i{display:block;height:100%;background:var(--work)}
   .srow .sage{font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums;flex:0 0 auto}
-  .stat.need{cursor:pointer;border-radius:6px}
-  .stat.need:hover{background:color-mix(in srgb,var(--err) 12%,transparent)}
-  .prow .pdot.hot{cursor:pointer}
+  /* #5 hover quick-reply */
+  .srow .qr{display:none;align-items:center;gap:5px;flex:0 0 auto}
+  .srow:hover .qr{display:flex}
+  .qrb{font:inherit;font-size:11px;font-weight:600;width:21px;height:21px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .qrb.y{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,var(--border))}
+  .qrb.y:hover{background:color-mix(in srgb,var(--ok) 18%,transparent)}
+  .qrb.n:hover{background:color-mix(in srgb,var(--text) 10%,transparent);color:var(--text)}
 
   .sx-foot{flex:0 0 auto;display:flex;align-items:center;gap:4px;padding:8px 10px;border-top:1px solid var(--border);justify-content:space-between}
 
-  /* faint workspace to the right, so the sidebar reads in-context */
   .workspace{flex:1;background:var(--bg0);display:flex;align-items:center;justify-content:center}
   .ws-hint{font-family:var(--mono);font-size:12px;color:#333}
 
   ::-webkit-scrollbar{width:11px}::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--text) 12%,transparent);border-radius:8px;border:3px solid transparent;background-clip:padding-box}
+
+  /* the folder SVG, reused */
 </style>
 </head>
 <body>
+
+<!-- DEMO SCAFFOLDING — not part of the product. Drives the three proposed improvements. -->
+<div class="demobar">
+  <span class="lab">Demo controls</span>
+  <span class="hint">Ordering
+    <span class="seg" id="seg">
+      <button data-mode="manual">Manual</button>
+      <button data-mode="attn" data-on>Attention-first</button>
+    </span>
+  </span>
+  <span class="hint"><span class="k">J</span> jump to next blocked</span>
+  <span class="hint">Hover a red row for <span class="k">y</span><span class="k">n</span></span>
+  <span class="sp"></span>
+  <span class="tag">the sidebar below is the real design · this strip is not</span>
+</div>
+
 <div class="app">
   <aside class="sessions" aria-label="Groups">
     <div class="sx-head">
@@ -104,114 +140,116 @@
     </div>
 
     <div class="sx-deck">
-      <div class="stat work"><div class="v">3</div><div class="l">Working</div></div>
-      <div class="stat need"><div class="v">1</div><div class="l">Needs you</div></div>
+      <div class="stat work"><div class="v">2</div><div class="l">Working</div></div>
+      <div class="stat need"><div class="v">2</div><div class="l">Needs you</div></div>
       <div class="stat idle"><div class="v">4</div><div class="l">Idle</div></div>
     </div>
 
-    <div class="sx-list">
+    <div class="sx-list" id="list">
 
-      <!-- winmux: active + expanded -->
-      <div class="prow" data-active>
-        <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--work)"></span></span>
-        <div class="pinfo"><div class="pname">winmux</div><div class="psub">2 sessions · 1 working</div></div>
-        <span class="ptrail"><span class="pexpand" data-open2 title="Hide sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
-      </div>
-      <div class="skids open">
-        <div class="srow" data-active>
-          <span class="dot working"></span>
-          <div class="sinfo">
-            <div class="srtop"><span class="sname mono">Claude Code</span><span class="sage">2m</span></div>
-            <div class="sstat work">Running verify.cjs · <span class="m2">142/201 checks</span></div>
-            <div class="sbar"><i style="width:70%"></i></div>
-          </div>
+      <!-- winmux: active + expanded (working) -->
+      <div class="grp" data-k="winmux" data-rank="1">
+        <div class="prow" data-active>
+          <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--work)"></span></span>
+          <div class="pinfo"><div class="pname">winmux</div><div class="psub">2 sessions · 1 working</div></div>
+          <span class="ptrail"><span class="pexpand" data-open2 title="Hide sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
         </div>
-        <div class="srow">
-          <span class="dot idle"></span>
-          <div class="sinfo">
-            <div class="srtop"><span class="sname mono">pwsh</span><span class="sage">25m</span></div>
-            <div class="sstat mut">Idle · <span class="m2">winmux</span></div>
+        <div class="skids open">
+          <div class="srow" data-active>
+            <span class="dot working"></span>
+            <div class="sinfo">
+              <div class="srtop"><span class="sname mono">Claude Code</span><span class="sage">2m</span></div>
+              <div class="sstat work">Running verify.cjs · <span class="m2">142/201 checks</span></div>
+              <div class="sbar"><i style="width:70%"></i></div>
+            </div>
           </div>
-        </div>
-      </div>
-
-      <!-- steady-imports: expanded, has a blocked agent -->
-      <div class="prow">
-        <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot hot" style="background:var(--err)"></span></span>
-        <div class="pinfo"><div class="pname">steady-imports</div><div class="psub"><span class="hot">1 needs you</span></div></div>
-        <span class="ptrail"><span class="pexpand" data-open2 title="Hide sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
-      </div>
-      <div class="skids open">
-        <div class="srow">
-          <span class="dot needsyou"></span>
-          <div class="sinfo">
-            <div class="srtop"><span class="sname mono">Claude Code</span><span class="sage">8m</span></div>
-            <div class="sstat hot">Apply migration to prod? <span class="m2">(y/n)</span></div>
+          <div class="srow">
+            <span class="dot idle"></span>
+            <div class="sinfo">
+              <div class="srtop"><span class="sname mono">pwsh</span><span class="sage">25m</span></div>
+              <div class="sstat mut">Idle · <span class="m2">winmux</span></div>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- bbw-klaviyo: collapsed, working -->
-      <div class="prow">
-        <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--work)"></span></span>
-        <div class="pinfo"><div class="pname">bbw-klaviyo</div><div class="psub">2 sessions · 1 working</div></div>
-        <span class="ptrail"><span class="pexpand" title="Show sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
-      </div>
-      <div class="skids">
-        <div class="srow">
-          <span class="dot working"></span>
-          <div class="sinfo">
-            <div class="srtop"><span class="sname mono">Codex</span></div>
-            <div class="sstat work">Working · <span class="m2">bbw-klaviyo</span></div>
-            <div class="sbar"><i style="width:45%"></i></div>
-          </div>
+      <!-- steady-imports: blocked -->
+      <div class="grp" data-k="steady" data-rank="0">
+        <div class="prow">
+          <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot hot" style="background:var(--err)"></span></span>
+          <div class="pinfo"><div class="pname">steady-imports</div><div class="psub"><span class="hot">1 needs you</span></div></div>
+          <span class="ptrail"><span class="pexpand" data-open2 title="Hide sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
         </div>
-        <div class="srow">
-          <span class="dot idle"></span>
-          <div class="sinfo">
-            <div class="srtop"><span class="sname mono">bash</span></div>
-            <div class="sstat mut">Idle · <span class="m2">bbw-klaviyo</span></div>
+        <div class="skids open">
+          <div class="srow" data-need>
+            <span class="dot needsyou"></span>
+            <div class="sinfo">
+              <div class="srtop"><span class="sname mono">Claude Code</span>
+                <span class="qr"><button class="qrb y" data-a="y">y</button><button class="qrb n" data-a="n">n</button></span>
+                <span class="sage">8m</span>
+              </div>
+              <div class="sstat hot">Apply migration to prod? <span class="m2">(y/n)</span></div>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- amud-aleph-site: collapsed, working -->
-      <div class="prow">
-        <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--work)"></span></span>
-        <div class="pinfo"><div class="pname">amud-aleph-site</div><div class="psub">1 session · 1 working</div></div>
-        <span class="ptrail"><span class="pexpand" title="Show sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
-      </div>
-      <div class="skids">
-        <div class="srow">
-          <span class="dot working"></span>
-          <div class="sinfo">
-            <div class="srtop"><span class="sname mono">Claude Code</span></div>
-            <div class="sstat work">Working · <span class="m2">amud-aleph-site</span></div>
-            <div class="sbar"><i style="width:30%"></i></div>
+      <!-- bbw-klaviyo: blocked + working -->
+      <div class="grp" data-k="bbw" data-rank="0">
+        <div class="prow">
+          <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot hot" style="background:var(--err)"></span></span>
+          <div class="pinfo"><div class="pname">bbw-klaviyo</div><div class="psub">2 sessions · <span class="hot">1 needs you</span></div></div>
+          <span class="ptrail"><span class="pexpand" title="Show sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
+        </div>
+        <div class="skids">
+          <div class="srow" data-need>
+            <span class="dot needsyou"></span>
+            <div class="sinfo">
+              <div class="srtop"><span class="sname mono">Codex</span>
+                <span class="qr"><button class="qrb y" data-a="y">y</button><button class="qrb n" data-a="n">n</button></span>
+                <span class="sage">4m</span>
+              </div>
+              <div class="sstat hot">Overwrite welcome.liquid? <span class="m2">(y/n)</span></div>
+            </div>
+          </div>
+          <div class="srow">
+            <span class="dot idle"></span>
+            <div class="sinfo">
+              <div class="srtop"><span class="sname mono">bash</span><span class="sage">31m</span></div>
+              <div class="sstat mut">Idle · <span class="m2">bbw-klaviyo</span></div>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- chatmail: collapsed, idle (no dot) -->
-      <div class="prow">
-        <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:transparent"></span></span>
-        <div class="pinfo"><div class="pname">chatmail</div><div class="psub">2 sessions · idle</div></div>
-        <span class="ptrail"><span class="pexpand" title="Show sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
-      </div>
-      <div class="skids">
-        <div class="srow">
-          <span class="dot idle"></span>
-          <div class="sinfo">
-            <div class="srtop"><span class="sname mono">Claude Code</span></div>
-            <div class="sstat mut">Idle · <span class="m2">chatmail</span></div>
+      <!-- amud-aleph-site: working -->
+      <div class="grp" data-k="amud" data-rank="1">
+        <div class="prow">
+          <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--work)"></span></span>
+          <div class="pinfo"><div class="pname">amud-aleph-site</div><div class="psub">1 session · 1 working</div></div>
+          <span class="ptrail"><span class="pexpand" title="Show sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
+        </div>
+        <div class="skids">
+          <div class="srow">
+            <span class="dot working"></span>
+            <div class="sinfo">
+              <div class="srtop"><span class="sname mono">Claude Code</span><span class="sage">1m</span></div>
+              <div class="sstat work">Reading MASTER-BRIEF.md…</div>
+            </div>
           </div>
         </div>
-        <div class="srow">
-          <span class="dot idle"></span>
-          <div class="sinfo">
-            <div class="srtop"><span class="sname mono">pwsh</span></div>
-            <div class="sstat mut">Idle · <span class="m2">chatmail</span></div>
-          </div>
+      </div>
+
+      <!-- chatmail: idle (no dot) -->
+      <div class="grp" data-k="chatmail" data-rank="2">
+        <div class="prow">
+          <span class="pfolder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:transparent"></span></span>
+          <div class="pinfo"><div class="pname">chatmail</div><div class="psub">2 sessions · idle</div></div>
+          <span class="ptrail"><span class="pexpand" title="Show sessions"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span></span>
+        </div>
+        <div class="skids">
+          <div class="srow"><span class="dot idle"></span><div class="sinfo"><div class="srtop"><span class="sname mono">Claude Code</span><span class="sage">12m</span></div><div class="sstat mut">Idle · <span class="m2">chatmail</span></div></div></div>
+          <div class="srow"><span class="dot idle"></span><div class="sinfo"><div class="srtop"><span class="sname mono">pwsh</span><span class="sage">40m</span></div><div class="sstat mut">Idle · <span class="m2">chatmail</span></div></div></div>
         </div>
       </div>
 
@@ -231,19 +269,22 @@
 </div>
 
 <script>
-  // Chevron: expand / collapse a group's sessions in place (matches app.js data-expand).
-  document.querySelectorAll('.pexpand').forEach(function (btn) {
+  var list = document.getElementById('list');
+
+  // Chevron: expand / collapse a group's sessions in place.
+  function bindExpand(btn){
     btn.addEventListener('click', function (e) {
       e.stopPropagation();
-      var kids = btn.closest('.prow').nextElementSibling; // the .skids
+      var kids = btn.closest('.prow').nextElementSibling;
       if (!kids || !kids.classList.contains('skids')) return;
       var open = kids.classList.toggle('open');
       if (open) { btn.setAttribute('data-open2', ''); btn.title = 'Hide sessions'; }
       else { btn.removeAttribute('data-open2'); btn.title = 'Show sessions'; }
     });
-  });
+  }
+  document.querySelectorAll('.pexpand').forEach(bindExpand);
 
-  // Group row body: switch the active project (moves the soft-purple selection).
+  // Group row: switch active project.
   document.querySelectorAll('.prow').forEach(function (row) {
     row.addEventListener('click', function () {
       document.querySelectorAll('.prow[data-active]').forEach(function (r) { r.removeAttribute('data-active'); });
@@ -254,44 +295,88 @@
   // Session row: select it (and mark its project active).
   document.querySelectorAll('.srow').forEach(function (s) {
     s.addEventListener('click', function (e) {
+      if (e.target.closest('.qr')) return;
       e.stopPropagation();
       document.querySelectorAll('.srow[data-active]').forEach(function (r) { r.removeAttribute('data-active'); });
       s.setAttribute('data-active', '');
-      var kids = s.closest('.skids');
-      var prow = kids && kids.previousElementSibling;
-      if (prow && prow.classList.contains('prow')) {
-        document.querySelectorAll('.prow[data-active]').forEach(function (r) { r.removeAttribute('data-active'); });
-        prow.setAttribute('data-active', '');
-      }
+      var prow = s.closest('.grp').querySelector('.prow');
+      document.querySelectorAll('.prow[data-active]').forEach(function (r) { r.removeAttribute('data-active'); });
+      prow.setAttribute('data-active', '');
     });
   });
 
-  // One click to the thing that needs you: jump to the first blocked agent,
-  // expanding its project if collapsed. Wired to the "Needs you" counter and
-  // to any red project dot.
-  function jumpToNeeds() {
-    var need = document.querySelector('.dot.needsyou');
-    if (!need) return;
-    var srow = need.closest('.srow');
+  // Click "Needs you" or a red project dot -> jump to first blocked agent.
+  function jumpTo(srow){
     var kids = srow.closest('.skids');
     if (kids && !kids.classList.contains('open')) {
       kids.classList.add('open');
-      var prow0 = kids.previousElementSibling;
-      var pex = prow0 && prow0.querySelector('.pexpand');
+      var pex = kids.previousElementSibling.querySelector('.pexpand');
       if (pex) { pex.setAttribute('data-open2', ''); pex.title = 'Hide sessions'; }
     }
     document.querySelectorAll('.srow[data-active]').forEach(function (r) { r.removeAttribute('data-active'); });
     srow.setAttribute('data-active', '');
     document.querySelectorAll('.prow[data-active]').forEach(function (r) { r.removeAttribute('data-active'); });
-    var prow = kids && kids.previousElementSibling;
-    if (prow) prow.setAttribute('data-active', '');
+    srow.closest('.grp').querySelector('.prow').setAttribute('data-active', '');
     srow.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
   var needStat = document.querySelector('.stat.need');
-  if (needStat) needStat.addEventListener('click', jumpToNeeds);
+  if (needStat) needStat.addEventListener('click', function(){ var f = document.querySelector('.srow[data-need]'); if (f) jumpTo(f); });
   document.querySelectorAll('.prow .pdot.hot').forEach(function (d) {
-    d.addEventListener('click', function (e) { e.stopPropagation(); jumpToNeeds(); });
+    d.addEventListener('click', function (e) { e.stopPropagation(); var f = d.closest('.grp').querySelector('.srow[data-need]'); if (f) jumpTo(f); });
   });
+
+  // #5 — inline y/n; the row resolves.
+  document.querySelectorAll('.srow[data-need] .qrb').forEach(function (b) {
+    b.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var row = b.closest('.srow'), yes = b.dataset.a === 'y';
+      row.querySelector('.dot').className = 'dot working';
+      var stat = row.querySelector('.sstat'); stat.className = 'sstat work';
+      stat.innerHTML = yes ? 'Resuming — applied' : 'Resuming — skipped';
+      row.querySelector('.sage').textContent = 'now';
+      row.querySelector('.qr').style.display = 'none';
+      row.removeAttribute('data-need');
+    });
+  });
+
+  // #6 — J cycles focus through only the blocked agents (expanding as needed).
+  var jIdx = -1;
+  function nextBlocked(){
+    var blocked = [].slice.call(document.querySelectorAll('.srow[data-need]'));
+    if (!blocked.length) return;
+    document.querySelectorAll('.srow.jfocus').forEach(function(r){ r.classList.remove('jfocus'); });
+    jIdx = (jIdx + 1) % blocked.length;
+    var row = blocked[jIdx];
+    var kids = row.closest('.skids');
+    if (kids && !kids.classList.contains('open')) {
+      kids.classList.add('open');
+      var pex = kids.previousElementSibling.querySelector('.pexpand');
+      if (pex) { pex.setAttribute('data-open2', ''); pex.title = 'Hide sessions'; }
+    }
+    row.classList.add('jfocus');
+    row.scrollIntoView({ block: 'nearest' });
+  }
+  document.addEventListener('keydown', function (e) {
+    if ((e.key === 'j' || e.key === 'J') && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); nextBlocked(); }
+  });
+
+  // #4 — reorder the project list by attention (blocked first, then working, then idle).
+  var seg = document.getElementById('seg');
+  var manualOrder = ['winmux','steady','bbw','amud','chatmail']; // creation order
+  function apply(mode){
+    var grps = [].slice.call(list.querySelectorAll('.grp'));
+    if (mode === 'attn') {
+      grps.sort(function(a,b){ return (+a.dataset.rank) - (+b.dataset.rank); }); // 0=blocked,1=working,2=idle; stable within
+    } else {
+      grps.sort(function(a,b){ return manualOrder.indexOf(a.dataset.k) - manualOrder.indexOf(b.dataset.k); });
+    }
+    grps.forEach(function(g){ list.appendChild(g); });
+    [].forEach.call(seg.querySelectorAll('button'), function(bn){
+      if (bn.dataset.mode === mode) bn.setAttribute('data-on',''); else bn.removeAttribute('data-on');
+    });
+  }
+  seg.addEventListener('click', function(e){ var b = e.target.closest('button'); if (b) apply(b.dataset.mode); });
+  apply('attn');
 </script>
 </body>
 </html>
