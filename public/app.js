@@ -2430,6 +2430,17 @@
   }
   document.getElementById('cheat-ovl').addEventListener('click', function (e) { if (e.target.id === 'cheat-ovl') closeOvl('cheat-ovl'); });
 
+  // Clipboard of last resort — when the async API is blocked (no secure context,
+  // no focus), a hidden textarea + execCommand still copies.
+  function fallbackCopy(text) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+    } catch (e) {}
+  }
+
   // ----------------------------------------------------------- diagnostics
   function openDiag() {
     var pane = document.getElementById('diag-pane');
@@ -2449,8 +2460,20 @@
       ];
       pane.innerHTML = '<h3>This server</h3>' + rows.map(function (r) {
         return '<div class="kvrow"><span class="k">' + r[0] + '</span><span class="v">' + esc(r[1]) + '</span></div>';
-      }).join('') + '<div style="margin-top:16px"><span class="btn" data-diag-refresh>Refresh</span></div>';
+      }).join('') + '<div style="margin-top:16px;display:flex;gap:8px">' +
+        '<span class="btn" data-diag-copy>Copy diagnostics</span>' +
+        '<span class="btn" data-diag-refresh>Refresh</span></div>';
       pane.querySelector('[data-diag-refresh]').addEventListener('click', openDiag);
+      // One-click copy so a report can carry the facts (#213). Plain text, the
+      // same rows the pane shows, ready to paste into an issue or a message.
+      var copyBtn = pane.querySelector('[data-diag-copy]');
+      copyBtn.addEventListener('click', function () {
+        var text = 'WinMux diagnostics\n' + rows.map(function (r) { return r[0] + ': ' + r[1]; }).join('\n');
+        var done = function () { copyBtn.textContent = 'Copied'; setTimeout(function () { copyBtn.textContent = 'Copy diagnostics'; }, 1600); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
+        } else { fallbackCopy(text); done(); }
+      });
     }).catch(function () { pane.innerHTML = '<div class="kvrow"><span class="k">Server</span><span class="v">Not responding</span></div>'; });
   }
 
