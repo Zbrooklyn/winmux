@@ -172,7 +172,14 @@ function loadTrust() {
   } catch (e) { /* no file yet, or unreadable — start closed, never open */ }
 }
 function saveTrust() {
-  try { fs.writeFileSync(TRUST_FILE, JSON.stringify(trust, null, 2)); } catch (e) {}
+  // Write to a temp file then rename — an atomic swap, so a crash mid-write can
+  // never leave a half-written (corrupt, unparseable) guest list that bricks the
+  // phone door on the next boot. The rename is atomic on the same filesystem.
+  try {
+    const tmp = TRUST_FILE + '.' + process.pid + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(trust, null, 2));
+    fs.renameSync(tmp, TRUST_FILE);
+  } catch (e) {}
 }
 loadTrust();
 
@@ -1020,7 +1027,16 @@ async function start() {
   await new Promise((resolve) => server.listen(PORT, HOST, () => { announce(); resolve(); }));
   // Boot the first spare shell now, so the very first tab opens instantly too.
   ensureSpare();
-  process.on('exit', () => { if (spare) { try { spare.term.kill(); } catch (e) {} } });
+  // On a graceful exit, take every real shell down with us — an unattached spare
+  // AND every live session — so quitting WinMux never strands PowerShell processes
+  // running on the machine. (A hard kill from outside can't run this, but a normal
+  // quit and Ctrl-C both do.)
+  const killShells = () => {
+    if (spare) { try { spare.term.kill(); } catch (e) {} spare = null; }
+    for (const s of SESSIONS.values()) { try { s.term.kill(); } catch (e) {} }
+  };
+  process.on('exit', killShells);
+  process.once('SIGTERM', () => { killShells(); process.exit(0); });
   // Advertise the running port so the `winmux` CLI can find it. Best-effort:
   // the app still runs if the home dir is unwritable. WINMUX_NO_INSTANCE lets a
   // test harness spin up many servers without clobbering the real one's file.

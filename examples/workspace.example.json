@@ -1,0 +1,8 @@
+{
+  "//": "A WinMux workspace: open a whole set of terminals in one word with `winmux open workspace.example.json`. Each session gets its own start folder, shell, and command. cwd is resolved relative to where you run the command; shell and command are optional.",
+  "sessions": [
+    { "cwd": ".", "shell": "powershell", "command": "git status" },
+    { "cwd": ".", "shell": "powershell", "command": "npm run dev" },
+    { "cwd": ".", "shell": "powershell" }
+  ]
+}

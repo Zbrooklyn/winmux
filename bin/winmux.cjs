@@ -77,6 +77,9 @@ const HELP = [
   '',
   '  markdown <file>                  open a markdown file in the viewer (live-updates)',
   '',
+  '  open <file.json>                 open a saved workspace — a set of terminals,',
+  '                                   each with its own cwd, shell, and start command',
+  '',
   '  --json                           raw JSON output where relevant',
 ].join('\n');
 
@@ -151,6 +154,27 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
       if (!argv[1]) die('markdown needs a file, e.g. winmux markdown README.md');
       const abs = path.resolve(process.cwd(), argv[1]);
       return emit('opened ' + argv[1] + ' in the viewer', await rpc('markdown', { path: abs }));
+    }
+    if (cmd === 'open') {
+      // Workspaces-as-code: a JSON file describes a set of terminals, each with an
+      // optional cwd / shell / start command. Open them all from one word. This is
+      // pure CLI — it drives the existing new-tab + send verbs, no new server code.
+      if (!argv[1]) die('open needs a workspace file, e.g. winmux open work.json');
+      let spec;
+      try { spec = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), argv[1]), 'utf8')); }
+      catch (e) { die('cannot read workspace file: ' + (e.code === 'ENOENT' ? 'no such file' : e.message)); }
+      const sessions = Array.isArray(spec) ? spec : (spec && Array.isArray(spec.sessions) ? spec.sessions : null);
+      if (!sessions || !sessions.length) die('workspace file needs a "sessions" array (or be an array) of { cwd?, shell?, command? }');
+      const opened = [];
+      for (const raw of sessions) {
+        const s = raw || {};
+        const cwd = s.cwd ? path.resolve(process.cwd(), String(s.cwd)) : undefined;
+        const r = await rpc('new-tab', { shell: s.shell, cwd });
+        const id = r && r.id;
+        opened.push(id || null);
+        if (s.command && id) await rpc('send', { data: String(s.command), enter: true, target: id });
+      }
+      return emit('opened ' + opened.filter(Boolean).length + ' terminal(s) from ' + argv[1], { opened });
     }
     if (cmd === 'agent') die('agent arrives in Phase 11. Run `winmux help` for what works today.');
     die('unknown command: ' + cmd + '. Run `winmux help`.');

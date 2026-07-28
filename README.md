@@ -43,6 +43,7 @@ With WinMux running, the `winmux` command scripts the live app:
     winmux browser snapshot         # list the page's clickable elements as @refs
     winmux browser click @e1        # click one of them
     winmux markdown README.md       # open a file in the live markdown viewer
+    winmux open workspace.json      # open a saved set of terminals (cwd/shell/command each)
 
 An agent (e.g. Claude) can use these to open terminals and run tools for you.
 The browser panel is the desktop app's Electron `<webview>`; the markdown viewer
