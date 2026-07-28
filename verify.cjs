@@ -1398,6 +1398,59 @@ check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
   t('tapping a session opens the terminal', (await ph.evaluate(SIDEBAR)).view === 'focus');
 });
 
+// --- electron: the third face — the desktop shell boots the same cockpit ----
+// The other checks prove the web/phone face over a socket. This one proves the
+// Electron face: the app boots server.cjs IN-PROCESS, loads the same cockpit in
+// a frameless native window, and the window.winmux bridge is really injected.
+// Playwright's _electron launcher hangs on the CDP handshake in this environment,
+// so the shell is driven directly — electron runs dist-electron/main.js in
+// WINMUX_SMOKE mode, which self-checks the rendered page, writes a JSON verdict
+// plus verify-out/electron-shell.png, and quits. This check reads that verdict.
+// It ignores `base`/`browser`: the Electron app is its own server and its own
+// client, which is the whole point of the third face.
+check('electron', PORT_GROUPS, async ({ t }) => {
+  const main = path.join(ROOT, 'dist-electron', 'main.js');
+  if (!fs.existsSync(main)) {
+    t('the Electron bundle is built (npm run build:electron)', false, main);
+    return;
+  }
+  let electronPath = null;
+  try { electronPath = require('electron'); } catch (e) { /* not installed */ }
+  if (typeof electronPath === 'string') electronPath = electronPath.trim();
+  if (typeof electronPath !== 'string' || !fs.existsSync(electronPath)) {
+    t('the Electron binary is present', false, electronPath);
+    return;
+  }
+
+  const outFile = path.join(OUT, 'electron-smoke.json');
+  try { fs.unlinkSync(outFile); } catch (e) { /* fresh */ }
+
+  const res = await new Promise((resolve) => {
+    const proc = spawn(electronPath, [main], {
+      cwd: ROOT,
+      env: Object.assign({}, process.env, { WINMUX_SMOKE: '1', WINMUX_SMOKE_OUT: outFile }),
+      stdio: 'ignore',
+    });
+    const timer = setTimeout(() => {
+      try { proc.kill(); } catch (e) {}
+      resolve({ code: null, timedOut: true });
+    }, 60000);
+    proc.on('exit', (code) => { clearTimeout(timer); resolve({ code, timedOut: false }); });
+    proc.on('error', (e) => { clearTimeout(timer); resolve({ code: null, timedOut: false, err: String(e.message || e) }); });
+  });
+  t('the Electron app launched and exited on its own', res.timedOut === false && !res.err, res);
+
+  let json = null;
+  try { json = JSON.parse(fs.readFileSync(outFile, 'utf8')); } catch (e) { /* stays null */ }
+  t('the shell wrote a smoke verdict', !!json, json);
+  t('the cockpit rendered inside the native window', !!json && json.hasCockpit === true, json);
+  t('the window.winmux bridge is injected', !!json && json.isElectron === true, json);
+  t('the document is tagged data-electron', !!json && json.dataElectron === true, json);
+  t('the frameless tab bar resolves to a real drag handle',
+    !!json && json.ptabsRegion === 'drag', json && json.ptabsRegion);
+  t('the smoke run hit no error', !!json && !json.error, json && json.error);
+});
+
 // -------------------------------------------------------------------- main
 
 (async () => {
