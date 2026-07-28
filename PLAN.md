@@ -748,6 +748,61 @@ remote permission approval from phone · workspaces-as-code · clipboard/send-to
 they turn "a beautiful terminal" into "the calm cockpit I run all my agents from" — none of
 them touching the default surface.
 
+#### Category deep-dive — the design space of each channel (2026-07-28)
+
+**Key reframe: two of the four channels are platform primitives, not feature buckets.**
+*Attention* is an **event bus**; the *Command layer* is an **API**. *Rows* and *Summoned* are
+**rendering channels**. Build the two primitives well and most future features become thin
+subscribers — emit an event + add a verb + maybe draw a dot. Maximum power, minimum surface
+AND minimum duplicated code. Build order that follows: the event bus and the CLI/API (with an
+MCP server) are the foundations; the rest ride on them.
+
+**1 — Rows carry state** (rendering; glanceable truth without opening). Four kinds of info a
+row holds calmly: *state* (working/waiting/idle/done/errored/blocked-on-permission/
+disconnected), *identity* (shell icon, running program, git branch+dirty, cwd, assigned
+color/pin), *quantity* (unread count, token/cost, uptime, output-rate sparkline),
+*relationship* (sessions of one agent task; an agent + the sub-shells it spawned). Net-new:
+**ordering as information** (auto-float needs-you/recently-active to top); **group-row rollup**
+(collapsed group sums status/cost/health); **push state to the OS** (taskbar/tray badge with
+aggregate "needs you" count — visible while minimized, zero in-app clutter).
+
+**2 — Attention = the event bus** (reach me exactly when it matters, never otherwise).
+Sub-areas: *triggers* (needs-input, permission prompt, command done/failed, agent idle/stuck,
+session died, cost threshold, watched pattern), *routing* (in-app/desktop/tray/phone, to the
+device you're on), *intelligence* (priority tiers, quiet hours, digest-batching, dedupe,
+escalate-if-ignored), *two-way actions* (approve/deny, reply, pause-all from the notification).
+Net-new: **user-defined watches** (attention as a programmable primitive — "ping me when this
+prints DONE"); **the bus IS the log** (event history replays as a summoned away-feed — one
+primitive, two features).
+
+**3 — Command layer = the API** (full power, zero chrome, scriptable by humans AND agents).
+Sub-areas: *lifecycle verbs* (+pin/tag/archive/restart-shell), *fleet targeting*
+(`--all`/`--group`/`--matching`/`--tag`), *content* (run-and-wait w/ exit code, grep across
+sessions, broadcast), *orchestration* (workspaces-as-code, pipelines, hooks), *agent verbs*
+(start/resume/prompt/stop, ask-all-status, budget cap). Net-new & biggest:
+**clean-JSON everything → agents manage agents** (an agent in WinMux supervises sub-agents via
+the CLI — recursive fleet self-management, invisible); **a `winmux` MCP server** (Claude drives
+the whole control plane natively as a tool — likely the single highest-leverage backend
+feature); **config-as-code** (the whole workspace as a versionable file).
+
+**4 — Progressive disclosure** (rendering; depth there when reached for, gone otherwise).
+Sub-areas: *palette* (deepen toward natural language), *peek* (preview without switching),
+*summoned search* (scrollback/history/transcripts across all sessions), *summoned views*
+(opt-in fleet grid, away-feed, cost view). Net-new: **layered reveal / detail-on-demand** —
+the phone drill-in is progressive disclosure applied to navigation; apply it to detail (tap
+session = switch, tap status = why it's waiting, tap again = full transcript).
+
+**Two channels promoted to first-class** (don't fit inside the four):
+**5 — Continuity / cross-device** (the "all connected" channel): clipboard sync, send-to-device,
+handoff, connection honesty. **6 — Terminal depth** (make the core terminal itself deeper):
+command marks, clickable paths/URLs/errors, shell integration.
+
+**Where the value concentrated:** build the **event bus** and the **CLI/API + MCP** as real
+foundations first — then half the row-states and all the summoned views are cheap subscribers,
+and the cockpit becomes drivable by the agents themselves. That is what makes "calm surface,
+powerful underneath" cheap to deliver, not just tasteful. (All backend — pre-approved to build
+per the authority split; only the pixels each surfaces through are gated.)
+
 ### Production-readiness checklist (Edward + Claude, 2026-07-28)
 
 The spine for a terminal: **it never loses my work · it's always honestly there · it
