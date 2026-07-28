@@ -613,6 +613,15 @@ check('remote', PORT_REMOTE, async ({ browser, base, t, shot, skip }) => {
     const qr = await get(origin + '/api/phone/qr?k=' + key);
     t('the QR is a real SVG over the link', qr.status === 200 && /^<svg/.test(qr.body.trim()));
 
+    // Security (#210): even a fully authed phone must not turn the host's disk
+    // into a read/enumerate surface. The file-reading endpoints are desk-door
+    // only — over the tailnet they refuse, key or no key.
+    const mdOverPhone = await get(origin + '/api/md?k=' + key + '&path=' + encodeURIComponent('C:/Windows/win.ini'));
+    t('the phone cannot read an arbitrary file off the host', mdOverPhone.status === 403, mdOverPhone.status);
+    t('and the refusal carries no file contents', !/\[fonts\]|\[extensions\]/i.test(mdOverPhone.body));
+    const findOverPhone = await get(origin + '/api/findpath?k=' + key + '&name=Users');
+    t('the phone cannot enumerate the host filesystem', findOverPhone.status === 403, findOverPhone.status);
+
     // What Edward saw when he typed the address by hand — measured, on a phone.
     const p0 = await phoneCtx(browser);
     await p0.goto(origin + '/', { waitUntil: 'domcontentloaded' });
@@ -670,6 +679,19 @@ check('remote', PORT_REMOTE, async ({ browser, base, t, shot, skip }) => {
     const clean = await redact(p);
     t('no live key survives in the shipped screenshot', clean);
     await shot(p, 'phone');
+
+    // Brute-force throttle (#210): a burst of wrong keys from one address gets
+    // parked. Fire past the limit and the door stops even asking — it answers
+    // 429, not another 401. Done last: the lockout is per-address and would
+    // otherwise poison the checks above; the phone is torn down right after.
+    let sawLimit = false, sawBefore = 0;
+    for (let i = 0; i < 14; i++) {
+      const g = await get(origin + '/?k=' + 'a'.repeat(32));
+      if (g.status === 429) { sawLimit = true; break; }
+      if (g.status === 401) sawBefore += 1;
+    }
+    t('a flood of wrong keys is throttled, not answered forever', sawLimit, { sawBefore });
+    t('the throttle counts real guesses before it trips', sawBefore >= 5, sawBefore);
   } finally {
     await post(base + '/api/phone', JSON.stringify({ on: false }));
   }

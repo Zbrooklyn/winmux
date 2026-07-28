@@ -276,6 +276,29 @@ function authed(req) {
   return !!knownDevice(req);
 }
 
+// --- Brute-force throttle for the phone door -------------------------------
+// The key is 128-bit, so guessing it is already hopeless; this is defence in
+// depth and a stop on resource abuse. Only a *deliberate* wrong key (a request
+// carrying ?k= that doesn't match) counts — innocent no-credential page hits
+// don't — so a legitimate phone never trips it. Too many wrong guesses from one
+// address parks that address for a cooldown. In-memory only; cleared on restart.
+const AUTH_FAILS = new Map();          // remoteAddress -> { n, resetAt, lockUntil }
+const AUTH_MAX = 10;                   // wrong-key guesses within the window...
+const AUTH_WINDOW_MS = 60000;          // ...trip a 60s lockout
+function authThrottleLocked(req) {
+  const rec = AUTH_FAILS.get((req.socket && req.socket.remoteAddress) || '?');
+  return !!(rec && rec.lockUntil > Date.now());
+}
+function noteBadKey(req) {
+  const ip = (req.socket && req.socket.remoteAddress) || '?';
+  const now = Date.now();
+  let rec = AUTH_FAILS.get(ip);
+  if (!rec || rec.resetAt < now) rec = { n: 0, resetAt: now + AUTH_WINDOW_MS, lockUntil: 0 };
+  rec.n += 1;
+  if (rec.n >= AUTH_MAX) { rec.lockUntil = now + AUTH_WINDOW_MS; rec.n = 0; rec.resetAt = now + AUTH_WINDOW_MS; }
+  AUTH_FAILS.set(ip, rec);
+}
+
 // --- Shell detection -------------------------------------------------------
 function onPath(exe) {
   var dirs = (process.env.PATH || '').split(path.delimiter);
@@ -434,16 +457,29 @@ function keyNeededPage() {
 
 function handle(req, res, viaPhone) {
   // Phone door: no key, no anything. Checked before the URL is even read.
-  if (viaPhone && !authed(req)) {
-    // A person gets the page; a script, an asset, or the websocket gets the line.
-    if (/text\/html/.test(req.headers.accept || '')) {
-      res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(keyNeededPage());
+  if (viaPhone) {
+    // An address that has burned through its guesses waits out the cooldown
+    // before it is even asked for a key again.
+    if (authThrottleLocked(req)) {
+      res.writeHead(429, { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': '60' });
+      res.end('WinMux: too many attempts. Wait a minute and try again.');
       return;
     }
-    res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('WinMux: this link needs its access key.');
-    return;
+    if (!authed(req)) {
+      // Count only deliberate wrong keys toward the throttle — a request that
+      // carried a ?k= that didn't match. Browsing with no key at all is not a
+      // guess; it just gets the key-needed page.
+      try { if (new URL(req.url, 'http://x').searchParams.get('k')) noteBadKey(req); } catch (e) {}
+      // A person gets the page; a script, an asset, or the websocket gets the line.
+      if (/text\/html/.test(req.headers.accept || '')) {
+        res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(keyNeededPage());
+        return;
+      }
+      res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('WinMux: this link needs its access key.');
+      return;
+    }
   }
   // Arriving with a valid ?k= parks it in a cookie so the rest of the page
   // (scripts, fonts, the websocket) authenticates without the key in every URL,
@@ -562,6 +598,13 @@ function handle(req, res, viaPhone) {
   // The markdown viewer reads a file off this disk and hands back its text +
   // mtime, so the surface can render it and re-poll to live-update on save.
   if (urlPath === '/api/md') {
+    // Reads an arbitrary file off this disk — desk-door only. Never let the phone
+    // (or any tailnet device) turn the markdown viewer into a file-exfiltration
+    // hole for .ssh keys, .env, or anything else on the host.
+    if (viaPhone) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: false, error: 'reading files is available only at the PC, not over the network' }));
+    }
     let q = {};
     try { q = Object.fromEntries(new URL(req.url, 'http://x').searchParams); } catch (e) {}
     const file = q.path || '';
@@ -582,6 +625,13 @@ function handle(req, res, viaPhone) {
   // standing on the same disk, so it can just go and find the folder whose name
   // and contents match what the browser saw.
   if (urlPath === '/api/findpath') {
+    // Walks the host's folders to resolve a dropped-folder path — desk-door only.
+    // A phone can't drag from Explorer anyway, so there is nothing to lose by
+    // refusing, and everything to lose by letting the network enumerate the disk.
+    if (viaPhone) {
+      res.writeHead(403, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ hits: [] }));
+    }
     let q = {};
     try { q = Object.fromEntries(new URL(req.url, 'http://x').searchParams); } catch (e) {}
     findFolder(q.name || '', (q.kids || '').split('|').filter(Boolean), q.near || '', (hits) => {
