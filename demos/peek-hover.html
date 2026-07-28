@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WinMux — Informative hover (demo)</title>
+<style>
+  :root{
+    --bg0:#1e1e1e; --bg1:#262626; --bg2:#2d2d2d; --bg3:#333; --border:#363636;
+    --text:#dadada; --muted:#a8a8a8; --faint:#6b6b6b;
+    --accent:#8a5cf5; --accent-soft:rgba(138,92,245,.16);
+    --ok:#44cf6e; --work:#e9973f; --err:#fb464c; --idle:#6b6b6b;
+    --mono:"Cascadia Code","Cascadia Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg0);color:var(--text);font-family:'Inter',system-ui,'Segoe UI',Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;font-size:13px;padding:26px 22px 60px}
+  .mono{font-family:var(--mono)}
+  svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  h1{font-size:16px;font-weight:650;margin:0 0 3px}
+  .lede{color:var(--muted);font-size:12.5px;margin:0 0 22px}
+  .lede .k{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 6px}
+
+  /* mini sidebar with room to the right for the hover card */
+  .stage{display:flex}
+  .mini{width:280px;background:var(--bg1);border:1px solid var(--border);border-radius:12px;overflow:hidden;flex:0 0 auto}
+  .ghead{display:flex;align-items:center;gap:11px;padding:12px 12px 12px 14px;border-bottom:1px solid color-mix(in srgb,var(--border) 60%,transparent)}
+  .pfolder{width:30px;height:30px;border-radius:8px;background:var(--bg2);display:flex;align-items:center;justify-content:center;color:var(--muted);flex:0 0 auto;position:relative}
+  .pfolder svg{width:16px;height:16px;stroke-width:1.8}
+  .pdot{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%}
+  .pname{font-weight:600;font-size:14px}
+  .psub{font-size:11.5px;color:var(--faint);margin-top:2px}
+  .psub .hot{color:var(--err);font-weight:600}
+
+  .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .dot.working{background:var(--work);box-shadow:0 0 0 3px color-mix(in srgb,var(--work) 20%,transparent);animation:pulse 1.6s ease-in-out infinite}
+  .dot.needsyou{background:var(--err)} .dot.idle{background:var(--idle)}
+  @keyframes pulse{50%{opacity:.4}} @media (prefers-reduced-motion:reduce){.dot{animation:none}}
+
+  .srow{position:relative;display:flex;gap:9px;padding:9px 12px 10px 22px;cursor:pointer;border-bottom:1px solid color-mix(in srgb,var(--border) 35%,transparent);transition:background .12s}
+  .srow:last-child{border-bottom:none}
+  .srow:hover{background:color-mix(in srgb,var(--text) 5%,transparent)}
+  .srow>.dot{margin-top:5px}
+  .sinfo{flex:1;min-width:0}
+  .srtop{display:flex;align-items:center;gap:7px}
+  .sname{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+  .sstat{font-size:11.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sstat.hot{color:var(--err)} .sstat.work{color:var(--work)} .sstat.mut{color:var(--muted)}
+  .sstat .m2{color:var(--faint)}
+  .sage{font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums;flex:0 0 auto}
+
+  /* ===== the informative hover card ===== */
+  .speek{position:absolute;left:calc(100% + 12px);top:-8px;width:306px;z-index:20;
+    background:var(--bg1);border:1px solid var(--border-s,#4a4a4a);border-radius:11px;
+    box-shadow:0 18px 50px rgba(0,0,0,.55);padding:13px 14px 14px;display:none;cursor:default}
+  .srow:hover .speek{display:block}
+  .speek .ph{display:flex;align-items:center;gap:8px}
+  .speek .pn{font-family:var(--mono);font-size:13px;font-weight:600;flex:1}
+  .speek .pill{font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;padding:2px 7px;border-radius:5px}
+  .speek .pill.need{color:var(--err);background:color-mix(in srgb,var(--err) 16%,transparent)}
+  .speek .pill.work{color:var(--work);background:color-mix(in srgb,var(--work) 15%,transparent)}
+  .speek .pproj{font-size:11.5px;color:var(--faint);margin-top:5px}
+  .speek .prule{height:1px;background:var(--border);margin:11px 0}
+  .speek .pask{font-size:12.5px;line-height:1.5;color:var(--text)}
+  .speek .pask.hot{color:#f2b0b3}
+  .speek .plabel{font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:12px 0 5px}
+  .speek .otail{background:var(--bg0);border:1px solid var(--border);border-radius:7px;padding:8px 9px;font-family:var(--mono);font-size:10.5px;line-height:1.6;color:var(--faint);white-space:pre-wrap;overflow:hidden}
+  .speek .otail b{color:var(--muted);font-weight:400}
+  .speek .otail .q{color:#f2b0b3}
+  .speek .pmeta{display:flex;gap:10px;font-size:11px;color:var(--faint);margin-top:11px;font-variant-numeric:tabular-nums}
+  .speek .pmeta .mk{color:var(--muted)}
+  .speek .pbar{height:4px;border-radius:2px;background:var(--bg3);overflow:hidden;margin-top:11px}
+  .speek .pbar i{display:block;height:100%;background:var(--work)}
+  .speek .acts{display:flex;gap:8px;margin-top:13px}
+  .speek .abtn{flex:1;font:inherit;font-size:12px;font-weight:600;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
+  .speek .abtn:hover{background:color-mix(in srgb,var(--text) 9%,transparent);color:var(--text)}
+  .speek .abtn.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,var(--border))}
+  .speek .abtn.ok:hover{background:color-mix(in srgb,var(--ok) 16%,transparent)}
+  .speek .abtn .kk{font-family:var(--mono);font-size:10px;opacity:.7}
+  .speek .abtn.wide{flex:1}
+</style>
+</head>
+<body>
+  <h1>Informative hover — a peek without switching</h1>
+  <p class="lede">Hover any session row. Instead of just <span class="k">y</span><span class="k">n</span>, the card shows the full prompt, the recent terminal output for context, timing, and the actions. Blocked rows can be answered right here; working rows let you open or watch.</p>
+
+  <div class="stage">
+    <div class="mini">
+
+      <div class="ghead">
+        <span class="pfolder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--err)"></span></span>
+        <div><div class="pname">steady-imports</div><div class="psub"><span class="hot">1 needs you</span></div></div>
+      </div>
+
+      <!-- blocked -->
+      <div class="srow">
+        <span class="dot needsyou"></span>
+        <div class="sinfo">
+          <div class="srtop"><span class="sname mono">Claude Code</span><span class="sage">8m</span></div>
+          <div class="sstat hot">Apply migration to prod? <span class="m2">(y/n)</span></div>
+        </div>
+        <div class="speek">
+          <div class="ph"><span class="pn">Claude Code</span><span class="pill need">Needs you</span></div>
+          <div class="pproj">steady-imports · pwsh</div>
+          <div class="prule"></div>
+          <div class="pask hot">Apply 3 pending migrations to the <b>production</b> Supabase database (add_orders_index, backfill_status, drop_legacy_cols)? This can’t be undone automatically.</div>
+          <div class="plabel">Last output</div>
+          <div class="otail"><b>$ supabase db push</b>
+Connecting to project prod-xyz…
+3 migrations pending.
+<span class="q">Continue? (y/n)</span> ▋</div>
+          <div class="pmeta"><span><span class="mk">waiting</span> 8m</span><span><span class="mk">started</span> 3:14 PM</span></div>
+          <div class="acts">
+            <button class="abtn ok">Approve <span class="kk">y</span></button>
+            <button class="abtn">Deny <span class="kk">n</span></button>
+            <button class="abtn">Open</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ghead" style="border-top:1px solid color-mix(in srgb,var(--border) 60%,transparent)">
+        <span class="pfolder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="pdot" style="background:var(--work)"></span></span>
+        <div><div class="pname">winmux</div><div class="psub">2 sessions · 1 working</div></div>
+      </div>
+
+      <!-- working -->
+      <div class="srow">
+        <span class="dot working"></span>
+        <div class="sinfo">
+          <div class="srtop"><span class="sname mono">Claude Code</span><span class="sage">2m</span></div>
+          <div class="sstat work">Running verify.cjs · <span class="m2">142/201</span></div>
+        </div>
+        <div class="speek">
+          <div class="ph"><span class="pn">Claude Code</span><span class="pill work">Working</span></div>
+          <div class="pproj">winmux · pwsh</div>
+          <div class="prule"></div>
+          <div class="pask">Running the verification harness — 142 of 201 checks passed so far.</div>
+          <div class="plabel">Last output</div>
+          <div class="otail"><b>&gt; node verify.cjs</b>
+PASS  colour (:9912)
+PASS  survive (:9916)
+142 / 201 checks passed…</div>
+          <div class="pbar"><i style="width:70%"></i></div>
+          <div class="pmeta"><span><span class="mk">running</span> 2m</span><span><span class="mk">last line</span> 3s ago</span></div>
+          <div class="acts"><button class="abtn wide">Open terminal</button></div>
+        </div>
+      </div>
+
+      <!-- idle -->
+      <div class="srow">
+        <span class="dot idle"></span>
+        <div class="sinfo">
+          <div class="srtop"><span class="sname mono">pwsh</span><span class="sage">25m</span></div>
+          <div class="sstat mut">Idle · <span class="m2">winmux</span></div>
+        </div>
+        <div class="speek">
+          <div class="ph"><span class="pn">pwsh</span><span class="pill" style="color:var(--muted);background:color-mix(in srgb,var(--text) 8%,transparent)">Idle</span></div>
+          <div class="pproj">winmux · pwsh</div>
+          <div class="prule"></div>
+          <div class="pask">No command running. Last activity 25 minutes ago.</div>
+          <div class="plabel">Last output</div>
+          <div class="otail"><b>PS C:\dev\winmux&gt;</b> git status
+nothing to commit, working tree clean
+<b>PS C:\dev\winmux&gt;</b> ▋</div>
+          <div class="pmeta"><span><span class="mk">idle</span> 25m</span></div>
+          <div class="acts"><button class="abtn wide">Open terminal</button></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+<script>
+  // Answer inline; the row + card resolve.
+  document.querySelectorAll('.speek .abtn.ok, .speek .abtn').forEach(function (b) {
+    if (!/Approve|Deny/.test(b.textContent)) return;
+    b.addEventListener('click', function () {
+      var yes = /Approve/.test(b.textContent);
+      var row = b.closest('.srow');
+      row.querySelector('.dot').className = 'dot working';
+      var st = row.querySelector('.sstat'); st.className = 'sstat work';
+      st.innerHTML = yes ? 'Resuming — migration applied' : 'Resuming — skipped';
+      row.querySelector('.sage').textContent = 'now';
+      var pk = b.closest('.speek');
+      pk.querySelector('.ph .pill').outerHTML = '<span class="pill work">Working</span>';
+      pk.querySelector('.pask').className = 'pask';
+      pk.querySelector('.pask').textContent = yes ? 'Approved — the agent is resuming.' : 'Denied — the agent is resuming.';
+      pk.querySelector('.acts').innerHTML = '<button class="abtn wide">Open terminal</button>';
+    });
+  });
+</script>
+</body>
+</html>
