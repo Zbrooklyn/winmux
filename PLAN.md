@@ -650,6 +650,56 @@ The three faces, the CLI, the browser panel, and the markdown viewer are done an
 proven (Phases 1–10). What remains to reach a public v1.0 launch, and one thing
 beyond it:
 
+### Production-readiness checklist (Edward + Claude, 2026-07-28)
+
+The spine for a terminal: **it never loses my work · it's always honestly there · it
+never makes me wait or wonder** — continuity, honesty, speed. The concrete list, roughly
+ranked by how much it moves the "production-ready" needle. Items marked → point to the
+phase where they're detailed.
+
+Top tier (biggest felt difference):
+1. **Survive a full close** — detached server; shells + agents live through closing. → Phase 11.
+2. **Never lose work on a crash** — server/pty/Electron auto-recover + scrollback restore. (trust spine)
+3. **Instant-feel** — pre-warmed shell + instant cursor, measured not guessed. → Phase 13.
+4. **Honest connection status** — calm connected/reconnecting/offline, invisible reconnect. This is the real fix for the "loading" ambiguity — the problem is *wondering*, not only speed.
+5. **First-run onboarding** — a stranger opens it and it explains itself; add-your-phone flow. (critical for OSS)
+6. **Human error surfaces, everywhere** — consistent, actionable (already done for the phone-port case).
+7. **Attention / notifications** — long command done, or an agent needs input, surfaced (esp. on phone).
+8. **Keyboard completeness** — new tab/split/switch/close/palette, reliable + discoverable.
+9. **Resource hygiene over long uptime** — no leaked shells, no memory creep, no zombie sockets.
+10. **Cross-device continuity** — true multi-viewer mirror + synced layout. → Phase 11.
+
+Security & trust (veto category — OSS is scrutinized publicly):
+11. **Harden the phone door** — rate-limit key guesses, rotate key on device-forget (→ #153), tighten cookies/session.
+12. **Input safety on the server** — `/rpc` + folder-find touch shell/filesystem; airtight against injection.
+13. **Scrollback is secrets-at-rest** — persisting history (the resume feature) can store passwords/tokens; encrypt / opt-out / redact by design, not after.
+
+Data integrity (a crash must not corrupt state):
+14. **Atomic writes** for every persisted file (layout, trust list, scrollback) — no half-written brick.
+15. **Config migration** — an update that changes saved-layout format migrates old state, doesn't throw.
+
+Robustness on machines that aren't ours (the clean-install reality):
+16. **node-pty native-module trap** — the compiled binary is tied to the Electron/Node version; the #1 way an Electron terminal breaks on someone else's machine. Handle in the build deliberately.
+17. **Shell/environment variety** — pwsh vs Windows PowerShell vs cmd vs WSL vs Git Bash, non-ASCII paths (Windows+PS+Unicode is a landmine), multi-monitor, DPI scaling.
+18. **Reconnect across real life** — laptop sleep/wake, wifi→cellular on phone, Tailscale re-auth; back off politely, just recover.
+
+Performance under load (separate test from first paint):
+19. **Many terminals** (20–50) and **fast output** (thousands of lines/sec) — xterm keeps up, memory stays flat.
+
+UX depth power users feel immediately:
+20. **Paste safety (bracketed paste)** — pasting multi-line that auto-runs is a footgun, worse with an agent; guard it.
+21. **Copy/paste ergonomics, clickable links/paths in output, scrollback search, font/zoom.**
+
+Operability (proof it's alive and supportable):
+22. **Auto-update** — security fixes reach users; feels maintained. → Phase 12.
+23. **Diagnostics** — one-click log / copy-diagnostics when it breaks for someone.
+24. **Code signing** — not a gate for OSS, but unsigned trips Windows SmartScreen and hurts how *installing* feels. → Phase 12.
+
+Sleeper risks worth naming (where "looks done" and "is done" diverge): **#16 node-pty
+native-module trap** (how the OSS launch quietly fails on other machines), **#11–13
+security** (public code, non-negotiable), and **#13 scrollback-as-secrets** (the resume
+feature has a privacy edge — don't build it blind). Not glamorous; highest leverage.
+
 ### Phase 11 — Agent integration
 Claude Code hooks, a live fleet/transcript view, and shell integration that keeps the
 prompt's cwd and git branch current. This is what makes WinMux an *agent* cockpit,
