@@ -46,6 +46,11 @@ Edward decides instantly from **rendered options**, not from words. So:
 
 ## Decisions log
 
+- **The CLI drives the app, not the server.** `winmux` commands go `POST /rpc`
+  (short-lived) and the server forwards them over a persistent `/control` WS to
+  the running app, because the app — not the passive server — owns layout and
+  which terminal is "active". Desk-door only (127.0.0.1): the phone can read its
+  own terminals but can never be driven, and can never drive the desktop. (Live.)
 - **Window controls are real under Electron, unchanged in the browser.** The `.wc`
   min/max/close buttons were always forward-wired to a `window.winmux` bridge that a plain
   browser didn't provide (maximize fell back to fullscreen, minimize was inert). Phase 8's

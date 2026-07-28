@@ -29,6 +29,19 @@ Tailscale — the desktop app and the phone are two clients of one server.
 Then open the printed `http://127.0.0.1:<port>` in a browser. Turn on phone access in
 Settings → Phone to get a Tailscale link + QR for your phone.
 
+## Drive it from the command line
+
+With WinMux running, the `winmux` command scripts the live app:
+
+    winmux list                     # the open terminals
+    winmux new-tab                  # open a tab in the active pane
+    winmux split down               # split the active pane
+    winmux send "Get-Date" --enter  # type into the active terminal and run it
+    winmux read-screen --lines 40   # read what's on screen
+
+An agent (e.g. Claude) can use these to open terminals and run tools for you.
+It works only at the PC (127.0.0.1), never over the phone link.
+
 ## Verify
 
     npm run verify

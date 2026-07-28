@@ -578,6 +578,43 @@ Deferred to later phases (per the spec): `winmux` CLI + RPC (Phase 9), the webvi
 panel and markdown viewer (Phase 10), agent integration (Phase 11), and OSS distribution —
 installer, auto-update, winget, README/LICENSE, public repo (Phase 12).
 
+## Phase 9 — Drive it from the command line (`winmux` CLI + control channel)
+
+Status: **Live.** (spec: the OSS-product design doc; plan:
+`docs/superpowers/plans/2026-07-27-winmux-phase9-cli-rpc.md`)
+
+Objective: at parity with wmux's CLI, a `winmux` command scripts the *running*
+app — open tabs, split, type into a terminal, read what's on screen — so a human
+or an agent (Claude) can drive the cockpit.
+
+The shape of the problem: the server is passive and owns the pty `SESSIONS`; the
+*app* owns layout (groups/tabs/panes and which terminal is "active"). So the CLI
+can't talk only to the server — it has to reach the running app.
+
+- **Two hops, one command.** The short-lived CLI does `POST /rpc` on the desk
+  door. The server forwards the command over a persistent `/control` WebSocket to
+  the connected app, which runs it against the real layout and replies; the reply
+  travels back out the CLI's HTTP response. `/control` and `/rpc` live only on the
+  desk door (127.0.0.1) — the phone can never drive the app.
+- **Discovery.** `start()` writes `~/.winmux/instance.json` with the live port, so
+  `winmux` finds a running app without being told; removed on exit.
+- **The command set** (`bin/winmux.cjs`): `list`, `new-tab [shell]`,
+  `split [right|down]`, `send <text> [--id N] [--enter]`,
+  `read-screen [--id N] [--lines N]`, `focus <id>`, `--json`. `browser`/`agent`/
+  `markdown` are reserved with a "later phase" notice (Phase 10/11).
+- **A ws gotcha fixed along the way.** Two `{server,path}` socket servers on one
+  HTTP server fight over the upgrade event, so the desk-door `/pty` and `/control`
+  became `noServer` behind one upgrade router. Phone door unchanged.
+- **Proof.** The harness gains a `cli` check: a headless page is the app, the
+  `winmux` binary is spawned as a child process, and it must make that page act —
+  `list` sees the terminal, `send` runs a command `read-screen` then finds on
+  screen, `new-tab` grows the count, and with no app connected the CLI fails
+  clean and fast. `verify-out/cli-drove-it.png`.
+
+Deferred to later phases: browser panel + markdown (Phase 10), agent integration
+(Phase 11), OSS distribution — installer, auto-update, winget, LICENSE, public
+repo (Phase 12).
+
 ## Risks
 
 - Scope drift back into the agent-cockpit demo (medium) — containment: this file is the scope; anything not listed above is a new decision.
