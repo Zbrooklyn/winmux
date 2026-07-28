@@ -2775,6 +2775,73 @@
       'return {ok:true,ref:"' + ref + '"};})()';
   }
 
+  // --- Markdown viewer (Phase 10) — reads a file via /api/md, live-updates ---
+  function mdEsc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function mdInline(s) {
+    s = mdEsc(s);
+    s = s.replace(/`([^`]+)`/g, function (m, c) { return '<code>' + c + '</code>'; });
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>');
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (m, t, u) { return '<a href="' + u + '" target="_blank" rel="noopener">' + t + '</a>'; });
+    return s;
+  }
+  function mdRender(text) {
+    var lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+    var html = [], i = 0, inCode = false, code = [], listType = null;
+    function closeList() { if (listType) { html.push('</' + listType + '>'); listType = null; } }
+    for (i = 0; i < lines.length; i++) {
+      var ln = lines[i];
+      if (/^```/.test(ln)) {
+        if (inCode) { html.push('<pre><code>' + mdEsc(code.join('\n')) + '</code></pre>'); code = []; inCode = false; }
+        else { closeList(); inCode = true; }
+        continue;
+      }
+      if (inCode) { code.push(ln); continue; }
+      var h = ln.match(/^(#{1,6})\s+(.*)$/);
+      if (h) { closeList(); html.push('<h' + h[1].length + '>' + mdInline(h[2]) + '</h' + h[1].length + '>'); continue; }
+      if (/^\s*[-*+]\s+/.test(ln)) { if (listType !== 'ul') { closeList(); html.push('<ul>'); listType = 'ul'; } html.push('<li>' + mdInline(ln.replace(/^\s*[-*+]\s+/, '')) + '</li>'); continue; }
+      if (/^\s*\d+\.\s+/.test(ln)) { if (listType !== 'ol') { closeList(); html.push('<ol>'); listType = 'ol'; } html.push('<li>' + mdInline(ln.replace(/^\s*\d+\.\s+/, '')) + '</li>'); continue; }
+      if (/^\s*>\s?/.test(ln)) { closeList(); html.push('<blockquote>' + mdInline(ln.replace(/^\s*>\s?/, '')) + '</blockquote>'); continue; }
+      if (/^\s*(---+|\*\*\*+|___+)\s*$/.test(ln)) { closeList(); html.push('<hr>'); continue; }
+      if (/^\s*$/.test(ln)) { closeList(); continue; }
+      closeList(); html.push('<p>' + mdInline(ln) + '</p>');
+    }
+    if (inCode) html.push('<pre><code>' + mdEsc(code.join('\n')) + '</code></pre>');
+    closeList();
+    return html.join('\n');
+  }
+  var _wmm = null;
+  function ensureMarkdownPanel() {
+    if (_wmm) return _wmm;
+    var wrap = document.createElement('div');
+    wrap.className = 'wmm';
+    wrap.innerHTML =
+      '<div class="wmm-bar"><span class="wmm-title">Markdown</span>' +
+        '<span class="wmm-nav wmm-close" title="Close" role="button">✕</span></div>' +
+      '<div class="wmm-body"></div>';
+    document.body.appendChild(wrap);
+    wrap.querySelector('.wmm-close').addEventListener('click', function () { wrap.removeAttribute('data-open'); if (_wmm) { clearInterval(_wmm.timer); _wmm.timer = null; } });
+    _wmm = { wrap: wrap, body: wrap.querySelector('.wmm-body'), title: wrap.querySelector('.wmm-title'), path: null, mtime: 0, timer: null };
+    return _wmm;
+  }
+  function openMarkdown(mdPath) {
+    var m = ensureMarkdownPanel();
+    m.wrap.setAttribute('data-open', '');
+    m.path = mdPath;
+    var pull = function () {
+      fetch('/api/md?path=' + encodeURIComponent(m.path)).then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok) { m.body.innerHTML = '<p style="color:var(--err)">' + mdEsc(j.error || 'cannot read file') + '</p>'; return; }
+        if (j.mtime !== m.mtime) { m.mtime = j.mtime; m.body.innerHTML = mdRender(j.text); }
+        var base = String(m.path).split(/[\\/]/).pop();
+        m.title.textContent = base || 'Markdown';
+      }).catch(function () {});
+    };
+    pull();
+    if (m.timer) clearInterval(m.timer);
+    m.timer = setInterval(pull, 1500);   // live-update on save
+    return { path: mdPath };
+  }
+
   function runControl(cmd, args) {
     args = args || {};
     if (cmd === 'list') {
@@ -2833,6 +2900,10 @@
         return view.capturePage().then(function (img) { return { dataUrl: img.toDataURL() }; });
       }
       throw new Error('unknown browser subcommand: ' + sub);
+    }
+    if (cmd === 'markdown') {
+      if (!args.path) throw new Error('markdown needs a file path');
+      return openMarkdown(args.path);
     }
     throw new Error('unknown command: ' + cmd);
   }

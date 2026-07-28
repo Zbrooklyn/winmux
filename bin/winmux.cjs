@@ -54,6 +54,8 @@ const HELP = [
   '  browser back|forward|reload|url  navigate the browser panel',
   '  browser screenshot [file]        save a PNG of the page',
   '',
+  '  markdown <file>                  open a markdown file in the viewer (live-updates)',
+  '',
   '  --json                           raw JSON output where relevant',
 ].join('\n');
 
@@ -106,6 +108,11 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
       }
       if (['back', 'forward', 'reload', 'url'].indexOf(sub) >= 0) return out(await rpc('browser', { sub }));
       die('unknown browser subcommand: ' + sub + ' (open|snapshot|click|back|forward|reload|url|screenshot)');
+    }
+    if (cmd === 'markdown' || cmd === 'md') {
+      if (!argv[1]) die('markdown needs a file, e.g. winmux markdown README.md');
+      const abs = path.resolve(process.cwd(), argv[1]);
+      return out(await rpc('markdown', { path: abs }));
     }
     if (cmd === 'agent') die('agent arrives in Phase 11. Run `winmux help` for what works today.');
     die('unknown command: ' + cmd + '. Run `winmux help`.');

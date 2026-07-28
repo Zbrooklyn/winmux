@@ -540,6 +540,23 @@ function handle(req, res, viaPhone) {
     });
     return;
   }
+
+  // The markdown viewer reads a file off this disk and hands back its text +
+  // mtime, so the surface can render it and re-poll to live-update on save.
+  if (urlPath === '/api/md') {
+    let q = {};
+    try { q = Object.fromEntries(new URL(req.url, 'http://x').searchParams); } catch (e) {}
+    const file = q.path || '';
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    try {
+      const st = fs.statSync(file);
+      const text = fs.readFileSync(file, 'utf8');
+      res.end(JSON.stringify({ ok: true, path: file, text, mtime: st.mtimeMs }));
+    } catch (e) {
+      res.end(JSON.stringify({ ok: false, error: 'cannot read: ' + (e.code || e.message), path: file }));
+    }
+    return;
+  }
   // Dragging a folder from Explorer onto a terminal is how people say "cd here".
   // A browser refuses to tell a page where a dropped folder actually lives — it
   // hands over the name and the child names and withholds the path on purpose.
