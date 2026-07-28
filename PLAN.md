@@ -700,6 +700,25 @@ Missing, by area (— `[backend]` = pre-approved to build; `[gated]` = renders �
   one focused **"terminal parity" pass** (its own session), because they interlock through the
   renderer and the harness migration. Not a token-limited quick-win batch.
 
+### 10-session stress test — measured 2026-07-28 (the real agent-cockpit workload)
+
+Pushed the WinMux side hard: 10 terminals opened, then all 10 streaming a 3000-line burst at once
+(real Claude sessions would cost tokens; this stresses the same paths). Findings:
+- **Backend holds.** All 10 sessions stayed alive (0 detached); opening 10 tabs took ~2.0s; the
+  `/rpc`→`/control` channel stayed responsive (`list` in 89ms *during* the blast). No catastrophic break.
+- **UI jank is real and MEASURED.** Main-thread event-loop tick averaged **132ms vs a ~50ms target
+  (2.6× lag)** under 10 concurrent streams — and that's *headless*, with no painting; on a real
+  screen it's worse. This is the DOM-renderer bottleneck with hard evidence → the **GPU renderer**
+  migration is the fix, and this is its justification.
+- **Memory** grew 82→185 MB on one burst — bounded by the scrollback caps (not a leak), watch over
+  long multi-session days.
+- **Attention-blindness** (architectural, not a number): nothing signals which of the 10 hit a
+  permission prompt / question — you'd click through all of them. The **attention-bus** item.
+
+**Conclusion — the two things to fix for the real 10-agent workload:** (1) GPU renderer (stops the
+jank; now data-justified), (2) attention signal (which of N needs you). Both are the already-scoped
+passes, not quick patches. Everything else at 10 sessions holds.
+
 ### Competitive position — table-stakes vs differentiators (2026-07-28)
 
 What EVERY pro terminal (Windows Terminal, iTerm2, Warp, WezTerm, Kitty, Ghostty) has that we
