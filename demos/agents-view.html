@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WinMux — Agents view (demo)</title>
+<style>
+  :root{
+    --bg:#1e1e1e; --panel:#242424; --row:#262626; --row-hover:#2c2c2c;
+    --line:#333333; --line-soft:#2b2b2b;
+    --ink:#dcdcdc; --muted:#9a9a9a; --faint:#6d6d6d;
+    --accent:hsl(258 88% 66%);
+    --work:#4aa3df;         /* working — calm blue */
+    --need:#e0a24b;         /* needs you — amber */
+    --need-bg:rgba(224,162,75,.10);
+    --done:#5fae74;         /* done — muted green */
+    --idle:#6d6d6d;         /* idle — grey */
+    --mono:"Cascadia Code","Cascadia Mono",Consolas,"SF Mono",monospace;
+    --ui:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg); color:var(--ink); font-family:var(--ui);
+    font-size:13px; line-height:1.45; -webkit-font-smoothing:antialiased;
+    display:flex; justify-content:center; padding:28px 16px;
+  }
+  .panel{
+    width:100%; max-width:560px; background:var(--panel);
+    border:1px solid var(--line); border-radius:10px; overflow:hidden;
+    box-shadow:0 12px 40px rgba(0,0,0,.35);
+  }
+
+  /* ---- header ---- */
+  .head{padding:14px 16px 12px; border-bottom:1px solid var(--line-soft)}
+  .head-top{display:flex; align-items:center; gap:9px}
+  .title{font-size:14px; font-weight:650; letter-spacing:.01em}
+  .title .count{color:var(--faint); font-weight:500; margin-left:2px}
+  .spacer{flex:1}
+  .filter{
+    font-family:var(--ui); font-size:11.5px; color:var(--muted);
+    background:transparent; border:1px solid var(--line); border-radius:6px;
+    padding:3px 8px; cursor:pointer;
+  }
+  .filter:hover{color:var(--ink); border-color:#3d3d3d}
+  .summary{display:flex; align-items:center; gap:14px; margin-top:11px; font-size:12px}
+  .stat{display:flex; align-items:center; gap:6px; color:var(--muted); font-variant-numeric:tabular-nums}
+  .stat b{color:var(--ink); font-weight:600}
+  .stat.need b{color:var(--need)}
+  .dot{width:7px; height:7px; border-radius:50%; flex:none}
+  .dot.work{background:var(--work)} .dot.need{background:var(--need)}
+  .dot.done{background:var(--done)} .dot.idle{background:var(--idle)}
+
+  /* ---- list ---- */
+  .list{padding:5px}
+  .agent{
+    display:grid; grid-template-columns:auto 1fr auto; align-items:center;
+    gap:11px; padding:10px 11px; border-radius:7px; cursor:pointer;
+    transition:background .12s ease;
+  }
+  .agent:hover{background:var(--row-hover)}
+  .agent + .agent{margin-top:1px}
+  .agent.needs{background:var(--need-bg)}
+  .agent.needs:hover{background:rgba(224,162,75,.15)}
+
+  /* status glyph */
+  .glyph{position:relative; width:16px; height:16px; display:grid; place-items:center}
+  .glyph .d{width:9px; height:9px; border-radius:50%}
+  .glyph.work .d{background:var(--work)}
+  .glyph.work .ring{position:absolute; inset:0; border-radius:50%;
+    border:1.5px solid var(--work); opacity:.55; animation:pulse 1.9s ease-out infinite}
+  .glyph.need .d{background:var(--need)}
+  .glyph.need .ring{position:absolute; inset:1px; border-radius:50%;
+    border:1.5px solid var(--need); opacity:.5; animation:pulse 1.4s ease-out infinite}
+  .glyph.done .d{background:none; width:16px; height:16px; display:grid; place-items:center; color:var(--done); font-size:13px}
+  .glyph.idle .d{background:var(--idle); opacity:.6}
+  @keyframes pulse{0%{transform:scale(1);opacity:.55}70%{transform:scale(1.9);opacity:0}100%{opacity:0}}
+  @media (prefers-reduced-motion:reduce){.glyph .ring{animation:none;opacity:.4}}
+
+  .body{min-width:0}
+  .line1{display:flex; align-items:baseline; gap:7px}
+  .agent-name{font-weight:650; font-size:13.5px}
+  .proj{color:var(--muted); font-size:11.5px}
+  .proj::before{content:"·"; margin-right:7px; color:var(--faint)}
+  .shell{
+    font-family:var(--mono); font-size:10px; color:var(--faint);
+    border:1px solid var(--line); border-radius:4px; padding:0 5px; margin-left:1px;
+  }
+  .line2{
+    font-family:var(--mono); font-size:11.5px; color:var(--muted);
+    margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .agent.needs .line2{color:#e6bd82}
+  .caret{color:var(--faint)}
+
+  .meta{display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex:none}
+  .pill{
+    font-size:10.5px; font-weight:600; letter-spacing:.02em; padding:2px 7px;
+    border-radius:5px; white-space:nowrap;
+  }
+  .pill.need{background:rgba(224,162,75,.16); color:var(--need)}
+  .pill.work{color:var(--work)}
+  .pill.done{color:var(--done)}
+  .pill.idle{color:var(--idle)}
+  .pill.work,.pill.done,.pill.idle{background:transparent; padding:2px 0}
+  .age{font-size:11px; color:var(--faint); font-variant-numeric:tabular-nums}
+
+  .foot{
+    padding:9px 16px; border-top:1px solid var(--line-soft);
+    font-size:11px; color:var(--faint); display:flex; align-items:center; gap:8px;
+  }
+  .foot .kbd{font-family:var(--mono); font-size:10px; color:var(--muted);
+    border:1px solid var(--line); border-radius:4px; padding:1px 5px}
+  .tag{margin-left:auto; font-size:10.5px; color:var(--faint); opacity:.8}
+</style>
+</head>
+<body>
+  <div class="panel" role="region" aria-label="Agents">
+    <div class="head">
+      <div class="head-top">
+        <span class="dot need" aria-hidden="true"></span>
+        <span class="title">Agents<span class="count"> 6</span></span>
+        <span class="spacer"></span>
+        <button class="filter">All ▾</button>
+      </div>
+      <div class="summary">
+        <span class="stat need"><span class="dot need"></span><b>1</b> needs you</span>
+        <span class="stat"><span class="dot work"></span><b>3</b> working</span>
+        <span class="stat"><span class="dot done"></span><b>1</b> done</span>
+        <span class="stat"><span class="dot idle"></span><b>1</b> idle</span>
+      </div>
+    </div>
+
+    <div class="list">
+      <!-- BLOCKED first: the whole point of the view -->
+      <div class="agent needs">
+        <div class="glyph need"><span class="ring"></span><span class="d"></span></div>
+        <div class="body">
+          <div class="line1"><span class="agent-name">Claude Code</span><span class="proj">steady-imports</span><span class="shell">pwsh</span></div>
+          <div class="line2">Apply this migration to production? <span class="caret">(y/n)</span> ▋</div>
+        </div>
+        <div class="meta"><span class="pill need">Needs you</span><span class="age">8m</span></div>
+      </div>
+
+      <!-- WORKING -->
+      <div class="agent">
+        <div class="glyph work"><span class="ring"></span><span class="d"></span></div>
+        <div class="body">
+          <div class="line1"><span class="agent-name">Claude Code</span><span class="proj">winmux</span><span class="shell">pwsh</span></div>
+          <div class="line2">Running verify.cjs — 142/201 checks passed…</div>
+        </div>
+        <div class="meta"><span class="pill work">Working</span><span class="age">2m</span></div>
+      </div>
+
+      <div class="agent">
+        <div class="glyph work"><span class="ring"></span><span class="d"></span></div>
+        <div class="body">
+          <div class="line1"><span class="agent-name">Codex</span><span class="proj">bbw-klaviyo</span><span class="shell">bash</span></div>
+          <div class="line2">Editing flows/welcome-series.liquid…</div>
+        </div>
+        <div class="meta"><span class="pill work">Working</span><span class="age">5m</span></div>
+      </div>
+
+      <div class="agent">
+        <div class="glyph work"><span class="ring"></span><span class="d"></span></div>
+        <div class="body">
+          <div class="line1"><span class="agent-name">Claude Code</span><span class="proj">amud-aleph-site</span><span class="shell">wsl</span></div>
+          <div class="line2">Reading MASTER-BRIEF.md…</div>
+        </div>
+        <div class="meta"><span class="pill work">Working</span><span class="age">40s</span></div>
+      </div>
+
+      <!-- DONE -->
+      <div class="agent">
+        <div class="glyph done"><span class="d">✓</span></div>
+        <div class="body">
+          <div class="line1"><span class="agent-name">Claude Code</span><span class="proj">chatmail</span><span class="shell">pwsh</span></div>
+          <div class="line2">Committed feat/unified-filter-engine · pushed</div>
+        </div>
+        <div class="meta"><span class="pill done">Done</span><span class="age">1m</span></div>
+      </div>
+
+      <!-- IDLE -->
+      <div class="agent">
+        <div class="glyph idle"><span class="d"></span></div>
+        <div class="body">
+          <div class="line1"><span class="agent-name">Aider</span><span class="proj">crystal-tile</span><span class="shell">bash</span></div>
+          <div class="line2">$ _</div>
+        </div>
+        <div class="meta"><span class="pill idle">Idle</span><span class="age">22m</span></div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span>Jump to an agent</span><span class="kbd">↵</span>
+      <span>Wait for one</span><span class="kbd">winmux agent wait</span>
+      <span class="tag">demo — sample data</span>
+    </div>
+  </div>
+</body>
+</html>
