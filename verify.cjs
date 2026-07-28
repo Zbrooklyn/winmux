@@ -1367,22 +1367,27 @@ check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
     (await ph.evaluate(SIDEBAR)).view === 'focus');
   await shot(ph, 'phone-terminal');
 
-  // C1 phone header: the back-arrow lives in the brand bar (#nhead-ctx); both the
-  // separate .nbar back header and the tab-bar back-arrow are hidden to keep two bars.
+  // Header B phone header: the back-arrow lives in the brand bar (#nhead-ctx) and is
+  // view-aware. The separate nsessions .nbar and the tab-bar back-arrow are hidden so
+  // the phone keeps two bars: brand bar + content. #ns-name still exists (hidden) and
+  // is painted by renderNarrowSessions, so reading it here stays valid.
   await ph.click('#nhead-ctx');
   await ph.waitForTimeout(600);
   const v2 = await ph.evaluate(SIDEBAR);
   const ns = await ph.evaluate(() => ({
     name: document.getElementById('ns-name').textContent.trim(),
+    ctx: document.getElementById('nhead-ctx-name').textContent.trim(),
     cards: document.querySelectorAll('#ns-list .ncard[data-open]').length,
     shown: getComputedStyle(document.querySelector('.nsessions')).display,
   }));
   t('back from a terminal lands on that group\'s sessions, not on the groups', v2.view === 'sessions', v2.view);
   t('the sessions screen is actually on screen', ns.shown === 'flex', ns);
   t('it is titled with the group and lists its terminals', ns.name === 'Workspace' && ns.cards === 1, ns);
+  t('header B: the brand bar carries the group name on the session list', ns.ctx === 'Workspace', ns);
   await shot(ph, 'phone-sessions');
 
-  await ph.click('#ns-back');
+  // Header B: the brand-bar back-arrow is view-aware — from the session list it goes to Groups.
+  await ph.click('#nhead-ctx');
   await ph.waitForTimeout(600);
   t('back again lands on the groups — the top of the phone stack',
     (await ph.evaluate(SIDEBAR)).view === 'projects');
@@ -1400,7 +1405,8 @@ check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
   // shell belongs to the new group, not to the one you just left.
   t('a brand-new group arrives with exactly one live shell of its own', madeIt.cards === 1, madeIt);
 
-  await ph.click('#ns-back');
+  // Header B: view-aware back-arrow from the new group's session list → Groups.
+  await ph.click('#nhead-ctx');
   await ph.waitForTimeout(600);
   const phRows = await ph.evaluate(SIDEBAR);
   t('the phone group list shows both groups', phRows.rows.length === 2, phRows.rows.map((r) => r.name));

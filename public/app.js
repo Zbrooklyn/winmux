@@ -691,6 +691,11 @@
     var g = groupById(activeGroupId);
     var nameEl = document.getElementById('ns-name');
     if (nameEl) nameEl.textContent = g ? g.name : '';
+    // Header B: keep the brand-bar context name in sync while the session list is showing.
+    if (root.getAttribute('data-view') === 'sessions') {
+      var ctxNm = document.getElementById('nhead-ctx-name');
+      if (ctxNm) ctxNm.textContent = g ? g.name : '';
+    }
     var ts = termsOfGroup(activeGroupId);
     list.innerHTML = ts.length
       ? ts.map(function (t) {
@@ -2544,8 +2549,11 @@
     if (p) focusPane(p.id);
   });
   document.getElementById('ns-back').addEventListener('click', function () { setView('projects'); });
-  // C1 phone header: the brand-bar back-arrow returns to the session list.
-  document.getElementById('nhead-ctx').addEventListener('click', function () { setView('sessions'); });
+  // Header B: the brand-bar back-arrow is view-aware — from a terminal it returns to
+  // the session list; from the session list it returns to Groups.
+  document.getElementById('nhead-ctx').addEventListener('click', function () {
+    setView(root.getAttribute('data-view') === 'sessions' ? 'projects' : 'sessions');
+  });
   // Phone: the pill focuses the open terminal from inside a user gesture, which is
   // what actually raises the soft keyboard on iOS/Android.
   (function () {
@@ -2670,6 +2678,10 @@
     if (v === 'focus') {
       var p = paneById(activePaneId);
       if (p) { paintNbar(p); setTimeout(function () { fitActive(p); }, 30); }
+    } else if (v === 'sessions') {
+      // Header B: on the session list the brand bar carries the group name + back-to-Groups.
+      var ctxName = document.getElementById('nhead-ctx-name');
+      if (ctxName) { var g = groupById(activeGroupId); ctxName.textContent = g ? g.name : ''; }
     }
   }
   function paintNbar(p) {

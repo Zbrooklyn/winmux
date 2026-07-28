@@ -269,9 +269,12 @@
   .ptab-back { display: none; }
   .cockpit[data-mode="narrow"][data-view="focus"] .main .npane .nbar { display: none; }
   .nhead-ctx { display: none; }
-  .cockpit[data-mode="narrow"][data-view="focus"] .nhead-ctx {
+  .cockpit[data-mode="narrow"][data-view="focus"] .nhead-ctx,
+  .cockpit[data-mode="narrow"][data-view="sessions"] .nhead-ctx {
     display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer;
   }
+  /* Header B: fold sessions-back into the WinMux brand bar; hide the redundant nsessions bar */
+  .cockpit[data-mode="narrow"][data-view="sessions"] .nsessions .nbar { display: none; }
   .nhead-ctx .nc-div { width: 1px; height: 16px; background: var(--border); flex: 0 0 auto; }
   .nhead-ctx .nc-back { display: flex; align-items: center; color: var(--muted); flex: 0 0 auto; }
   .nhead-ctx .nc-back svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -319,7 +322,8 @@
   .cockpit[data-mode="narrow"] .sxbtn { width: 44px; height: 44px; }
   /* The back chevron + name is the whole phone back-affordance; it was 20px tall.
      Give it a full 44px hit band so the thumb can't miss it. */
-  .cockpit[data-mode="narrow"][data-view="focus"] .nhead-ctx { min-height: 44px; }
+  .cockpit[data-mode="narrow"][data-view="focus"] .nhead-ctx,
+  .cockpit[data-mode="narrow"][data-view="sessions"] .nhead-ctx { min-height: 44px; }
   /* Micro-typography rescale. The sidebar labels are sized for a dense desktop
      rail; when that rail becomes a full phone screen the 9.5px deck labels and
      11px header labels read as fine print. On narrow, lift them into a legible
