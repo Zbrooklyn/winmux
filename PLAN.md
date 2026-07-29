@@ -68,7 +68,13 @@ inline Approve/Deny (the committed `approve` check rings a real background termi
 asserts the pill renders only there, clicks it, and confirms the alarm clears + an "Approved"
 notification lands), plus **PowerShell 7 detection** — the `pwsh` check proves PS7 is offered,
 labelled "PowerShell 7", and actually runs 7.x, including a **Microsoft Store install** (whose App
-Execution Alias `fs.existsSync` reports as missing; detection now `lstat`-checks the alias).
+Execution Alias `fs.existsSync` reports as missing; detection now `lstat`-checks the alias), plus the
+**sidebar-footer buttons** — the committed `footer` check clicks all 7 (new terminal, new group, save,
+load, diagnostics, shortcuts, settings) and asserts each opens/creates its target. This surfaced and
+fixed a **dead-in-Electron** bug: New group and group Rename used `window.prompt()`, which *throws* in
+Electron ("prompt() is and will not be supported"), so both did nothing in the desktop app; they now
+use an in-app `promptDialog` (styled text input over the shared overlay). Proven 8/8 in the harness and
+in real Electron (New group 1→2, no throw; dialog captured).
 
 **Known flake (not a regression):** under full concurrent load the harness can spuriously fail
 `busyport`/`cli`/`colour` on a heavily-loaded machine; all pass in isolation. A harness-concurrency
