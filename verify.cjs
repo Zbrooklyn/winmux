@@ -1691,6 +1691,25 @@ check('onboard', PORT_ONBOARD, async ({ browser, base, t, shot }) => {
   await pctx.close();
 });
 
+// Coexistence (Phase 12): the packaged .exe and the from-source dev copy must
+// resolve to disjoint identities, or they share Electron's userData (and its
+// ProcessSingleton lock), the CLI discovery file, and the trust file. This is
+// the cheap unit guard; verify-coexist.cjs proves it end-to-end on a real build.
+check('profile', PORT_ONBOARD, async ({ t }) => {
+  const { resolveProfile } = require('./dist-electron/profile.js');
+  const o = { appData: 'C:\\A', home: 'C:\\H' };
+  const prod = resolveProfile({ ...o, isPackaged: true });
+  const dev = resolveProfile({ ...o, isPackaged: false });
+  const sep = require('path').sep;
+  t('packaged and dev appIds differ', prod.appId !== dev.appId, { prod: prod.appId, dev: dev.appId });
+  t('packaged and dev userData dirs differ', prod.userData !== dev.userData, { prod: prod.userData, dev: dev.userData });
+  t('userData dirs do not nest (no shared singleton lock)',
+    !prod.userData.startsWith(dev.userData + sep) && !dev.userData.startsWith(prod.userData + sep));
+  t('discovery files differ', prod.instanceFile !== dev.instanceFile, { prod: prod.instanceFile, dev: dev.instanceFile });
+  t('trust files differ', prod.trustFile !== dev.trustFile);
+  t('production identity is the stable public one', prod.appId === 'com.zbrooklyn.winmux' && prod.name === 'WinMux');
+});
+
 // Paste safety (#214): a multi-line paste stops to ask before it can run every
 // line; a single-line paste is unbothered.
 check('paste', PORT_PASTE, async ({ browser, base, t }) => {
