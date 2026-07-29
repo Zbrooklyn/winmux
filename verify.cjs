@@ -73,6 +73,7 @@ const PORT_MIGRATE = 9924;
 // welcome appears, dismisses, and stays gone. Its own server, its own state.
 const PORT_ONBOARD = 9925;
 const PORT_APPROVE = 9926;
+const PORT_PWSH = 9927;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1672,6 +1673,49 @@ check('approve', PORT_APPROVE, async ({ browser, base, t, shot }) => {
   await page.waitForTimeout(400);
   const notif = await page.evaluate(() => (document.getElementById('npanel').textContent || ''));
   t('Approve reports it sent the keystroke (notification)', /Approved/.test(notif), notif.slice(0, 120));
+
+  await page.close();
+});
+
+// --- pwsh: PowerShell 7 is found even from a Microsoft Store install -----------
+// The bug: detectShells used fs.existsSync, which returns FALSE on the Store App
+// Execution Alias for pwsh.exe — so Store-installed PowerShell 7 silently never
+// appeared, though node-pty spawns it fine. Detection now lstat-checks the alias.
+// Prove PS7 is offered, labelled right, and actually runs 7.x. Skips where pwsh
+// isn't installed (a clean machine without it should not fail this).
+check('pwsh', PORT_PWSH, async ({ browser, base, t, shot, skip }) => {
+  const shells = await new Promise((res) => {
+    http.get(base + '/shells', (r) => { let b = ''; r.on('data', (d) => b += d); r.on('end', () => { try { res(JSON.parse(b)); } catch (e) { res(null); } }); }).on('error', () => res(null));
+  });
+  const p7 = shells && shells.find((s) => s.key === 'pwsh');
+  if (!p7) return skip('PowerShell 7 (pwsh) is not installed on this machine');
+  t('PowerShell 7 is offered in the shell list', !!p7, shells);
+  t('and it is labelled "PowerShell 7" (not the retired "Core")', p7.label === 'PowerShell 7', p7.label);
+
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_PWSH), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => o += d);
+    proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);          // the app connects to /control
+
+  const opened = await winmux(['new-tab', 'pwsh']);
+  t('winmux opens a PowerShell 7 tab', opened.code === 0, opened.err);
+  await page.waitForTimeout(3500);          // pwsh is slower to boot than 5.1
+
+  // Ask the new (now active) pwsh tab its own major version — a marker only a real
+  // running PowerShell 7 can produce, so this can't pass on a dead/listed-only shell.
+  await winmux(['send', '"PSMAJOR=" + $PSVersionTable.PSVersion.Major', '--enter']);
+  await page.waitForTimeout(2500);
+  const rd = await winmux(['read-screen', '--lines', '40']);
+  t('the pwsh tab is really running PowerShell 7.x', rd.code === 0 && /PSMAJOR=7/.test(rd.out), rd.out.slice(-160));
+  await shot(page, 'pwsh-running');
 
   await page.close();
 });

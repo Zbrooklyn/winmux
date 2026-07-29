@@ -311,12 +311,29 @@ function firstExisting(paths) {
   for (var i = 0; i < paths.length; i++) { try { if (fs.existsSync(paths[i])) return paths[i]; } catch (e) {} }
   return null;
 }
+// PowerShell 7 (pwsh) is fussy to find. A Microsoft Store install exposes it ONLY
+// as an App Execution Alias — a reparse-point stub that fs.existsSync reports as
+// MISSING even though node-pty spawns it fine (verified: it runs a real 7.x). So we
+// check the MSI/winget path and PATH with existsSync, then fall back to lstat on the
+// Store alias, which sees the stub where existsSync can't. Whichever is found spawns.
+function detectPwsh() {
+  var msi = firstExisting([
+    'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+    'C:\\Program Files\\PowerShell\\7-preview\\pwsh.exe',
+  ]);
+  if (msi) return msi;
+  var onp = onPath('pwsh.exe');
+  if (onp) return onp;
+  var alias = path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps', 'pwsh.exe');
+  try { fs.lstatSync(alias); return alias; } catch (e) {}
+  return null;
+}
 
 function detectShells() {
   var list = [];
   list.push({ key: 'powershell', label: 'PowerShell', exec: 'powershell.exe', args: [] });
-  var pwsh = onPath('pwsh.exe');
-  if (pwsh) list.push({ key: 'pwsh', label: 'PowerShell Core', exec: pwsh, args: [] });
+  var pwsh = detectPwsh();
+  if (pwsh) list.push({ key: 'pwsh', label: 'PowerShell 7', exec: pwsh, args: [] });
   list.push({ key: 'cmd', label: 'Command Prompt', exec: 'cmd.exe', args: [] });
   var gb = firstExisting([
     'C:\\Program Files\\Git\\bin\\bash.exe',
