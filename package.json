@@ -25,7 +25,7 @@
     "tailscale",
     "ssh-alternative"
   ],
-  "main": "server.cjs",
+  "main": "dist-electron/main.js",
   "bin": {
     "winmux": "bin/winmux.cjs"
   },
@@ -37,7 +37,34 @@
     "link": "powershell -NoProfile -ExecutionPolicy Bypass -File winmux.ps1 link",
     "build:electron": "tsc -p tsconfig.electron.json",
     "dev:electron": "npm run build:electron && electron dist-electron/main.js",
-    "verify": "npm run build:electron && node verify.cjs"
+    "verify": "npm run build:electron && node verify.cjs",
+    "verify:coexist": "node verify-coexist.cjs",
+    "pack": "npm run build:electron && electron-builder --dir",
+    "dist": "npm run build:electron && electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.zbrooklyn.winmux",
+    "productName": "WinMux",
+    "npmRebuild": false,
+    "directories": { "output": "dist-installer", "buildResources": "build" },
+    "files": [
+      "server.cjs",
+      "public/**/*",
+      "dist-electron/**/*",
+      "bin/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/prebuilds/**",
+      "node_modules/node-pty/build/Release/*.node"
+    ],
+    "win": { "target": ["nsis"], "icon": "build/icon.ico" },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "WinMux Setup ${version}.${ext}"
+    }
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
@@ -51,6 +78,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "electron": "^33.2.0",
+    "electron-builder": "^26.15.3",
     "playwright": "^1.62.0",
     "typescript": "^5.7.2"
   }

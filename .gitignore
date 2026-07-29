@@ -7,3 +7,5 @@ winmux.log
 winmux.err.log
 .winmux-link.tmp
 dist-electron/
+
+dist-installer/
