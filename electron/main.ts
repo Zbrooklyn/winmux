@@ -1,12 +1,33 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
+import { resolveProfile } from './profile';
 
 // server.cjs is CommonJS at the repo root (one level up from dist-electron/).
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { start } = require('../server.cjs') as {
   start: () => Promise<{ port: number; host: string }>;
 };
+
+// Establish this copy's identity BEFORE anything reads userData or starts the
+// server. app.isPackaged is true only inside the built .exe, so the installed
+// app and the from-source dev copy resolve to disjoint identities automatically
+// — separate %APPDATA% dirs (and separate ProcessSingleton locks), separate CLI
+// discovery files, separate trusted-device files. This is what lets both run at
+// once without stepping on each other (Phase 12 coexistence contract).
+const profile = resolveProfile({
+  isPackaged: app.isPackaged,
+  appData: app.getPath('appData'),
+  home: os.homedir(),
+});
+app.setAppUserModelId(profile.appId);
+app.setName(profile.name);
+app.setPath('userData', profile.userData);
+// Hand the in-process server its own discovery + trust files (mirrors the
+// server's existing WINMUX_TRUST_FILE / WINMUX_INSTANCE_FILE env contract).
+process.env.WINMUX_INSTANCE_FILE = profile.instanceFile;
+process.env.WINMUX_TRUST_FILE = process.env.WINMUX_TRUST_FILE || profile.trustFile;
 
 // The harness (verify.cjs) runs this same main in WINMUX_SMOKE mode: no visible
 // window, self-check the rendered cockpit, write a JSON verdict + a screenshot,
