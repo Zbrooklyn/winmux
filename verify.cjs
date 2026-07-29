@@ -72,6 +72,7 @@ const PORT_MIGRATE = 9924;
 // The onboarding check loads with a virgin localStorage to prove the first-run
 // welcome appears, dismisses, and stays gone. Its own server, its own state.
 const PORT_ONBOARD = 9925;
+const PORT_APPROVE = 9926;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1597,6 +1598,82 @@ check('cli', PORT_CLI, async ({ browser, base, t, shot }) => {
   await new Promise((r) => setTimeout(r, 800));
   const orphan = await winmux(['list']);
   t('with no app open the CLI fails clearly, fast', orphan.code !== 0 && /no app connected/i.test(orphan.err), orphan.err);
+});
+
+// --- approve (U4): clear a "needs you" session inline, without switching in ----
+// A background terminal that rings its bell flips to "needs you". Its row grows an
+// inline Approve pill; clicking it sends Enter to that terminal (accepting whatever
+// it was waiting on) and clears the alarm — the "approve a blocked agent from the
+// fleet view" move. Idle rows must NOT get the pill. We drive it through the same
+// real CLI transport the `cli` check uses (send/read-screen/new-tab).
+check('approve', PORT_APPROVE, async ({ browser, base, t, shot }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_APPROVE), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => o += d);
+    proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+  const parse = (s) => { try { return JSON.parse(s); } catch (e) { return null; } };
+
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);          // the app connects to /control
+
+  const l1 = parse((await winmux(['list', '--json'])).out);
+  t('the app reports its starting terminal', l1 && l1.sessions.length >= 1, l1 && l1.sessions.length);
+  const t1 = l1.sessions[0].id;
+
+  // A second terminal takes focus, so t1 is now a background tab — the exact
+  // condition under which a bell means "needs you", not "you already saw it".
+  await winmux(['new-tab']);
+  await page.waitForTimeout(1800);
+  const l2 = parse((await winmux(['list', '--json'])).out);
+  const active = l2 && l2.sessions.find((s) => s.active);
+  t('a second terminal becomes the active one', active && String(active.id) !== String(t1), active && active.id);
+
+  // Ring the background terminal: its shell writes one real BEL byte.
+  const rung = await winmux(['send', '[Console]::Out.Write([char]7)', '--id', String(t1), '--enter']);
+  t('the ring reaches the background terminal', rung.code === 0, rung.err);
+  await page.waitForTimeout(2400);
+
+  // Expand groups so the rows render, then read the sidebar.
+  await page.evaluate(() => { document.querySelectorAll('[data-expand]').forEach((e) => { if (!e.hasAttribute('data-open2')) e.click(); }); });
+  await page.waitForTimeout(500);
+  const before = await page.evaluate((id) => {
+    const need = document.getElementById('d-need');
+    const row = document.querySelector('.srow[data-term="' + id + '"]');
+    const others = [...document.querySelectorAll('.srow[data-term]')].filter((r) => r.getAttribute('data-term') !== String(id));
+    return {
+      dNeed: need && need.textContent,
+      rowNeedsYou: !!(row && row.querySelector('.dot.needsyou')),
+      rowHasApprove: !!(row && row.querySelector('.sapprove')),
+      idleHasApprove: others.some((r) => r.querySelector('.sapprove')),
+    };
+  }, t1);
+  t('a rung background session becomes "needs you"', before.rowNeedsYou && before.dNeed !== '0', before);
+  t('a "needs you" row grows an inline Approve control', before.rowHasApprove, before);
+  t('an idle row has no Approve control (it is only for waiting sessions)', !before.idleHasApprove, before);
+  await shot(page, 'approve-pill');
+
+  // Click Approve — it must send the keystroke and clear the alarm.
+  await page.click('.srow[data-term="' + t1 + '"] .sapprove');
+  await page.waitForTimeout(1200);
+  const after = await page.evaluate((id) => {
+    const row = document.querySelector('.srow[data-term="' + id + '"]');
+    return { stillApprove: !!(row && row.querySelector('.sapprove')), stillNeedsYou: !!(row && row.querySelector('.dot.needsyou')) };
+  }, t1);
+  t('clicking Approve clears the waiting state', !after.stillApprove && !after.stillNeedsYou, after);
+
+  // The action reports itself: an "Approved" line lands in the notification centre,
+  // which only happens when the keystroke was actually sent to a live terminal.
+  await page.evaluate(() => document.getElementById('open-notif').click());
+  await page.waitForTimeout(400);
+  const notif = await page.evaluate(() => (document.getElementById('npanel').textContent || ''));
+  t('Approve reports it sent the keystroke (notification)', /Approved/.test(notif), notif.slice(0, 120));
+
+  await page.close();
 });
 
 // --- markdown: the viewer surface renders a file and follows its edits ------

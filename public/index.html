@@ -486,6 +486,17 @@
   .srow.eye-on .speye { color: var(--accent); }
   .srow .speye:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
   .cockpit[data-mode="narrow"] .srow .speye { opacity: 1; }
+  /* U4 — inline Approve on a "needs you" row: clear a waiting session in one click,
+     without switching into it. Green (--ok) so it reads as the affirmative action. */
+  .sapprove { flex: 0 0 auto; align-self: center; margin-right: 3px; padding: 3px 9px; border-radius: 999px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: .01em; cursor: pointer; white-space: nowrap; line-height: 1.5;
+    color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--ok) 34%, transparent);
+    transition: background .14s ease, color .14s ease; }
+  .sapprove:hover { background: var(--ok); color: #0d1a0f; }
+  .sapprove:focus-visible { outline: 2px solid var(--ok); outline-offset: 1px; }
+  .sapprove.nc { min-height: 44px; margin: 0 4px; padding: 0 14px; display: inline-flex; align-items: center; font-size: 12.5px; }
+  @media (prefers-reduced-motion: reduce) { .sapprove { transition: none; } }
 
   .sxpv { position: fixed; top: 0; bottom: 0; left: 264px; width: 320px; z-index: 70;
     background: var(--bg0); border-right: 1px solid var(--border); display: flex; flex-direction: column;
@@ -516,6 +527,13 @@
   .sxpv .pv-bar { height: 5px; border-radius: 3px; background: var(--bg2); overflow: hidden; }
   .sxpv .pv-bar i { display: block; height: 100%; background: var(--work); border-radius: 3px; }
   .sxpv .pv-btn { width: 100%; display: flex; justify-content: center; }
+  /* U4 — the approve/deny action row + the live-prompt preview inside the panel. */
+  .sxpv .pv-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+  .sxpv .pv-acts .pv-btn { width: auto; flex: 1 1 auto; min-width: 96px; }
+  .sxpv .pv-screen { margin: 0 0 12px; padding: 10px 11px; border-radius: 8px; background: var(--term-bg);
+    border: 1px solid var(--border); color: var(--muted); font-size: 11.5px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; }
+  .sxpv .pv-hint { margin-top: 9px; font-size: 10.5px; color: var(--faint); line-height: 1.45; }
   .sxpv .pv-meta { margin-bottom: 6px; }
   .sxpv .pv-m { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
     padding: 7px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent); font-size: 12.5px; }

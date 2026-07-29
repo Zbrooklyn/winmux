@@ -527,6 +527,7 @@
       (t.cwd ? ' · <span class="m2">' + esc(tailPath(t.cwd)) + '</span>' : '') + '</div>' +
       (t.status === 'working' ? '<div class="sbar"><i style="width:' + Math.round(t.prog || 8) + '%"></i></div>' : '') +
       '</div>' +
+      (t.status === 'needsyou' ? '<span class="sapprove" data-approve="' + t.id + '" role="button" tabindex="0" title="Approve — send Enter to continue" aria-label="Approve">Approve</span>' : '') +
       '<span class="speye" data-eye="' + t.id + '" role="button" tabindex="0" title="Preview session" aria-label="Preview session">' + EYE_SVG + '</span>' +
       '</div>';
   }
@@ -588,6 +589,8 @@
     renderNarrowSessions();
   }
   sxList.addEventListener('click', function (e) {
+    var appr = e.target.closest ? e.target.closest('[data-approve]') : null;
+    if (appr) { e.stopPropagation(); approveTerm(parseInt(appr.getAttribute('data-approve'), 10)); return; }
     var eye = e.target.closest ? e.target.closest('[data-eye]') : null;
     if (eye) { e.stopPropagation(); openPreview(parseInt(eye.getAttribute('data-eye'), 10)); return; }
     var ex = e.target.closest ? e.target.closest('[data-expand]') : null;
@@ -620,6 +623,8 @@
       if (!act) return;
       var k = act.getAttribute('data-pv');
       if (k === 'close') closePreview();
+      else if (k === 'approve' && previewTermId != null) approveTerm(previewTermId);
+      else if (k === 'deny' && previewTermId != null) denyTerm(previewTermId);
       else if (k === 'open' && previewTermId != null) { var id = previewTermId; closePreview(); focusTerm(id); }
     });
     return previewEl;
@@ -630,10 +635,22 @@
     var chip = tone === 'hot' ? 'hot' : (tone === 'work' ? 'work' : 'mut');
     var sub = esc(g.name || 'Session') + (t.shell ? ' · ' + esc(labelFor(t.shell)) : '');
     var primary;
-    if (t.status === 'needsyou' || t.status === 'closed') {
-      primary = '<div class="pv-primary hot"><div class="pv-lbl">Waiting for you</div>' +
-        '<div class="pv-ask">This session is paused and needs your input.</div>' +
-        '<button class="btn primary pv-btn" data-pv="open">Open &amp; respond</button></div>';
+    if (t.status === 'needsyou') {
+      // Show the actual prompt so approving is a decision, not a blind Enter.
+      var scr = serializeTerm(t, 14);
+      var ask = scr
+        ? '<div class="pv-ask">This session is asking for input:</div><pre class="pv-screen mono">' + esc(scr) + '</pre>'
+        : '<div class="pv-ask">This session rang for your attention and is waiting on you.</div>';
+      primary = '<div class="pv-primary hot"><div class="pv-lbl">Waiting for you</div>' + ask +
+        '<div class="pv-acts">' +
+        '<button class="btn primary pv-btn" data-pv="approve">Approve</button>' +
+        '<button class="btn pv-btn" data-pv="deny">Deny</button>' +
+        '</div>' +
+        '<div class="pv-hint">Approve sends Enter (accepts the highlighted choice) · Deny sends Esc · or Open to respond in full</div></div>';
+    } else if (t.status === 'closed') {
+      primary = '<div class="pv-primary hot"><div class="pv-lbl">Session ended</div>' +
+        '<div class="pv-ask">This session has closed.</div>' +
+        '<button class="btn primary pv-btn" data-pv="open">Open</button></div>';
     } else if (t.status === 'working') {
       primary = '<div class="pv-primary"><div class="pv-lbl">Now</div>' +
         '<div class="pv-now">Working…</div>' +
@@ -681,6 +698,28 @@
     if (previewEl) previewEl.classList.remove('on');
     [].forEach.call(sxList.querySelectorAll('.srow.eye-on'), function (r) { r.classList.remove('eye-on'); });
   }
+  // U4 — clear a "needs you" session without switching into it. We send the key
+  // a person would press: Enter accepts the highlighted default (a Claude Code
+  // permission prompt lands on Yes), Esc cancels/denies. It's their own terminal —
+  // exactly the input they'd type, just reachable from the fleet view.
+  function respondTerm(id, data, kind) {
+    var t = termById(id);
+    if (!t) return;
+    var ok = !!(t.ws && t.ws.readyState === WebSocket.OPEN);
+    if (ok) t.ws.send(JSON.stringify({ t: 'i', d: data }));
+    notify(
+      ok ? (kind === 'deny' ? 'Denied — ' : 'Approved — ') + termName(t) : 'Could not reach ' + termName(t),
+      ok ? (kind === 'deny' ? 'Sent Esc to cancel.' : 'Sent Enter to continue.') : 'That session is not connected.',
+      id
+    );
+    if (!ok) return;
+    // It is no longer waiting on you; normal output will re-derive its state.
+    if (t.status === 'needsyou') setStatus(t, 'idle');
+    // Refresh the panel in place if it is open on this session.
+    if (previewTermId === id && previewEl && previewEl.classList.contains('on')) openPreview(id);
+  }
+  function approveTerm(id) { respondTerm(id, '\r', 'approve'); }
+  function denyTerm(id) { respondTerm(id, '\x1b', 'deny'); }
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && previewEl && previewEl.classList.contains('on')) closePreview();
   });
@@ -693,6 +732,8 @@
   window.addEventListener('resize', positionPreview);
   sxList.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;
+    var appr = e.target.closest ? e.target.closest('[data-approve]') : null;
+    if (appr) { e.preventDefault(); approveTerm(parseInt(appr.getAttribute('data-approve'), 10)); return; }
     var eye = e.target.closest ? e.target.closest('[data-eye]') : null;
     if (eye) { e.preventDefault(); openPreview(parseInt(eye.getAttribute('data-eye'), 10)); }
   });
@@ -738,6 +779,7 @@
           (kind === nm ? '' : '<span class="tm">' + esc(kind) + '</span>') + '</div>' +
           '<div class="preview">' + statusLine(t) + (t.cwd ? ' · ' + esc(t.cwd) : '') + '</div>' +
           '</div>' +
+          (t.status === 'needsyou' ? '<span class="sapprove nc" data-approve="' + t.id + '" role="button" tabindex="0" title="Approve — send Enter to continue" aria-label="Approve">Approve</span>' : '') +
           '<span class="speye nceye" data-eye="' + t.id + '" role="button" tabindex="0" title="Preview session" aria-label="Preview session">' + EYE_SVG + '</span>' +
           '<span class="nchev">' + CARET_RIGHT_SVG + '</span></div>';
       }).join('')
@@ -2695,6 +2737,8 @@
     });
   })();
   document.getElementById('ns-list').addEventListener('click', function (e) {
+    var appr = e.target.closest ? e.target.closest('[data-approve]') : null;
+    if (appr) { e.stopPropagation(); approveTerm(parseInt(appr.getAttribute('data-approve'), 10)); return; }
     var eye = e.target.closest ? e.target.closest('[data-eye]') : null;
     if (eye) { e.stopPropagation(); openPreview(parseInt(eye.getAttribute('data-eye'), 10)); return; }
     var card = e.target.closest ? e.target.closest('.ncard[data-open]') : null;
