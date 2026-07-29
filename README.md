@@ -30,6 +30,7 @@ session — so what you start at your desk is the exact terminal you pick up on 
 - **The same session everywhere.** Start a build at your desk, watch it finish from your phone on the couch — one server, many windows.
 - **No open ports to the internet.** Phone access rides your private Tailscale network; a device gets in only after it scans the QR once, and you can forget any device later.
 - **Scriptable by agents.** A `winmux` CLI drives the live app over a local RPC surface — open tabs, run commands, read the screen, drive a browser panel. Built so Claude (or any agent) can operate a terminal for you.
+- **See which session needs you — and clear it in one tap.** When a background terminal rings for attention it turns "needs you" in the sidebar; peek at what it's asking, then **Approve** (Enter) or **Deny** (Esc) right from the fleet view — on desktop or your phone — without switching into it.
 - **Survives the network.** Shells outlive a dropped socket; the client reconnects instead of printing `[session ended]`.
 
 ## The three faces

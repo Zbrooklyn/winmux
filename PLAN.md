@@ -56,7 +56,36 @@ find in scrollback (Ctrl+F) · copy/paste · rename tab · context menus · broa
 settings (theme/font/cursor/scrollback/behaviour) · keyboard cheat sheet (F1) · diagnostics · notifications
 with badge · changes dock (git diff) · save/load layout · sidebar list with live status deck (currently a
 **flat terminal list — not the group list the contract calls for**, see Correction above) ·
-light/dark themes.
+light/dark themes · session **peek** (eyeball → preview panel) · **inline Approve/Deny on a "needs you"
+session** (desktop sidebar + phone card + peek panel; sends Enter / Esc to the waiting terminal — U4).
+
+## Current honest state (2026-07-29) — what works, what's limited, what's gated
+
+A ground-truth snapshot so "is it broken?" has a durable answer.
+
+**Verified working (harness-proven, 241/241):** everything in *Already done* above, plus the U4
+inline Approve/Deny. The committed `approve` check rings a real background terminal to "needs you",
+asserts the pill renders only there, clicks it, and confirms the alarm clears + an "Approved"
+notification lands.
+
+**Known limitations (not bugs — honest current behaviour):**
+- **Copy phone link over the phone (plain HTTP):** the one-tap clipboard API is blocked on a
+  non-HTTPS page, so on the phone the button falls back to "Select the link to copy it" (manual
+  select) rather than a silent one-tap. Desktop copy is one-tap and confirms on the button. Not
+  fixable without serving the phone side over HTTPS.
+- **Session survival across a full app restart:** shells survive a dropped socket and a page reload
+  (10-min grace + reattach — `survive`/`reload`/`drop` checks). They do **not** survive quitting and
+  reopening the app: the server runs inside Electron and deliberately kills all shells on a clean exit
+  (`server.cjs` `killShells`). Reattach-after-restart needs the **detached-server** feature — an
+  explicit pending roadmap item (M `[B]`, see Build order), not a quick fix.
+
+**Distribution reality:** the installer is **unsigned**, so Windows SmartScreen shows an
+"unknown publisher" warning on install (works fine; looks untrusted). A freshly built installer must
+be re-made after code changes — the installed `.exe` is a point-in-time build, not live source.
+
+**Owner-gated / not built (Edward's call, do not silently build):** code signing (costs money),
+auto-update (electron-updater + GitHub Releases), winget listing, Android companion app (Phase 14),
+the v2 Rust core. See *Build order* and *Upcoming phases*.
 
 ## Proving it still works — `npm run verify`
 
@@ -79,8 +108,8 @@ killing the app." `9912` is the *free* one, where the phone flow is proven end t
 shell. `9911` belongs to the `remote` group alone, which really opens the phone door — sharing a port
 would have two groups fighting over one switch.
 
-**67/67 as of Phase 2.** The `remote` group is the one that talks to the Tailscale address rather than
-`127.0.0.1`, because a remote claim proved on the desk door is not proved at all.
+**241/241 as of 2026-07-29 (U4 approve).** The `remote` group is the one that talks to the Tailscale
+address rather than `127.0.0.1`, because a remote claim proved on the desk door is not proved at all.
 
 A test that needs an argument is a defect: every argument is a chance to invoke it wrong and burn a
 whole browser run. If you add a behaviour, add its check here in the same commit.
