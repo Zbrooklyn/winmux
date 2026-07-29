@@ -526,6 +526,16 @@ check('phone', PORT_PHONE, async ({ browser, base, t, shot, skip }) => {
   const url = (await p.locator('#phone-url').textContent()).trim();
   t('the link is a tailnet URL carrying a key', /^http:\/\/100\.\d+\.\d+\.\d+:\d+\/\?k=[a-f0-9]{32}$/.test(url),
     url.replace(/k=.*/, 'k=…'));
+
+  // Copy link must give visible feedback (the copy worked before, but notify()
+  // only pinged the silent bell, so a click looked dead — the reported bug).
+  await p.locator('[data-act="phone-copy"]').click();
+  await p.waitForTimeout(150);
+  t('Copy link confirms right on the button', /copied/i.test((await p.locator('[data-act="phone-copy"]').textContent()).trim()),
+    (await p.locator('[data-act="phone-copy"]').textContent()).trim());
+  await p.waitForTimeout(1800);
+  t('and the button label settles back to Copy link', /^Copy link$/.test((await p.locator('[data-act="phone-copy"]').textContent()).trim()));
+
   t('the shot of the Phone tab carries no live key', await redact(p));
   await shot(p, 'phone-on');
 

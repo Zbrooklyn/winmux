@@ -2464,10 +2464,20 @@
     if (a === 'cheat') { closeOvl('settings-ovl'); openCheat(); }
     if (a === 'diag') { closeOvl('settings-ovl'); openDiag(); }
     if (a === 'phone-copy' && phoneS && phoneS.url) {
-      try {
-        navigator.clipboard.writeText(phoneS.url);
-        notify('Link copied', 'Anyone holding it can reach this PC — paste it carefully.');
-      } catch (err) { notify('Could not copy', 'Select the link and copy it by hand.'); }
+      // The copy itself works, but writeText is async and notify() only pings the
+      // (silent) bell — so a click looked like nothing happened. Confirm right on
+      // the button, and fall back to execCommand for the phone (HTTP, no async
+      // Clipboard API). See the diagnostics-copy button for the same pattern.
+      var pcBtn = act, pcUrl = phoneS.url;
+      var pcDone = function (ok) {
+        pcBtn.textContent = ok ? 'Copied' : 'Select the link to copy it';
+        setTimeout(function () { pcBtn.textContent = 'Copy link'; }, ok ? 1600 : 2600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(pcUrl).then(function () { pcDone(true); }, function () { pcDone(fallbackCopy(pcUrl)); });
+      } else {
+        pcDone(fallbackCopy(pcUrl));
+      }
     }
     if (a === 'forget') {
       var id = act.getAttribute('data-dev');
@@ -2533,8 +2543,9 @@
       var ta = document.createElement('textarea');
       ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
       document.body.appendChild(ta); ta.focus(); ta.select();
-      document.execCommand('copy'); document.body.removeChild(ta);
-    } catch (e) {}
+      var ok = document.execCommand('copy'); document.body.removeChild(ta);
+      return !!ok;
+    } catch (e) { return false; }
   }
 
   // ----------------------------------------------------------- diagnostics
