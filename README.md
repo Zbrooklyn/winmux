@@ -22,6 +22,16 @@ session — so what you start at your desk is the exact terminal you pick up on 
 - **Browser** — open the served URL on this PC.
 - **Phone** — reach the same shells over [Tailscale](https://tailscale.com/), gated by a per-link access key.
 
+<div align="center">
+
+### ⬇️ [Download WinMux for Windows](https://github.com/Zbrooklyn/winmux/releases/latest)
+
+Grab **`WinMux Setup <version>.exe`** from the latest release, run it, and launch WinMux from the Start menu.
+No Node, no build step. *(The installer is unsigned, so Windows SmartScreen shows an "unknown publisher"
+notice on first run — click **More info → Run anyway**.)*
+
+</div>
+
 ---
 
 ## Why WinMux
@@ -55,7 +65,13 @@ Open WinMux for the first time and it introduces itself once — what it is, the
 
 ## Install & run
 
-### As a desktop app (Electron)
+### Option A — Download the installer (recommended)
+
+1. Open the [latest release](https://github.com/Zbrooklyn/winmux/releases/latest) and download **`WinMux Setup <version>.exe`**.
+2. Run it. Windows SmartScreen may warn ("unknown publisher", because the build is unsigned) — click **More info → Run anyway**.
+3. Launch **WinMux** from the Start menu. It installs per-user (no admin needed) and creates Start-menu and desktop shortcuts.
+
+### Option B — Run from source (Electron)
 
 ```powershell
 npm install
@@ -63,6 +79,8 @@ npm run dev:electron
 ```
 
 This opens WinMux in a frameless native window. The same server keeps serving your phone over Tailscale — the desktop app and the phone are two clients of one server.
+
+> **Building your own installer:** `npm run dist` compiles and packages a fresh `WinMux Setup <version>.exe` (NSIS) into the off-repo output folder printed at the end. See [PLAN.md](PLAN.md) for the release checklist.
 
 ### As a plain server (browser + phone)
 

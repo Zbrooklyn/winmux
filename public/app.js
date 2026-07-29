@@ -2626,6 +2626,7 @@
     fetch('/api/info').then(function (r) { return r.json(); }).then(function (d) {
       HOME = d.home || HOME;
       var rows = [
+        ['WinMux', 'v' + (d.version || '?')],
         ['Server', 'http://' + d.host + ':' + d.port],
         ['Process id', d.pid], ['Node', d.node], ['Platform', d.platform + ' · ' + d.arch],
         ['Uptime', Math.floor(d.uptime / 60) + 'm ' + (d.uptime % 60) + 's'],
@@ -2929,7 +2930,11 @@
   if (S.theme === 'light' || S.theme === 'dark') document.documentElement.setAttribute('data-theme', S.theme);
   paintNotifBadge();
 
-  fetch('/api/info').then(function (r) { return r.json(); }).then(function (d) { HOME = d.home || ''; if (!dockPath.value) dockPath.value = HOME; }).catch(function () {});
+  fetch('/api/info').then(function (r) { return r.json(); }).then(function (d) {
+    HOME = d.home || ''; if (!dockPath.value) dockPath.value = HOME;
+    var ver = document.getElementById('wc-ver');
+    if (ver && d.version) ver.textContent = 'v' + d.version;
+  }).catch(function () {});
   fetch('/shells').then(function (r) { return r.json(); }).then(function (list) {
     if (Array.isArray(list) && list.length) { SHELLS = list; DEFAULT_SHELL = list[0].key; }
   }).catch(function () {});

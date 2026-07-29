@@ -25,6 +25,10 @@ const { WebSocketServer } = require('ws');
 const pty = require('node-pty');
 const qrcode = require('qrcode');
 
+// The shipping version, read from package.json so it never drifts from the build.
+let VERSION = '0.0.0';
+try { VERSION = require('./package.json').version || VERSION; } catch (e) {}
+
 // An explicitly requested port is obeyed exactly, even when it cannot serve the
 // phone door — verify.cjs depends on that to test the busy-port failure. With no
 // PORT set we choose for ourselves, and we refuse a port whose Tailscale face is
@@ -331,9 +335,11 @@ function detectPwsh() {
 
 function detectShells() {
   var list = [];
-  list.push({ key: 'powershell', label: 'PowerShell', exec: 'powershell.exe', args: [] });
+  // -NoLogo suppresses the "Windows PowerShell / Copyright (C) Microsoft..." banner
+  // so a new tab opens straight to a prompt instead of two lines of boilerplate.
+  list.push({ key: 'powershell', label: 'PowerShell', exec: 'powershell.exe', args: ['-NoLogo'] });
   var pwsh = detectPwsh();
-  if (pwsh) list.push({ key: 'pwsh', label: 'PowerShell 7', exec: pwsh, args: [] });
+  if (pwsh) list.push({ key: 'pwsh', label: 'PowerShell 7', exec: pwsh, args: ['-NoLogo'] });
   list.push({ key: 'cmd', label: 'Command Prompt', exec: 'cmd.exe', args: [] });
   var gb = firstExisting([
     'C:\\Program Files\\Git\\bin\\bash.exe',
@@ -661,6 +667,7 @@ function handle(req, res, viaPhone) {
   if (urlPath === '/api/info') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
+      version: VERSION,
       pid: process.pid, node: process.version, platform: process.platform,
       arch: process.arch, uptime: Math.round(process.uptime()), host: HOST, port: PORT,
       home: os.homedir(), cpus: os.cpus().length,

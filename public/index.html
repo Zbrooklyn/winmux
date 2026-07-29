@@ -579,6 +579,7 @@
     padding: 30px 30px 24px; box-shadow: 0 24px 70px rgba(0,0,0,.55);
   }
   .wc-brand { font-size: 13px; font-weight: 650; letter-spacing: .01em; color: var(--text); }
+  .wc-ver { font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums; }
   .wc-brand b { color: var(--accent); }
   .wc-title { font-size: 23px; font-weight: 650; line-height: 1.2; margin: 12px 0 8px; color: var(--text); text-wrap: balance; }
   .wc-lede { font-size: 13.5px; line-height: 1.5; color: var(--muted); margin: 0 0 22px; max-width: 42ch; }
@@ -742,7 +743,7 @@
        thing a new user can't discover on their own — reaching it from a phone. -->
   <div class="ovl" id="welcome-ovl">
     <div class="welcome" role="dialog" aria-label="Welcome to WinMux">
-      <div class="wc-brand">Win<b>Mux</b></div>
+      <div class="wc-brand">Win<b>Mux</b> <span id="wc-ver" class="wc-ver"></span></div>
       <h2 class="wc-title">A terminal that follows you</h2>
       <p class="wc-lede">One live PowerShell session, three ways in — on this PC, in any browser, and on your phone over Tailscale.</p>
       <div class="wc-points">
