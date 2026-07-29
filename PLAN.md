@@ -74,7 +74,16 @@ load, diagnostics, shortcuts, settings) and asserts each opens/creates its targe
 fixed a **dead-in-Electron** bug: New group and group Rename used `window.prompt()`, which *throws* in
 Electron ("prompt() is and will not be supported"), so both did nothing in the desktop app; they now
 use an in-app `promptDialog` (styled text input over the shared overlay). Proven 8/8 in the harness and
-in real Electron (New group 1→2, no throw; dialog captured).
+in real Electron (New group 1→2, no throw; dialog captured), plus the **update notice** — the committed
+`update` check boots the server with `WINMUX_FAKE_LATEST` and proves the `.upbadge` pill lights up
+("Update vX.Y.Z"), names the version, and links to the releases page. The check is a *notice only*: it
+tells the user a newer WinMux exists (`/api/update` vs GitHub Releases, cached 6h, degrades to "no update"
+offline/private/rate-limited) and links to the download via `window.winmux.openExternal` — it never
+auto-downloads or replaces the binary.
+
+**Release plumbing (in place):** README leads with a Download link + installer steps; `npm run dist`
+packages the NSIS installer off-Dropbox (`scripts/dist.cjs`, `~/winmux-build`); in-app version on the
+onboarding card + Diagnostics; PowerShell tabs launch `-NoLogo` (no banner).
 
 **Known flake (not a regression):** under full concurrent load the harness can spuriously fail
 `busyport`/`cli`/`colour` on a heavily-loaded machine; all pass in isolation. A harness-concurrency
@@ -96,7 +105,8 @@ throttle is a future cleanup, not a product bug.
 be re-made after code changes — the installed `.exe` is a point-in-time build, not live source.
 
 **Owner-gated / not built (Edward's call, do not silently build):** code signing (costs money),
-auto-update (electron-updater + GitHub Releases), winget listing, Android companion app (Phase 14),
+**silent auto-install** update (electron-updater — the app replacing its own binary; the *notice* is
+built, the auto-install is deliberately not), winget listing, Android companion app (Phase 14),
 the v2 Rust core. See *Build order* and *Upcoming phases*.
 
 ## Proving it still works — `npm run verify`
