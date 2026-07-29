@@ -1147,6 +1147,29 @@ README *is* the storefront:
 - Every shot must be of the real running product (no mockups), scrubbed of any live
   access key, and shown as if this were a mature, finished tool.
 
+**Presentation half — DONE (2026-07-28, M9):** MIT `LICENSE`, production README with a
+real screenshot gallery (`docs/screenshots/`: hero cockpit with live PowerShell, phone,
+onboarding, settings), and `package.json` metadata (license/author/repo/keywords).
+
+**Packaging half — installer + clean coexistence (built 2026-07-28).** Plan:
+`docs/superpowers/plans/2026-07-28-winmux-phase12-installer-coexistence.md`. electron-builder
+→ a per-user NSIS installer (`WinMux Setup <ver>.exe`), `npmRebuild:false` (node-pty's N-API
+prebuilds are ABI-stable; electron-builder `asarUnpack`s `node_modules/node-pty/prebuilds/**`
+so the `.node` loads from the installed app). The **hard acceptance test is clean coexistence**:
+the installed app and the from-source dev copy run on the same machine at once with zero
+cross-interference. A pure `resolveProfile({isPackaged})` (`electron/profile.ts`) gives the two
+copies disjoint identity — `%APPDATA%\WinMux` vs `WinMuxDev` (separate Chromium ProcessSingleton
+locks → both windows open), `~/.winmux/instance.json` vs `instance.dev.json`, separate device
+files. `server.cjs`/`bin/winmux.cjs` honor `WINMUX_INSTANCE_FILE` (+ CLI `--dev`/`WINMUX_PROFILE`);
+the bare `winmux` command targets the installed app. Proven: a zero-arg `profile` harness guard
+(231/231) plus `npm run verify:coexist`, which builds the real `.exe` and runs packed + dev
+**concurrently**, asserting disjoint userData + discovery and that both render a cockpit and run
+a real node-pty shell (`verify-out/coexist.json`). **Still deferred (structured-for, owner-gated):**
+code signing (unsigned trips SmartScreen — see readiness #24), auto-update (electron-updater +
+GitHub Releases — #22/#1065), winget submission, and flipping the repo public. Dropbox note: a
+Dropbox-synced checkout locks the in-repo `dist-installer/` mid-build (EPERM on rename), so the
+coexistence gate and local builds output to an OS-temp dir; a normal clone uses `dist-installer/`.
+
 ### Phase 13 — Launch hardening
 Clear every known glitch (including the two tracked harness flakes, #180), prove a
 clean-machine install, and confirm every claimed state holds. This is the pass that
