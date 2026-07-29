@@ -544,6 +544,44 @@
   .sxpv.narrow .pv-x { display: none; }
   .sxpv.narrow .pv-scroll { padding-top: 16px; }
   @media (prefers-reduced-motion: reduce) { .sxpv { transition: none; } .srow .speye { transition: none; } }
+
+  /* First-run onboarding card. cockpit.css is frozen, so this override layer owns
+     the whole surface. Obsidian dark ground, one purple accent, generous spacing —
+     a considered first impression, not a wall of text. */
+  #welcome-ovl { display: none; }
+  #welcome-ovl[data-open] { display: flex; align-items: center; justify-content: center; }
+  .welcome {
+    width: min(460px, calc(100vw - 40px));
+    background: var(--bg1); border: 1px solid var(--border); border-radius: 14px;
+    padding: 30px 30px 24px; box-shadow: 0 24px 70px rgba(0,0,0,.55);
+  }
+  .wc-brand { font-size: 13px; font-weight: 650; letter-spacing: .01em; color: var(--text); }
+  .wc-brand b { color: var(--accent); }
+  .wc-title { font-size: 23px; font-weight: 650; line-height: 1.2; margin: 12px 0 8px; color: var(--text); text-wrap: balance; }
+  .wc-lede { font-size: 13.5px; line-height: 1.5; color: var(--muted); margin: 0 0 22px; max-width: 42ch; }
+  .wc-points { display: flex; flex-direction: column; gap: 15px; margin-bottom: 26px; }
+  .wc-pt { display: flex; gap: 13px; align-items: flex-start; }
+  .wc-ic { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+    background: var(--accent-soft); color: var(--accent); }
+  .wc-ic svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .wc-h { font-size: 13.5px; font-weight: 600; color: var(--text); }
+  .wc-s { font-size: 12.5px; line-height: 1.45; color: var(--muted); margin-top: 2px; }
+  .wc-actions { display: flex; gap: 10px; }
+  .wc-btn { flex: 1; text-align: center; padding: 11px 14px; border-radius: 9px; font-size: 13px; font-weight: 600;
+    cursor: pointer; border: 1px solid var(--border); color: var(--text); background: var(--bg2); user-select: none;
+    transition: background .14s ease, border-color .14s ease; }
+  .wc-btn:hover { background: var(--bg3); }
+  .wc-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .wc-btn.primary:hover { filter: brightness(1.08); }
+  .wc-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* On a phone the card is the whole screen's worth; let it breathe and stack. */
+  .cockpit[data-mode="narrow"] ~ #welcome-ovl .welcome,
+  #welcome-ovl .welcome { }
+  @media (max-width: 480px) {
+    .welcome { padding: 24px 20px 20px; border-radius: 12px; }
+    .wc-title { font-size: 20px; }
+    .wc-actions { flex-direction: column; }
+  }
 </style>
 </head>
 <body>
@@ -675,6 +713,35 @@
 
   <div class="ovl" id="cheat-ovl"><div class="cheat" id="cheat-body"></div></div>
   <div class="ovl" id="dlg-ovl"><div class="dlg" id="dlg-body"></div></div>
+
+  <!-- First-run onboarding: a stranger's first ten seconds. Shown once, then never
+       again (localStorage ct-onboard). Explains what WinMux is and offers the one
+       thing a new user can't discover on their own — reaching it from a phone. -->
+  <div class="ovl" id="welcome-ovl">
+    <div class="welcome" role="dialog" aria-label="Welcome to WinMux">
+      <div class="wc-brand">Win<b>Mux</b></div>
+      <h2 class="wc-title">A terminal that follows you</h2>
+      <p class="wc-lede">One live PowerShell session, three ways in — on this PC, in any browser, and on your phone over Tailscale.</p>
+      <div class="wc-points">
+        <div class="wc-pt">
+          <span class="wc-ic"><svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg></span>
+          <div><div class="wc-h">A real Windows terminal</div><div class="wc-s">PowerShell, cmd, WSL, Git Bash — with tabs, splits and saved layouts.</div></div>
+        </div>
+        <div class="wc-pt">
+          <span class="wc-ic"><svg viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/></svg></span>
+          <div><div class="wc-h">Reach it from your phone</div><div class="wc-s">Turn on phone access and scan a QR — the same session, in your hand over Tailscale.</div></div>
+        </div>
+        <div class="wc-pt">
+          <span class="wc-ic"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></span>
+          <div><div class="wc-h">Built for agents</div><div class="wc-s">Peek at what Claude or Codex is doing across every session, without opening each one.</div></div>
+        </div>
+      </div>
+      <div class="wc-actions">
+        <span class="wc-btn primary" id="wc-start" role="button" tabindex="0">Start using WinMux</span>
+        <span class="wc-btn" id="wc-phone" role="button" tabindex="0">Add my phone</span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script src="/vendor/xterm.js"></script>

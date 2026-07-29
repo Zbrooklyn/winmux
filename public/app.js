@@ -2927,6 +2927,26 @@
   applyMode();
   setTimeout(layoutAllTabs, 100);
 
+  // --- First-run onboarding: a stranger's first ten seconds -----------------
+  // Shown once per browser, then remembered. It carries the one thing a new user
+  // can't discover alone — that this same terminal reaches their phone.
+  (function () {
+    var seen; try { seen = localStorage.getItem('ct-onboard'); } catch (e) { seen = '1'; }
+    function dismiss() { closeOvl('welcome-ovl'); try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} }
+    var startBtn = document.getElementById('wc-start');
+    var phoneBtn = document.getElementById('wc-phone');
+    if (startBtn) startBtn.addEventListener('click', dismiss);
+    if (phoneBtn) phoneBtn.addEventListener('click', function () {
+      dismiss();
+      openSettings();
+      setTimeout(function () { var tab = document.querySelector('[data-settab="Phone"]'); if (tab) tab.click(); }, 60);
+    });
+    [startBtn, phoneBtn].forEach(function (b) {
+      if (b) b.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); b.click(); } });
+    });
+    if (!seen) setTimeout(function () { openOvl('welcome-ovl'); }, 400);
+  })();
+
   // --- Control channel: let the local `winmux` CLI drive this app -----------
   // The server forwards CLI commands here over /control; we run them against
   // the real layout and reply. Desk-door only (the server never exposes

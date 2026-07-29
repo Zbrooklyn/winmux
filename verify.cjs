@@ -69,6 +69,9 @@ const PORT_PASTE = 9923;
 // The migrate check seeds a saved layout from a hypothetical future WinMux and
 // proves the app still boots to a working terminal, so it needs its own server.
 const PORT_MIGRATE = 9924;
+// The onboarding check loads with a virgin localStorage to prove the first-run
+// welcome appears, dismisses, and stays gone. Its own server, its own state.
+const PORT_ONBOARD = 9925;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -229,14 +232,23 @@ function serverAuto() {
 const CHECKS = [];
 const check = (id, port, run) => CHECKS.push({ id, port, run });
 
-const desktop = (browser) =>
-  browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+const desktop = async (browser) => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+  // Every check gets a fresh context, so the first-run onboarding would pop over
+  // the UI and swallow clicks. Mark it seen everywhere except the check that tests
+  // it (see the 'onboard' check, which deliberately leaves this unset).
+  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  return page;
+};
 
 async function phoneCtx(browser, colorScheme) {
   const ctx = await browser.newContext({
     viewport: { width: 384, height: 745 }, deviceScaleFactor: 2,
     isMobile: true, hasTouch: true, colorScheme: colorScheme || 'dark',
   });
+  // Mark the first-run onboarding seen so it doesn't cover the phone UI mid-check
+  // (the 'onboard' check makes its own context to test it fresh).
+  await ctx.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
   return ctx.newPage();
 }
 
@@ -877,6 +889,7 @@ check('trust', PORT_TRUST, async ({ browser, base, t, shot, skip }) => {
     t('no key is on screen', await redact(d));
     await shot(d, 'devices-dark');
     const dl = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
+    await dl.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
     await dl.goto(base + '/', { waitUntil: 'domcontentloaded' });
     await dl.waitForTimeout(1200);
     await settings(dl, 'Phone');
@@ -1254,6 +1267,7 @@ check('colour', PORT_COLOUR, async ({ browser, base, t, shot }) => {
   // One palette cannot serve both grounds — that is the whole reason there are
   // two. If light mode handed back the dark values, this check has no point.
   const lightPage = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
+  await lightPage.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
   try {
     const l = await paintMarks(lightPage, base);
     t('light: the shell is drawn on the near-white we designed against', l.bg === '#fbfbfb', l);
@@ -1587,7 +1601,7 @@ check('migrate', PORT_MIGRATE, async ({ browser, base, t }) => {
   const oneTab = { active: 0, tabs: [{ shell: 'powershell', cwd: '', group: '', title: '', sid: '' }] };
   const boot = async (blob) => {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
-    await ctx.addInitScript((b) => { try { localStorage.setItem('ct-live', JSON.stringify(b)); } catch (e) {} }, blob);
+    await ctx.addInitScript((b) => { try { localStorage.setItem('ct-live', JSON.stringify(b)); localStorage.setItem('ct-onboard', '1'); } catch (e) {} }, blob);
     const p = await ctx.newPage();
     await p.goto(base, { waitUntil: 'domcontentloaded' });
     await p.waitForTimeout(4500);
@@ -1599,6 +1613,82 @@ check('migrate', PORT_MIGRATE, async ({ browser, base, t }) => {
   t('a layout from a future version does not brick — it falls back to a terminal',
     (await boot({ v: 999, group: '', cols: [[oneTab], [oneTab], [oneTab]] })) >= 1);
   t('a corrupt saved layout does not brick either', (await boot({ v: 1, group: '', cols: [[{ active: 0, tabs: 'x' }]] })) >= 1);
+});
+
+// First-run onboarding (#216): a virgin browser is greeted once, dismisses, and
+// never sees it again; the add-your-phone path lands in the right settings.
+check('onboard', PORT_ONBOARD, async ({ browser, base, t, shot }) => {
+  // A raw context (no ct-onboard seed) is a genuine first-time visitor.
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+  const p = await ctx.newPage();
+  await p.goto(base, { waitUntil: 'domcontentloaded' });
+  await p.waitForTimeout(3500);
+  const w = () => p.evaluate(() => ({
+    open: !!(document.getElementById('welcome-ovl') || {}).hasAttribute && document.getElementById('welcome-ovl').hasAttribute('data-open'),
+    title: ((document.querySelector('.wc-title') || {}).textContent) || '',
+    hasStart: !!document.getElementById('wc-start'),
+    hasPhone: !!document.getElementById('wc-phone'),
+    points: document.querySelectorAll('.wc-pt').length,
+  }));
+  const first = await w();
+  t('a first-time visitor is greeted by the welcome', first.open === true, first);
+  t('the welcome says what WinMux is and how to act', /follows you/i.test(first.title) && first.hasStart && first.hasPhone && first.points === 3, first);
+  await shot(p, 'onboarding');
+
+  await p.click('#wc-start');
+  await p.waitForTimeout(400);
+  t('Start dismisses the welcome', (await w()).open === false);
+
+  await p.reload({ waitUntil: 'domcontentloaded' });
+  await p.waitForTimeout(3000);
+  t('it does not return on the next visit', (await w()).open === false);
+  await ctx.close();
+
+  // The "Add my phone" path, from a fresh visitor, lands in the Phone settings.
+  const ctx2 = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+  const p2 = await ctx2.newPage();
+  await p2.goto(base, { waitUntil: 'domcontentloaded' });
+  await p2.waitForTimeout(3500);
+  await p2.click('#wc-phone');
+  await p2.waitForTimeout(700);
+  const onPhone = await p2.evaluate(() => {
+    const ov = document.getElementById('settings-ovl');
+    // The Phone tab's tell is its scan/QR copy — proof we landed on it, not just any tab.
+    const body = ov ? ov.textContent || '' : '';
+    return {
+      settingsOpen: !!(ov && ov.hasAttribute('data-open')),
+      onPhoneTab: /scan|QR|Tailscale/i.test(body),
+    };
+  });
+  t('Add my phone opens settings on the Phone tab', onPhone.settingsOpen === true && onPhone.onPhoneTab === true, onPhone);
+  await ctx2.close();
+
+  // The phone is a first-class surface for onboarding — a stranger who scans the
+  // QR lands here cold, so the welcome must greet and fit at a phone width too.
+  const pctx = await browser.newContext({
+    viewport: { width: 384, height: 745 }, deviceScaleFactor: 2,
+    isMobile: true, hasTouch: true, colorScheme: 'dark',
+  });
+  const pp = await pctx.newPage();
+  await pp.goto(base, { waitUntil: 'domcontentloaded' });
+  await pp.waitForTimeout(3500);
+  const ph = await pp.evaluate(() => {
+    const o = document.getElementById('welcome-ovl');
+    const card = document.querySelector('#welcome-ovl .welcome');
+    const vw = window.innerWidth;
+    const r = card ? card.getBoundingClientRect() : null;
+    return {
+      open: !!(o && o.hasAttribute('data-open')),
+      // The card must sit fully inside the viewport: left edge ≥ 0 and right edge ≤ vw.
+      fits: r ? (r.left >= 0 && r.right <= vw + 0.5) : false,
+      width: r ? Math.round(r.width) : null, vw,
+      hasStart: !!document.getElementById('wc-start'),
+    };
+  });
+  t('the welcome greets on the phone too', ph.open === true && ph.hasStart === true, ph);
+  t('and its card fits inside the phone width (no horizontal overflow)', ph.fits === true, ph);
+  await shot(pp, 'onboarding-phone');
+  await pctx.close();
 });
 
 // Paste safety (#214): a multi-line paste stops to ask before it can run every
