@@ -1091,9 +1091,10 @@ async function start() {
   // the app still runs if the home dir is unwritable. WINMUX_NO_INSTANCE lets a
   // test harness spin up many servers without clobbering the real one's file.
   if (!process.env.WINMUX_NO_INSTANCE) try {
-    const dir = path.join(os.homedir(), '.winmux');
-    fs.mkdirSync(dir, { recursive: true });
-    const inst = path.join(dir, 'instance.json');
+    // The desktop app hands each copy its own discovery file so two running
+    // copies (installed vs dev) never clobber one shared ~/.winmux/instance.json.
+    const inst = process.env.WINMUX_INSTANCE_FILE || path.join(os.homedir(), '.winmux', 'instance.json');
+    fs.mkdirSync(path.dirname(inst), { recursive: true });
     fs.writeFileSync(inst, JSON.stringify({ port: PORT, host: HOST, pid: process.pid, started: Date.now() }));
     const cleanup = () => { try { fs.unlinkSync(inst); } catch (e) {} };
     process.on('exit', cleanup);
