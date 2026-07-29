@@ -837,8 +837,9 @@
       if (p) { newTerm(p, startShell()); focusPane(p.id); }
     });
     addMenuItem(m, 'Rename…', '', function () {
-      var name = window.prompt('Rename group', g.name);
-      if (name && name.trim()) { g.name = name.trim(); saveGroups(); renderSidebar(); }
+      promptDialog('Rename group', g.name, 'Rename', function (name) {
+        g.name = name; saveGroups(); renderSidebar();
+      });
     });
     addMenuItem(m, g.pinned ? 'Unpin' : 'Pin to top', '', function () {
       g.pinned = !g.pinned; sortGroups(); saveGroups(); renderSidebar();
@@ -2086,6 +2087,33 @@
     body.querySelector('[data-cancel]').addEventListener('click', function () { closeOvl('dlg-ovl'); });
     body.querySelector('[data-ok]').addEventListener('click', function () { closeOvl('dlg-ovl'); onOk(); });
   }
+  // An in-app text prompt. window.prompt() THROWS in Electron ("not supported"),
+  // which silently killed New group / Rename group in the desktop app — so naming
+  // goes through this instead. onOk(value) fires only on a non-empty confirm.
+  function promptDialog(title, initial, okLabel, onOk) {
+    var body = document.getElementById('dlg-body');
+    body.innerHTML = '<h3>' + esc(title) + '</h3>' +
+      '<input class="dlg-in" type="text" spellcheck="false" value="' + esc(initial || '') + '">' +
+      '<div class="drow"><span class="btn" data-cancel>Cancel</span><span class="btn primary" data-ok>' + esc(okLabel || 'OK') + '</span></div>';
+    openOvl('dlg-ovl');
+    var input = body.querySelector('.dlg-in');
+    input.focus(); input.select();
+    var done = false;
+    function finish(save) {
+      if (done) return; done = true;
+      var v = input.value.trim();
+      closeOvl('dlg-ovl');
+      if (save && v) onOk(v);
+    }
+    // Stop the app's global keyboard shortcuts from eating what you type.
+    input.addEventListener('keydown', function (e) {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    body.querySelector('[data-cancel]').addEventListener('click', function () { finish(false); });
+    body.querySelector('[data-ok]').addEventListener('click', function () { finish(true); });
+  }
 
   // ---------------------------------------------------------- save / load
   function layouts() { try { return JSON.parse(localStorage.getItem('ct-layouts') || '[]'); } catch (e) { return []; } }
@@ -2714,11 +2742,11 @@
   document.getElementById('open-notif').addEventListener('click', function (e) { e.stopPropagation(); toggleNotif(e.currentTarget); });
   document.getElementById('open-new').addEventListener('click', function () { var p = paneById(activePaneId) || panes[0]; if (p) { newTerm(p, startShell()); focusPane(p.id); } });
   document.getElementById('open-newgroup').addEventListener('click', function () {
-    var name = window.prompt('Name this group', 'Group ' + (groups.length + 1));
-    if (!name || !name.trim()) return;
-    newGroup(name.trim());
-    var p = paneById(activePaneId) || panes[0];
-    if (p) focusPane(p.id);
+    promptDialog('Name this group', 'Group ' + (groups.length + 1), 'Create', function (name) {
+      newGroup(name);
+      var p = paneById(activePaneId) || panes[0];
+      if (p) focusPane(p.id);
+    });
   });
   document.getElementById('ns-back').addEventListener('click', function () { setView('projects'); });
   // Header B: the brand-bar back-arrow is view-aware — from a terminal it returns to

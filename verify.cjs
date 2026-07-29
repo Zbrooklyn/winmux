@@ -74,6 +74,7 @@ const PORT_MIGRATE = 9924;
 const PORT_ONBOARD = 9925;
 const PORT_APPROVE = 9926;
 const PORT_PWSH = 9927;
+const PORT_FOOTER = 9928;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1716,6 +1717,74 @@ check('pwsh', PORT_PWSH, async ({ browser, base, t, shot, skip }) => {
   const rd = await winmux(['read-screen', '--lines', '40']);
   t('the pwsh tab is really running PowerShell 7.x', rd.code === 0 && /PSMAJOR=7/.test(rd.out), rd.out.slice(-160));
   await shot(page, 'pwsh-running');
+
+  await page.close();
+});
+
+// --- footer: every sidebar-footer button actually does its thing --------------
+// Seven buttons at the bottom of the sidebar. "Wired to a handler" is not "works":
+// New group / Rename group used window.prompt, which THROWS in Electron, so those
+// were dead in the desktop app. This clicks each and asserts the real outcome, and
+// specifically proves New group now opens an in-app dialog and creates the group.
+check('footer', PORT_FOOTER, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+
+  const n = (sel) => page.evaluate((s) => document.querySelectorAll(s).length, sel);
+  const openId = (id) => page.evaluate((i) => { const e = document.getElementById(i); return !!(e && e.hasAttribute('data-open')); }, id);
+  const openSel = (sel) => page.evaluate((s) => !!document.querySelector(s), sel);
+
+  // New terminal → a tab is added.
+  const tabs0 = await n('.ptab');
+  await page.click('#open-new');
+  await page.waitForTimeout(1200);
+  t('New terminal adds a tab', (await n('.ptab')) === tabs0 + 1, { before: tabs0, after: await n('.ptab') });
+
+  // New group → in-app dialog (the window.prompt bug) → creates the group.
+  const groups0 = await n('.prow');
+  await page.click('#open-newgroup');
+  await page.waitForTimeout(400);
+  t('New group opens an in-app name dialog (window.prompt is dead in Electron)', await openId('dlg-ovl'), 'dlg-ovl');
+  await page.fill('#dlg-body .dlg-in', 'QA Group');
+  await page.click('#dlg-body [data-ok]');
+  await page.waitForTimeout(700);
+  t('New group actually creates the group', (await n('.prow')) === groups0 + 1, { before: groups0, after: await n('.prow') });
+  await shot(page, 'footer-newgroup');
+
+  // Save layout → the layout popover opens.
+  await page.click('#open-save');
+  await page.waitForTimeout(300);
+  t('Save layout opens the layout popover', await openSel('.sessmenu[data-open]'), 'sessmenu');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+
+  // Load layout → same popover opens.
+  await page.click('#open-load');
+  await page.waitForTimeout(300);
+  t('Load layout opens the layout popover', await openSel('.sessmenu[data-open]'), 'sessmenu');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+
+  // Diagnostics → its overlay opens.
+  await page.click('#open-diag');
+  await page.waitForTimeout(300);
+  t('Diagnostics opens the diagnostics panel', await openId('diag-ovl'), 'diag-ovl');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+
+  // Keyboard shortcuts → the cheat sheet opens.
+  await page.click('#open-help');
+  await page.waitForTimeout(300);
+  t('Keyboard shortcuts opens the cheat sheet', await openId('cheat-ovl'), 'cheat-ovl');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+
+  // Settings → the settings overlay opens.
+  await page.click('#open-settings');
+  await page.waitForTimeout(300);
+  t('Settings opens the settings panel', await openId('settings-ovl'), 'settings-ovl');
+  await page.keyboard.press('Escape');
 
   await page.close();
 });

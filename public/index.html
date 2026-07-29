@@ -534,6 +534,11 @@
     border: 1px solid var(--border); color: var(--muted); font-size: 11.5px; line-height: 1.5;
     white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; }
   .sxpv .pv-hint { margin-top: 9px; font-size: 10.5px; color: var(--faint); line-height: 1.45; }
+  /* In-app text prompt input (New group / Rename group) — window.prompt is dead in Electron. */
+  .dlg .dlg-in { width: 100%; margin-top: 12px; padding: 9px 11px; box-sizing: border-box;
+    background: var(--bg2); color: var(--text); border: 1px solid var(--border-s); border-radius: 8px;
+    font-family: inherit; font-size: 13.5px; outline: none; }
+  .dlg .dlg-in:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
   .sxpv .pv-meta { margin-bottom: 6px; }
   .sxpv .pv-m { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
     padding: 7px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent); font-size: 12.5px; }
