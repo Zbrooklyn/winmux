@@ -13,9 +13,13 @@ function out(v) { process.stdout.write((typeof v === 'string' ? v : JSON.stringi
 function instance() {
   // An explicit target wins — for scripting a specific instance (and the harness).
   if (process.env.WINMUX_PORT) return { port: Number(process.env.WINMUX_PORT), host: process.env.WINMUX_HOST || '127.0.0.1' };
-  const f = path.join(os.homedir(), '.winmux', 'instance.json');
+  // Which copy to drive: an explicit file wins; then --dev / WINMUX_PROFILE=dev;
+  // otherwise the production instance (the installed app is the default target).
+  const dev = process.argv.includes('--dev') || process.env.WINMUX_PROFILE === 'dev';
+  const f = process.env.WINMUX_INSTANCE_FILE
+    || path.join(os.homedir(), '.winmux', dev ? 'instance.dev.json' : 'instance.json');
   try { return JSON.parse(fs.readFileSync(f, 'utf8')); }
-  catch (e) { die('WinMux is not running (no ~/.winmux/instance.json). Start it with `npm start` or the desktop app.'); }
+  catch (e) { die('WinMux is not running (no ' + f + '). Start it with `npm start` or the desktop app.'); }
 }
 
 function rpc(cmd, args) {
@@ -88,6 +92,9 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
 
 (async () => {
   const argv = process.argv.slice(2);
+  // --dev selects the dev copy in instance(); it is not a verb argument.
+  const devFlagIdx = argv.indexOf('--dev');
+  if (devFlagIdx !== -1) argv.splice(devFlagIdx, 1);
   const cmd = argv[0];
   if (!cmd || cmd === '-h' || cmd === '--help' || cmd === 'help') { out(HELP); return; }
   // Human-friendly by default; raw JSON with --json, uniformly across verbs.
