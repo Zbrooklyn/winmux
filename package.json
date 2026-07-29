@@ -3,6 +3,28 @@
   "version": "0.1.0",
   "private": true,
   "description": "WinMux — a terminal multiplexer for Windows: one node-pty server with three faces (native Electron app, browser, and phone over Tailscale).",
+  "license": "MIT",
+  "author": "Zbrooklyn",
+  "homepage": "https://github.com/Zbrooklyn/winmux#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zbrooklyn/winmux.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Zbrooklyn/winmux/issues"
+  },
+  "keywords": [
+    "terminal",
+    "multiplexer",
+    "tmux",
+    "windows",
+    "powershell",
+    "node-pty",
+    "xterm",
+    "electron",
+    "tailscale",
+    "ssh-alternative"
+  ],
   "main": "server.cjs",
   "bin": {
     "winmux": "bin/winmux.cjs"
