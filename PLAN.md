@@ -63,10 +63,16 @@ session** (desktop sidebar + phone card + peek panel; sends Enter / Esc to the w
 
 A ground-truth snapshot so "is it broken?" has a durable answer.
 
-**Verified working (harness-proven, 241/241):** everything in *Already done* above, plus the U4
-inline Approve/Deny. The committed `approve` check rings a real background terminal to "needs you",
+**Verified working (harness-proven):** everything in *Already done* above, plus the U4
+inline Approve/Deny (the committed `approve` check rings a real background terminal to "needs you",
 asserts the pill renders only there, clicks it, and confirms the alarm clears + an "Approved"
-notification lands.
+notification lands), plus **PowerShell 7 detection** — the `pwsh` check proves PS7 is offered,
+labelled "PowerShell 7", and actually runs 7.x, including a **Microsoft Store install** (whose App
+Execution Alias `fs.existsSync` reports as missing; detection now `lstat`-checks the alias).
+
+**Known flake (not a regression):** under full concurrent load the harness can spuriously fail
+`busyport`/`cli`/`colour` on a heavily-loaded machine; all pass in isolation. A harness-concurrency
+throttle is a future cleanup, not a product bug.
 
 **Known limitations (not bugs — honest current behaviour):**
 - **Copy phone link over the phone (plain HTTP):** the one-tap clipboard API is blocked on a
