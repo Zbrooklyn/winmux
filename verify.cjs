@@ -75,6 +75,7 @@ const PORT_ONBOARD = 9925;
 const PORT_APPROVE = 9926;
 const PORT_PWSH = 9927;
 const PORT_FOOTER = 9928;
+const PORT_UPDATE = 9929;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -193,11 +194,11 @@ function waitUp(port, ms) {
 
 // Reuse a server that is already listening — Edward often has one running, and
 // killing it out from under him would be worse than sharing it.
-async function server(port) {
+async function server(port, extraEnv) {
   if (await inUse('127.0.0.1', port)) return { port, borrowed: true, stop() {} };
   const proc = spawn(process.execPath, ['server.cjs'], {
     cwd: ROOT,
-    env: Object.assign({}, process.env, { PORT: String(port), WINMUX_TRUST_FILE: trustFile(port), WINMUX_NO_INSTANCE: '1' }),
+    env: Object.assign({}, process.env, { PORT: String(port), WINMUX_TRUST_FILE: trustFile(port), WINMUX_NO_INSTANCE: '1' }, extraEnv || {}),
     stdio: 'ignore',
   });
   await waitUp(port, 15000);
@@ -233,7 +234,9 @@ function serverAuto() {
 // server is already running. `port` says which of the two it needs.
 
 const CHECKS = [];
-const check = (id, port, run) => CHECKS.push({ id, port, run });
+// A check may carry an env override for its server (last arg) — e.g. the update
+// check forces WINMUX_FAKE_LATEST so the badge can be proven without a real release.
+const check = (id, port, run, env) => CHECKS.push({ id, port, run, env });
 
 const desktop = async (browser) => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
@@ -1789,6 +1792,37 @@ check('footer', PORT_FOOTER, async ({ browser, base, t, shot }) => {
   await page.close();
 });
 
+// --- update notice: a newer release lights the .upbadge pill (never installs) ---
+// The server is booted with WINMUX_FAKE_LATEST=9.9.9 (via the check's env override),
+// so /api/update reports an update without needing a real published release. We
+// assert the pill turns on, names the version, and carries a real download link.
+check('update', PORT_UPDATE, async ({ browser, base, t }) => {
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(2500);
+
+  // The server-side check reports it.
+  const api = await page.evaluate((b) => fetch(b + '/api/update').then((r) => r.json()), base);
+  t('server reports a newer version is available', api && api.updateAvailable === true && api.latest === '9.9.9', api);
+
+  // The badge lights up, names the version, and links to the release page.
+  await page.waitForFunction(() => {
+    const b = document.getElementById('upbadge');
+    return b && b.classList.contains('on') && /9\.9\.9/.test(b.textContent);
+  }, { timeout: 6000 }).catch(() => {});
+  const badge = await page.evaluate(() => {
+    const b = document.getElementById('upbadge');
+    if (!b) return null;
+    return { on: b.classList.contains('on'), text: b.textContent, shown: b.offsetParent !== null };
+  });
+  t('the update badge is visible', badge && badge.on && badge.shown, badge);
+  t('the update badge names the new version', badge && /Update v9\.9\.9/.test(badge.text), badge && badge.text);
+  t('the download link points at the WinMux releases page',
+    /github\.com\/Zbrooklyn\/winmux\/releases/.test(api.url), api && api.url);
+
+  await page.close();
+}, { WINMUX_FAKE_LATEST: '9.9.9' });
+
 // --- markdown: the viewer surface renders a file and follows its edits ------
 // `winmux markdown <file>` opens a read surface in the app. The server reads the
 // file (/api/md), the app renders a tiny markdown subset, and it re-pulls on a
@@ -2016,7 +2050,10 @@ check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
   // check that restarts its own server must find the file it left behind, which
   // is the whole point of "a scanned phone survives a restart".
   for (const port of ports) try { fs.unlinkSync(trustFile(port)); } catch (e) {}
-  for (const port of ports) servers[port] = await server(port);
+  // A check can carry a per-port server env override (e.g. the update check).
+  const envByPort = {};
+  for (const c of run) if (c.env) envByPort[c.port] = Object.assign({}, envByPort[c.port], c.env);
+  for (const port of ports) servers[port] = await server(port, envByPort[port]);
   for (const port of ports) {
     console.log((servers[port].borrowed ? 'using the server already on ' : 'started a server on ') + port);
   }

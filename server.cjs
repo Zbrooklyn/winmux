@@ -29,6 +29,48 @@ const qrcode = require('qrcode');
 let VERSION = '0.0.0';
 try { VERSION = require('./package.json').version || VERSION; } catch (e) {}
 
+// Update check: ask GitHub Releases whether a newer WinMux exists. We only ever
+// TELL the user (the .upbadge pill links to the download) — we never auto-install.
+// The result is cached for 6h so we don't hammer GitHub, and every failure path
+// (offline, private repo, no release yet, rate-limited) degrades to "no update".
+const UPDATE_REPO = 'Zbrooklyn/winmux';
+const UPDATE_URL = 'https://github.com/' + UPDATE_REPO + '/releases/latest';
+let _updCache = { at: 0, data: null };
+function cmpSemver(a, b) {
+  const pa = String(a).replace(/^v/, '').split('.').map(function (n) { return parseInt(n, 10) || 0; });
+  const pb = String(b).replace(/^v/, '').split('.').map(function (n) { return parseInt(n, 10) || 0; });
+  for (let i = 0; i < 3; i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d; }
+  return 0;
+}
+async function checkUpdate() {
+  // Test hook: the harness sets WINMUX_FAKE_LATEST to prove the badge lights up
+  // without a real published release.
+  if (process.env.WINMUX_FAKE_LATEST) {
+    const fl = process.env.WINMUX_FAKE_LATEST.replace(/^v/, '');
+    return { current: VERSION, latest: fl, updateAvailable: cmpSemver(fl, VERSION) > 0, url: UPDATE_URL };
+  }
+  if (_updCache.data && Date.now() - _updCache.at < 6 * 3600 * 1000) return _updCache.data;
+  const out = { current: VERSION, latest: null, updateAvailable: false, url: UPDATE_URL };
+  try {
+    const ctl = new AbortController();
+    const to = setTimeout(function () { ctl.abort(); }, 4000);
+    const r = await fetch('https://api.github.com/repos/' + UPDATE_REPO + '/releases/latest', {
+      headers: { 'User-Agent': 'WinMux', 'Accept': 'application/vnd.github+json' }, signal: ctl.signal,
+    });
+    clearTimeout(to);
+    if (r.ok) {
+      const j = await r.json();
+      if (j && j.tag_name) {
+        out.latest = String(j.tag_name).replace(/^v/, '');
+        out.url = j.html_url || UPDATE_URL;
+        out.updateAvailable = cmpSemver(out.latest, VERSION) > 0;
+      }
+    }
+  } catch (e) { /* offline / private / rate-limited → no update */ }
+  _updCache = { at: Date.now(), data: out };
+  return out;
+}
+
 // An explicitly requested port is obeyed exactly, even when it cannot serve the
 // phone door — verify.cjs depends on that to test the busy-port failure. With no
 // PORT set we choose for ourselves, and we refuse a port whose Tailscale face is
@@ -679,6 +721,18 @@ function handle(req, res, viaPhone) {
       detached: [...SESSIONS.values()].filter((s) => !s.ws).length,
       phone: phone.on ? 'on (' + phone.ip + ')' : 'off',
     }));
+    return;
+  }
+
+  // Is a newer WinMux out? Tells the UI's update badge; never installs anything.
+  if (urlPath === '/api/update') {
+    checkUpdate().then(function (u) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(u));
+    }).catch(function () {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ current: VERSION, latest: null, updateAvailable: false, url: UPDATE_URL }));
+    });
     return;
   }
 

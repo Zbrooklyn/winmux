@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('winmux', {
   minimize: () => ipcRenderer.send('win:minimize'),
   maximize: () => ipcRenderer.send('win:maximize'),
   close: () => ipcRenderer.send('win:close'),
+  // Open the release/download page in the user's real browser (the update badge).
+  openExternal: (url: string) => ipcRenderer.send('win:open-external', url),
 });
 
 // Tag the document so index.html CSS can enable Electron-only drag regions

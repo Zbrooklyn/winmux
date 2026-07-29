@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -179,6 +179,12 @@ ipcMain.on('win:maximize', () => {
   else win.maximize();
 });
 ipcMain.on('win:close', () => win?.close());
+// Open a URL (the update / release page) in the user's real browser, never a new
+// Electron window. Guarded to http(s) so the bridge can't be turned into a way to
+// launch arbitrary local programs.
+ipcMain.on('win:open-external', (_e, url: string) => {
+  if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
+});
 
 app.whenReady().then(createWindow);
 

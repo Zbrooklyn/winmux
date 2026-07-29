@@ -2935,6 +2935,27 @@
     var ver = document.getElementById('wc-ver');
     if (ver && d.version) ver.textContent = 'v' + d.version;
   }).catch(function () {});
+
+  // Update notice: if GitHub has a newer WinMux, light the .upbadge pill and link
+  // it to the download page. We never auto-install — this only tells and links.
+  (function checkForUpdate() {
+    var badge = document.getElementById('upbadge');
+    if (!badge) return;
+    function openRelease(url) {
+      var u = url || 'https://github.com/Zbrooklyn/winmux/releases/latest';
+      if (window.winmux && window.winmux.openExternal) window.winmux.openExternal(u);
+      else window.open(u, '_blank', 'noopener');
+    }
+    fetch('/api/update').then(function (r) { return r.json(); }).then(function (u) {
+      if (!u || !u.updateAvailable || !u.latest) return;
+      badge.textContent = 'Update v' + u.latest;
+      badge.title = 'WinMux v' + u.latest + ' is available — click to download';
+      badge.classList.add('on');
+      var go = function () { openRelease(u.url); };
+      badge.onclick = go;
+      badge.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+    }).catch(function () {});
+  })();
   fetch('/shells').then(function (r) { return r.json(); }).then(function (list) {
     if (Array.isArray(list) && list.length) { SHELLS = list; DEFAULT_SHELL = list[0].key; }
   }).catch(function () {});
