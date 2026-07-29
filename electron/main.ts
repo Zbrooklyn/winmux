@@ -163,6 +163,10 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
   } catch (e) {
     result.error = String((e as Error).message || e);
   }
+  // Stamp this copy's identity so the coexistence gate can prove the packaged
+  // app and the dev copy resolved to disjoint userData + discovery files.
+  result.userData = profile.userData;
+  result.instanceFile = profile.instanceFile;
   const outFile = process.env.WINMUX_SMOKE_OUT || path.join(outDir, 'electron-smoke.json');
   try { fs.writeFileSync(outFile, JSON.stringify(result, null, 2)); } catch (e) { /* ignore */ }
   app.quit();
