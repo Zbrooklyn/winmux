@@ -8,6 +8,21 @@
 <link rel="stylesheet" href="/vendor/xterm.css">
 <link rel="stylesheet" href="/cockpit.css">
 <style>
+  /* Bundled terminal font. cockpit.css + app.js already ask for 'Cascadia Code';
+     on a clean machine with no Cascadia installed that fell back to Consolas and
+     rendered prompt/powerline glyphs as tofu. We ship CaskaydiaCove Nerd Font Mono
+     (Cascadia Code patched with the full Nerd Font glyph set — SIL OFL 1.1) and bind
+     it to the 'Cascadia Code' family name so every existing reference resolves to it,
+     giving both programming ligatures AND Nerd Font icons identically on every machine.
+     font-display:swap paints text immediately in the fallback, then swaps when loaded. */
+  @font-face { font-family: 'Cascadia Code'; font-weight: 400; font-style: normal;
+    font-display: swap; src: url('/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf') format('truetype'); }
+  @font-face { font-family: 'Cascadia Code'; font-weight: 700; font-style: normal;
+    font-display: swap; src: url('/fonts/CaskaydiaCoveNerdFontMono-Bold.ttf') format('truetype'); }
+  @font-face { font-family: 'Cascadia Code'; font-weight: 400; font-style: italic;
+    font-display: swap; src: url('/fonts/CaskaydiaCoveNerdFontMono-Italic.ttf') format('truetype'); }
+  @font-face { font-family: 'Cascadia Code'; font-weight: 700; font-style: italic;
+    font-display: swap; src: url('/fonts/CaskaydiaCoveNerdFontMono-BoldItalic.ttf') format('truetype'); }
   /* The pane body hosts the real terminals instead of the mockup's fake rows. */
   .pbody { background: var(--term-bg); }
   .term-area { position: absolute; inset: 0; }

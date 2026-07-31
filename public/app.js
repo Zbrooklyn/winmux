@@ -1245,6 +1245,16 @@
         term.__winmuxRenderer = 'webgl';   // measured 12x fewer event-loop stalls under load
       }
     } catch (e) { term.__winmuxRenderer = 'dom'; /* DOM renderer stays — perfectly fine, just slower */ }
+    // The bundled terminal font (Cascadia Code / CaskaydiaCove Nerd Font) can still
+    // be loading when this terminal mounts on a clean machine. xterm measures its
+    // cell size once at init; if it measured against the fallback, remeasure when the
+    // real font lands so glyph metrics and ligatures line up instead of drifting.
+    // Cheap no-op once the font is cached.
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(function () {
+        try { if (host.style.display !== 'none') { fit.fit(); term.refresh(0, term.rows - 1); } } catch (e) {}
+      });
+    }
     host.addEventListener('contextmenu', function (e) {
       e.preventDefault();
       focusPane(t.paneId);

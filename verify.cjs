@@ -77,6 +77,7 @@ const PORT_PWSH = 9927;
 const PORT_FOOTER = 9928;
 const PORT_UPDATE = 9929;
 const PORT_GPU = 9930;
+const PORT_FONT = 9931;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1884,6 +1885,47 @@ check('gpu', PORT_GPU, async ({ browser, base, t }) => {
   });
   t('DOM fallback paints text when WebGL is unavailable (rows, no canvas)', fb.rows > 0 && !fb.hasCanvas, fb);
   await page2.close();
+});
+
+// --- font: the terminal font is BUNDLED, served, loaded, and actually applied ---
+// cockpit.css/app.js ask for 'Cascadia Code'; a clean machine with no Cascadia
+// installed fell back to Consolas and rendered prompt/powerline glyphs as tofu.
+// We ship CaskaydiaCove Nerd Font Mono and bind it to that family name. This proves
+// the whole chain — the .ttf is served with a font MIME, a FontFace for the family
+// actually loads, and the live terminal's computed font-family resolves to it — so
+// the fix holds on a machine that has never seen Cascadia, not just this dev box.
+check('font', PORT_FONT, async ({ browser, base, t }) => {
+  // 1) The bundled file is served with a real font content-type (not 404 / html).
+  const res = await get(base + '/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf');
+  const ct = String(res.headers['content-type'] || '');
+  t('the bundled Nerd Font .ttf is served', res.status === 200 && /font\/(ttf|otf|sfnt)/.test(ct), { status: res.status, ct: ct });
+
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+  const info = await page.evaluate(async () => {
+    // Force the family to load, then report what the document actually holds.
+    try { await document.fonts.load('12px "Cascadia Code"'); await document.fonts.load('bold 12px "Cascadia Code"'); } catch (e) {}
+    try { await document.fonts.ready; } catch (e) {}
+    let faceLoaded = false;
+    document.fonts.forEach(function (f) {
+      if (String(f.family).replace(/["']/g, '') === 'Cascadia Code' && f.status === 'loaded') faceLoaded = true;
+    });
+    const usable = document.fonts.check('12px "Cascadia Code"');
+    // The live terminal must actually resolve to the family, not silently to Consolas.
+    // xterm sets the font on the .xterm element (and its .xterm-rows), so read those.
+    const cand = ['.pane .xterm', '.xterm .xterm-rows', '.xterm-screen'];
+    let applied = '';
+    for (var i = 0; i < cand.length; i++) {
+      var el = document.querySelector(cand[i]);
+      if (el) { var ff = getComputedStyle(el).fontFamily; if (/Cascadia Code/i.test(ff)) { applied = ff; break; } if (!applied) applied = cand[i] + '=' + ff; }
+    }
+    return { faceLoaded: faceLoaded, usable: usable, applied: applied };
+  });
+  t('a Cascadia Code @font-face actually loaded (bundled, not the OS)', info.faceLoaded, info);
+  t('the family is usable and applied to the terminal', info.usable && /Cascadia Code/i.test(info.applied), info);
+  await page.close();
 });
 
 // --- markdown: the viewer surface renders a file and follows its edits ------

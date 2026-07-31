@@ -480,7 +480,8 @@ function gitChanges(cwd, done) {
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
-  '.map': 'application/json', '.woff2': 'font/woff2', '.svg': 'image/svg+xml',
+  '.map': 'application/json', '.woff2': 'font/woff2', '.woff': 'font/woff',
+  '.ttf': 'font/ttf', '.otf': 'font/otf', '.svg': 'image/svg+xml',
   '.json': 'application/json; charset=utf-8',
 };
 // Someone typed the tailnet address by hand instead of scanning the QR. That
