@@ -760,6 +760,19 @@ function handle(req, res, viaPhone) {
     return;
   }
 
+  // Deliberate shutdown of the (usually detached) server — the "quit WinMux
+  // completely" path. Desk-door only: the phone must never be able to kill the PC's
+  // server and strand nothing. Replies first, then kills every shell and exits, which
+  // fires the exit handlers that clean up the instance file.
+  if (urlPath === '/api/shutdown') {
+    if (viaPhone) { res.writeHead(403); return res.end('winmux: shutdown is available only at the PC, not over the network'); }
+    if (req.method !== 'POST') { res.writeHead(405); return res.end('POST only'); }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, bye: true }));
+    setTimeout(() => { try { killAllShells(); } catch (e) {} process.exit(0); }, 60);
+    return;
+  }
+
   if (urlPath === '/') urlPath = '/index.html';
   const filePath = path.normalize(path.join(PUBLIC, urlPath));
   if (!filePath.startsWith(PUBLIC)) { res.writeHead(403); res.end('Forbidden'); return; }
@@ -1081,6 +1094,15 @@ function ensureSpare() {
   }
 }
 
+// Kill every shell this server owns — the unattached spares AND every live session
+// — so shutting the server down never strands PowerShell processes. Shared by the
+// graceful-exit path (start) and the deliberate /api/shutdown route.
+function killAllShells() {
+  for (const sp of spares) { try { sp.term.kill(); } catch (e) {} }
+  spares = [];
+  for (const s of SESSIONS.values()) { try { s.term.kill(); } catch (e) {} }
+}
+
 function onShellConnection(ws, req) {
   // Which remembered device this terminal belongs to, so that forgetting a
   // device closes the shell it is holding right now rather than at its leisure.
@@ -1175,11 +1197,7 @@ async function start() {
   // AND every live session — so quitting WinMux never strands PowerShell processes
   // running on the machine. (A hard kill from outside can't run this, but a normal
   // quit and Ctrl-C both do.)
-  const killShells = () => {
-    for (const sp of spares) { try { sp.term.kill(); } catch (e) {} }
-    spares = [];
-    for (const s of SESSIONS.values()) { try { s.term.kill(); } catch (e) {} }
-  };
+  const killShells = killAllShells;
   process.on('exit', killShells);
   process.once('SIGTERM', () => { killShells(); process.exit(0); });
   // Advertise the running port so the `winmux` CLI can find it. Best-effort:
