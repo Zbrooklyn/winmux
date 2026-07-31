@@ -95,6 +95,7 @@ const PORT_AGENTENV = 9946;   // agent: every shell exports WINMUX_SID/WINMUX_PO
 const PORT_AGENTSTATE = 9947; // agent: winmux agent <state> flips the session's cockpit status
 const PORT_AGENTHOOKS = 9948; // agent: the Claude Code hooks preset drives live state
 const PORT_WINGET = 9949;     // distribution: the winget manifest generator emits valid manifests
+const PORT_TUNOVR = 9950;     // #246: the WINMUX_TUNNELLED_PORTS override is honored (no fail-open under load)
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
@@ -1796,6 +1797,38 @@ check('winget', PORT_WINGET, async ({ t }) => {
   t('no placeholder markers survive when url+sha are given', !/PLACEHOLDER/.test(ver + inst + loc), 'clean');
 });
 
+// #246 — the authoritative WINMUX_TUNNELLED_PORTS override is honored WITHOUT a
+// tailscale spawn, so booting many servers at once can't flake the safety check.
+// Deterministic regardless of this machine's real tailscale state.
+check('tunnel-override', PORT_TUNOVR, async ({ base, t }) => {
+  // Positive: the framework already booted this check's server with the override
+  // in its env (empty or the real set, neither of which includes this port), so it
+  // came up and serves the desk door — the override didn't wrongly block a safe port.
+  const up = await get(base + '/');
+  t('a server starts on a port the override does not list', up.status === 200, up.status);
+
+  // Refusal: force a port AND mark that same port tunnelled via the override. The
+  // server must refuse (exit 2) purely from the override — no tailscale call needed.
+  const forced = 9951;
+  const refused = await new Promise((resolve) => {
+    const proc = spawn(process.execPath, ['server.cjs'], {
+      cwd: ROOT,
+      env: Object.assign({}, process.env, {
+        PORT: String(forced), WINMUX_TUNNELLED_PORTS: String(forced),
+        WINMUX_TRUST_FILE: trustFile('tunovr'), WINMUX_NO_INSTANCE: '1',
+      }),
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let err = '';
+    proc.stderr.on('data', (d) => { err += d.toString(); });
+    proc.on('exit', (code) => resolve({ code, err }));
+    setTimeout(() => { try { proc.kill(); } catch (e) {} resolve({ code: null, err }); }, 15000);
+  });
+  t('refuses a port the override marks tunnelled, no tailscale needed', refused.code === 2, 'exit ' + refused.code);
+  t('the refusal names the tunnelled cause', /tailscale serve/i.test(refused.err) && /without a key/.test(refused.err),
+    refused.err.split('\n').find((l) => /without a key|tailscale serve/i.test(l)) || refused.err.slice(0, 120));
+});
+
 // --- approve (U4): clear a "needs you" session inline, without switching in ----
 // A background terminal that rings its bell flips to "needs you". Its row grows an
 // inline Approve pill; clicking it sends Enter to that terminal (accepting whatever
@@ -2797,6 +2830,17 @@ check('marks', PORT_MARKS, async ({ browser, base, t, shot }) => {
   if (!run.length) {
     console.log('no such check. known: ' + CHECKS.map((c) => c.id).join(', '));
     process.exit(2);
+  }
+
+  // Resolve the tailscale-tunnelled ports ONCE and hand them to every server via
+  // env. Booting ~16 servers at once otherwise spawns 32 contending `tailscale
+  // status` calls that time out under the load and fail OPEN — which let the
+  // auto-picker briefly settle on the tunnelled default (8799). Product code honors
+  // this override (empty string = "known none"); unset, it queries tailscale itself. (#246)
+  if (process.env.WINMUX_TUNNELLED_PORTS == null) {
+    const tun = await tunnelled();
+    process.env.WINMUX_TUNNELLED_PORTS = [...tun].join(',');
+    if (tun.size) console.log('tailscale tunnels ' + [...tun].join(',') + ' — servers will step around these');
   }
 
   const ports = [...new Set(run.map((c) => c.port))];

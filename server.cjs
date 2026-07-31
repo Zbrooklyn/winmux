@@ -134,24 +134,46 @@ function bindable(host, port) {
 // checking who is calling; it can only be stepped around, so we step around it.
 // Other rules belong to @edward's other projects — we move, we never rewrite his
 // config.
+function parsePortList(s) {
+  const set = new Set();
+  String(s).split(',').forEach((x) => { const n = parseInt(x.trim(), 10); if (n > 0) set.add(n); });
+  return set;
+}
 function tunnelledPorts() {
-  return new Promise((resolve) => {
-    const found = new Set();
-    let left = 2;
-    const done = () => { if (--left === 0) resolve(found); };
-    for (const sub of ['serve', 'funnel']) {
-      execFile('tailscale', [sub, 'status'], { timeout: 4000, windowsHide: true }, (err, out) => {
-        // No tailscale, no rules, an old CLI without the subcommand: all mean
-        // "nothing proven tunnelled". Never guess a port is unsafe.
-        if (!err && out) {
-          const re = /https?:\/\/(?:127\.0\.0\.1|localhost):(\d{1,5})/g;
-          let m;
-          while ((m = re.exec(out))) found.add(parseInt(m[1], 10));
-        }
-        done();
-      });
-    }
-  });
+  // An authoritative override (set even to '' for "known none") skips the
+  // subprocess entirely. This is how a caller that already knows the tailscale
+  // state — the harness booting many servers at once — avoids a spawn storm of
+  // contending `tailscale status` calls that would time out and, worse, fail OPEN.
+  if (process.env.WINMUX_TUNNELLED_PORTS != null) {
+    return Promise.resolve(parsePortList(process.env.WINMUX_TUNNELLED_PORTS));
+  }
+  // A timeout means "I couldn't tell," NOT "nothing tunnelled" — failing open on
+  // it would hand the tailnet a keyless door. So a killed (timed-out) query is
+  // retried once with more headroom before we settle for what we saw. A genuine
+  // "no tailscale / no such subcommand" (ENOENT) is not a timeout and resolves empty.
+  function query(attempt) {
+    return new Promise((resolve) => {
+      const found = new Set();
+      let left = 2, timedOut = false;
+      const done = () => {
+        if (--left) return;
+        if (timedOut && attempt === 0) { resolve(query(1)); return; }
+        resolve(found);
+      };
+      for (const sub of ['serve', 'funnel']) {
+        execFile('tailscale', [sub, 'status'], { timeout: attempt === 0 ? 4000 : 8000, windowsHide: true }, (err, out) => {
+          if (err && err.killed) timedOut = true;   // SIGTERM from the timeout, not ENOENT
+          if (!err && out) {
+            const re = /https?:\/\/(?:127\.0\.0\.1|localhost):(\d{1,5})/g;
+            let m;
+            while ((m = re.exec(out))) found.add(parseInt(m[1], 10));
+          }
+          done();
+        });
+      }
+    });
+  }
+  return query(0);
 }
 
 // A port is only usable if BOTH doors can open on it, and if nothing is already
