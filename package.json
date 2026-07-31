@@ -40,7 +40,8 @@
     "verify": "npm run build:electron && node verify.cjs",
     "verify:coexist": "node verify-coexist.cjs",
     "pack": "npm run build:electron && electron-builder --dir",
-    "dist": "npm run build:electron && node scripts/dist.cjs"
+    "dist": "npm run build:electron && node scripts/dist.cjs",
+    "perf": "node perf.cjs"
   },
   "build": {
     "appId": "com.zbrooklyn.winmux",
