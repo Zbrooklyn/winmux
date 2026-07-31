@@ -52,10 +52,12 @@
 
 **Done-criteria:** A session row shows a live, one-line "what it's doing" (its most recent meaningful output), truncated, updating as output flows, without stealing focus. Harness asserts the row reflects the last line after output.
 
-- [ ] Capture the last non-empty rendered line per term (throttle to ~1/sec) into `t.lastLine`.
-- [ ] Render it in the row (override layer), one line, ellipsis.
-- [ ] Add the `doing` check; `npm run verify` green; screenshot a row showing live activity.
-- [ ] Commit + push.
+- [x] Capture the last non-empty rendered line per term (throttle to ~1/sec) into `t.lastLine`. — `lastLiveLine`/`captureDoing`/`scheduleDoing` in app.js; hooked in `ws.onmessage` after `markWorking`.
+- [x] Render it in the row (override layer), one line, ellipsis. — `.sdoing` in `srowHTML` + `updateDoing` live-patch; CSS in index.html override layer.
+- [x] Add the `doing` check; `npm run verify` green; screenshot a row showing live activity. — `doing` check (PORT 9938) passes 2/2; row echoes the marker line; screenshot `doing-doing-activity-line.png` shipped.
+- [x] Commit + push.
+
+**STATUS: DONE.** The active session row shows a live, faded, one-line "what it's doing" (its latest meaningful output), ellipsised, updating as output flows, patched in place so it never steals focus. Proven mechanically (rowText assertion) + visually.
 
 ### Task C: Clipboard sync (cross-device, opt-in)
 

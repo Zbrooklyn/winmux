@@ -535,6 +535,50 @@
     if (t.status === 'needsyou' || t.status === 'closed') return 'hot';
     return t.status === 'working' ? 'work' : 'mut';
   }
+  // "What's it doing" — the most recent meaningful output line of a session, shown
+  // live on its sidebar row so a busy agent reads differently from a stuck one
+  // without opening it. Reading the buffer on every byte is wasteful, so the capture
+  // is throttled to ~1/sec; the row is patched in place (never a full re-render), so
+  // a session that is scrolling fast never steals focus or churns the whole deck.
+  function lastLiveLine(term) {
+    try {
+      var buf = term.buffer.active;
+      var end = buf.baseY + buf.cursorY;
+      for (var y = end; y >= 0 && y > end - 200; y--) {
+        var ln = buf.getLine(y);
+        if (!ln) continue;
+        var s = ln.translateToString(true);
+        if (s && s.trim()) return s.trim().slice(0, 200);
+      }
+    } catch (e) {}
+    return '';
+  }
+  function updateDoing(t) {
+    if (!sxList) return;
+    var row = sxList.querySelector('.srow[data-term="' + t.id + '"]');
+    if (!row) return;
+    var info = row.querySelector('.sinfo');
+    if (!info) return;
+    var el = row.querySelector('.sdoing');
+    if (!el) { el = document.createElement('div'); el.className = 'sdoing mono'; info.appendChild(el); }
+    el.textContent = t.lastLine || '';
+    el.title = t.lastLine || '';
+  }
+  function captureDoing(t) {
+    if (!t || !t.term) return '';
+    var line = lastLiveLine(t.term);
+    if (line && line !== t.lastLine) { t.lastLine = line; updateDoing(t); }
+    return t.lastLine || '';
+  }
+  function scheduleDoing(t) {
+    if (t.doingPending) return;
+    t.doingPending = true;
+    setTimeout(function () { t.doingPending = false; captureDoing(t); }, 900);
+  }
+  // Observability hook (mirrors __winmuxActiveTerm): run the real capture now,
+  // bypassing only the throttle timer, so the harness can prove a row reflects the
+  // latest output deterministically.
+  window.__winmuxCaptureDoing = function () { var n = 0; eachTerm(function (t) { if (captureDoing(t)) n++; }); return n; };
   // A full path eats the row; the folder you are standing in is the useful part.
   function tailPath(cwd) {
     if (!cwd) return '';
@@ -550,6 +594,7 @@
       '<div class="sstat ' + statusTone(t) + '">' + statusLine(t) +
       (t.cwd ? ' · <span class="m2">' + esc(tailPath(t.cwd)) + '</span>' : '') + '</div>' +
       (t.status === 'working' ? '<div class="sbar"><i style="width:' + Math.round(t.prog || 8) + '%"></i></div>' : '') +
+      (t.lastLine ? '<div class="sdoing mono" title="' + esc(t.lastLine) + '">' + esc(t.lastLine) + '</div>' : '') +
       '</div>' +
       (t.status === 'needsyou' ? '<span class="sapprove" data-approve="' + t.id + '" role="button" tabindex="0" title="Approve — send Enter to continue" aria-label="Approve">Approve</span>' : '') +
       '<span class="speye" data-eye="' + t.id + '" role="button" tabindex="0" title="Preview session" aria-label="Preview session">' + EYE_SVG + '</span>' +
@@ -1440,6 +1485,7 @@
         if (t.skel) { t.skel.remove(); t.skel = null; }
         term.write(new Uint8Array(ev.data));
         markWorking(t);
+        scheduleDoing(t);
       };
       ws.onclose = function () {
         if (t.ws !== ws) return;               // a newer socket already took over

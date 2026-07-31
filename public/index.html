@@ -509,6 +509,14 @@
   .srow.eye-on .speye { color: var(--accent); }
   .srow .speye:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
   .cockpit[data-mode="narrow"] .srow .speye { opacity: 1; }
+  /* "What's it doing" — a live one-line echo of a session's latest output under its
+     status, so a busy agent reads differently from a stuck one at a glance. One line,
+     faded, monospace, ellipsised — never wraps or grows the row. cockpit.css is the
+     frozen contract; this override owns the line. */
+  .srow .sdoing { margin-top: 2px; font-size: 11px; line-height: 1.35;
+    color: color-mix(in srgb, var(--text) 46%, transparent);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .cockpit[data-mode="narrow"] .srow .sdoing { font-size: 12px; }
   /* U4 — inline Approve on a "needs you" row: clear a waiting session in one click,
      without switching into it. Green (--ok) so it reads as the affirmative action. */
   .sapprove { flex: 0 0 auto; align-self: center; margin-right: 3px; padding: 3px 9px; border-radius: 999px;

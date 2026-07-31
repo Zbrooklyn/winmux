@@ -84,6 +84,7 @@ const PORT_PARITY = 9934;     // terminal-parity addons (web-links, unicode11)
 const PORT_NOTIFY = 9935;     // attention bus: `winmux notify` flips a session to needs-you
 const PORT_OSNOTIFY = 9936;   // attention bus: OS notification fires only when unfocused
 const PORT_MCP = 9937;        // winmux-mcp: an MCP client drives the live app over stdio
+const PORT_DOING = 9938;      // cockpit: a session row shows a live "what's it doing" line
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -2171,6 +2172,46 @@ check('parity', PORT_PARITY, async ({ browser, base, t, shot }) => {
   t('OSC-0/2 auto-titles the tab', st.tabLabel === 'WinMux Parity Demo', st);
   await page.waitForTimeout(400);
   await shot(page, 'parity-links');
+  await page.close();
+});
+
+// --- doing: the live "what's it doing" line reflects a session's latest output -
+// The cockpit differentiator that makes a row informative: under the status label
+// sits a live, one-line echo of the session's most recent meaningful output, so a
+// busy agent reads differently from a stuck one without opening it. We expand the
+// group so the row renders, write a unique marker as output on the active term,
+// run the real (throttled) capture, and assert the rendered row echoes the marker.
+check('doing', PORT_DOING, async ({ browser, base, t, shot }) => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+
+  // Expand the active group so the session row (and its .sdoing line) render.
+  const gid = await page.evaluate(() => {
+    const ex = document.querySelector('[data-expand]');
+    return ex ? ex.getAttribute('data-expand') : null;
+  });
+  if (gid) { try { await page.click('[data-expand="' + gid + '"]'); } catch (e) {} }
+  await page.waitForTimeout(300);
+
+  const res = await page.evaluate(async () => {
+    const at = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
+    if (!at || !at.term) return { ok: false };
+    const marker = 'DOING_LIVE_9938_building_the_thing';
+    // xterm.write() flushes asynchronously; wait for the parser callback so the
+    // marker is actually in the buffer before the capture reads it (the product's
+    // ~1s throttle covers this race in real use; the test bypasses only the timer).
+    await new Promise((r) => { try { at.term.write('\r\n' + marker + '\r\n', r); } catch (e) { r(); } });
+    const patched = window.__winmuxCaptureDoing ? window.__winmuxCaptureDoing() : 0;
+    const row = document.querySelector('.srow[data-term="' + at.id + '"] .sdoing');
+    return { ok: true, lastLine: at.lastLine || '', rowText: row ? row.textContent : null, patched: patched };
+  });
+
+  t('the active session captures its latest output line', res.ok && /DOING_LIVE_9938/.test(res.lastLine || ''), res);
+  t('the session row shows the live "what it\'s doing" line', /DOING_LIVE_9938/.test(res.rowText || ''), res);
+  await page.waitForTimeout(300);
+  await shot(page, 'doing-activity-line');
   await page.close();
 });
 
