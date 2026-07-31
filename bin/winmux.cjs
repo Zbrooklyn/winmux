@@ -77,6 +77,11 @@ const HELP = [
   '  browser open <url>               open the browser panel at a URL (desktop app)',
   '  browser snapshot                 list the page\'s interactive elements as @refs',
   '  browser click <@ref>             click an element from the snapshot',
+  '  browser type <@ref> <text>       type text into a field (appends)',
+  '  browser fill <@ref> <value>      replace a field\'s value',
+  '  browser get-text                 dump the page\'s visible text',
+  '  browser eval <js>                evaluate a JS expression in the page',
+  '  browser scroll [up|down|top|bottom|N]  scroll the page',
   '  browser back|forward|reload|url  navigate the browser panel',
   '  browser screenshot [file]        save a PNG of the page',
   '',
@@ -168,8 +173,17 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
         fs.writeFileSync(dest, Buffer.from(b64, 'base64'));
         return out('saved ' + dest);
       }
+      if (sub === 'type') { if (!argv[2]) die('browser type needs a ref + text, e.g. @e1 hello'); return out(await rpc('browser', { sub: 'type', ref: argv[2], text: argv.slice(3).join(' ') })); }
+      if (sub === 'fill') { if (!argv[2]) die('browser fill needs a ref + value, e.g. @e1 hello'); return out(await rpc('browser', { sub: 'fill', ref: argv[2], value: argv.slice(3).join(' ') })); }
+      if (sub === 'get-text') {
+        const r = await rpc('browser', { sub: 'get-text' });
+        if (has(argv, '--json')) return out(r);
+        return out((r.url ? r.url + '\n' : '') + (r.text || ''));
+      }
+      if (sub === 'eval') { if (!argv[2]) die('browser eval needs a js expression'); return out(await rpc('browser', { sub: 'eval', js: argv.slice(2).join(' ') })); }
+      if (sub === 'scroll') return out(await rpc('browser', { sub: 'scroll', amount: argv[2] || 'down' }));
       if (['back', 'forward', 'reload', 'url'].indexOf(sub) >= 0) return out(await rpc('browser', { sub }));
-      die('unknown browser subcommand: ' + sub + ' (open|snapshot|click|back|forward|reload|url|screenshot)');
+      die('unknown browser subcommand: ' + sub + ' (open|snapshot|click|type|fill|get-text|eval|scroll|back|forward|reload|url|screenshot)');
     }
     if (cmd === 'markdown' || cmd === 'md') {
       if (!argv[1]) die('markdown needs a file, e.g. winmux markdown README.md');

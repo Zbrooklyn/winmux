@@ -3540,6 +3540,28 @@
       'if(!el)return {ok:false,error:"no such ref"};el.scrollIntoView({block:"center"});el.click();' +
       'return {ok:true,ref:"' + ref + '"};})()';
   }
+  function refSel(ref) { return String(ref).replace(/^@/, '').replace(/"/g, ''); }
+  function TYPE_JS(ref, text) {   // append text to a field (keystroke-like), firing input/change
+    var r = refSel(ref), v = JSON.stringify(String(text == null ? '' : text));
+    return '(function(){var el=document.querySelector(\'[data-wm-ref="' + r + '"]\');if(!el)return {ok:false,error:"no such ref"};' +
+      'el.focus();var v=' + v + ';if("value" in el){el.value=(el.value||"")+v;el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));}' +
+      'else{el.textContent=(el.textContent||"")+v;el.dispatchEvent(new Event("input",{bubbles:true}));}return {ok:true,ref:"' + r + '"};})()';
+  }
+  function FILL_JS(ref, val) {     // replace a field's value outright, firing input/change
+    var r = refSel(ref), v = JSON.stringify(String(val == null ? '' : val));
+    return '(function(){var el=document.querySelector(\'[data-wm-ref="' + r + '"]\');if(!el)return {ok:false,error:"no such ref"};' +
+      'el.focus();var v=' + v + ';if("value" in el){el.value=v;el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));}' +
+      'else{el.textContent=v;el.dispatchEvent(new Event("input",{bubbles:true}));}return {ok:true,ref:"' + r + '"};})()';
+  }
+  var GETTEXT_JS = '(function(){return {url:location.href,title:document.title,' +
+    'text:(document.body?document.body.innerText:"").replace(/\\n{3,}/g,"\\n\\n").slice(0,200000)};})()';
+  function SCROLL_JS(amount) {      // up|down|top|bottom|<px>
+    var a = JSON.stringify(String(amount == null ? 'down' : amount));
+    return '(function(){var a=' + a + ';var h=window.innerHeight||600;' +
+      'if(a==="top")window.scrollTo(0,0);else if(a==="bottom")window.scrollTo(0,document.body.scrollHeight);' +
+      'else if(a==="up")window.scrollBy(0,-Math.round(h*0.9));else if(a==="down")window.scrollBy(0,Math.round(h*0.9));' +
+      'else{var n=parseInt(a,10);if(!isNaN(n))window.scrollBy(0,n);}return {ok:true,scrollY:window.scrollY};})()';
+  }
 
   // --- Markdown viewer (Phase 10) — reads a file via /api/md, live-updates ---
   function mdEsc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -3703,6 +3725,16 @@
       if (sub === 'reload') { try { view.reload(); } catch (e) {} return { ok: true }; }
       if (sub === 'snapshot') { return view.executeJavaScript(SNAPSHOT_JS); }   // a Promise — control layer awaits
       if (sub === 'click') { return view.executeJavaScript(CLICK_JS(args.ref)); }
+      if (sub === 'type') { if (!args.ref) throw new Error('type needs a ref, e.g. @e1'); return view.executeJavaScript(TYPE_JS(args.ref, args.text)); }
+      if (sub === 'fill') { if (!args.ref) throw new Error('fill needs a ref, e.g. @e1'); return view.executeJavaScript(FILL_JS(args.ref, args.value)); }
+      if (sub === 'get-text') { return view.executeJavaScript(GETTEXT_JS); }
+      if (sub === 'eval') {
+        if (!args.js) throw new Error('eval needs a js expression');
+        return view.executeJavaScript('(function(){ return (' + args.js + '); })()').then(
+          function (r) { return { result: r }; },
+          function (e) { return { error: String(e && e.message || e) }; });
+      }
+      if (sub === 'scroll') { return view.executeJavaScript(SCROLL_JS(args.amount)); }
       if (sub === 'screenshot') {
         return view.capturePage().then(function (img) { return { dataUrl: img.toDataURL() }; });
       }

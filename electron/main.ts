@@ -104,6 +104,7 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
   let result: Record<string, unknown> = {
     hasCockpit: false, isElectron: false, dataElectron: false, ptabsRegion: null,
     browserOpened: false, browserRefs: 0, browserClicked: false, ptyOk: false, error: null,
+    browserTyped: false, browserGotText: false, browserEval: false, browserScrolled: false,
   };
   try {
     for (let i = 0; i < 40; i++) {
@@ -130,7 +131,8 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
     // whose interactive nodes we can count and click.
     try {
       await new Promise((r) => setTimeout(r, 1500));
-      const page = 'data:text/html,' + encodeURIComponent('<button>Go</button><a href="#x">Docs</a>');
+      const page = 'data:text/html,' + encodeURIComponent(
+        '<input id=x><button>Go</button><a href="#x">Docs</a><p>SMOKE_MARKER</p><div style="height:3000px"></div>');
       const opened = await rpc(port, 'browser', { sub: 'open', url: page });
       result.browserOpened = !!(opened && opened.ok);
       // The webview navigates on dom-ready; poll the snapshot until it has refs.
@@ -142,8 +144,23 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
       }
       const tree = String((snap && snap.result && snap.result.tree) || '');
       result.browserRefs = (tree.match(/@e\d+/g) || []).length;
+      // @e1 is the input; clicking it is a valid interaction (ok:true).
       const clicked = await rpc(port, 'browser', { sub: 'click', ref: '@e1' });
       result.browserClicked = !!(clicked && clicked.ok);
+
+      // Item 7 T2 — the wmux automation verb set: fill replaces a field, type
+      // appends to it, eval computes in-page, get-text dumps the visible text,
+      // scroll moves the viewport. Prove each end-to-end over the CLI's /rpc path.
+      await rpc(port, 'browser', { sub: 'fill', ref: '@e1', value: 'ab' });
+      await rpc(port, 'browser', { sub: 'type', ref: '@e1', text: 'cd' });
+      const val = await rpc(port, 'browser', { sub: 'eval', js: "document.querySelector('input').value" });
+      result.browserTyped = !!(val && val.ok && val.result && val.result.result === 'abcd');
+      const gt = await rpc(port, 'browser', { sub: 'get-text' });
+      result.browserGotText = !!(gt && gt.ok && gt.result && /SMOKE_MARKER/.test(String(gt.result.text || '')));
+      const ev = await rpc(port, 'browser', { sub: 'eval', js: '6*7' });
+      result.browserEval = !!(ev && ev.ok && ev.result && ev.result.result === 42);
+      const sc = await rpc(port, 'browser', { sub: 'scroll', amount: 'bottom' });
+      result.browserScrolled = !!(sc && sc.ok && sc.result && sc.result.scrollY > 0);
     } catch (be) {
       result.browserError = String((be as Error).message || be);
     }

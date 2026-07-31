@@ -90,8 +90,7 @@ const PORT_CONFIG = 9940;     // config: durable on-disk settings via /api/confi
 const PORT_THEME = 9941;      // theme import: a Windows Terminal scheme recolours the terminal
 const PORT_KEYS = 9942;       // custom keybindings: a remapped chord runs the action, the old one doesn't
 const PORT_MDRICH = 9943;     // markdown richness: tables, task-list checkboxes, images render in the viewer
-const PORT_BVERBS = 9944;     // browser automation verbs: type/fill/get-text/eval/scroll over the webview
-const PORT_MARKS = 9945;      // terminal command-marks jump + reset
+const PORT_MARKS = 9945;      // terminal command-marks jump + reset (browser verbs ride the electron smoke)
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
@@ -1590,6 +1589,13 @@ check('electron', PORT_GROUPS, async ({ t }) => {
     !!json && json.browserRefs >= 2, json && json.browserRefs);
   t('a snapshotted element was clickable through the CLI path',
     !!json && json.browserClicked === true, json && json.browserError);
+
+  // Item 7 T2 — the automation verb set: fill+type set a field (read back via
+  // eval), get-text dumps the page, eval computes, scroll moves the viewport.
+  t('fill + type set a field, read back by eval', !!json && json.browserTyped === true, json && json.browserError);
+  t('get-text returns the page\'s visible text', !!json && json.browserGotText === true, json && json.browserError);
+  t('eval computes an expression in the page', !!json && json.browserEval === true, json && json.browserError);
+  t('scroll moves the viewport', !!json && json.browserScrolled === true, json && json.browserError);
 
   // node-pty under Electron's ABI (#209): the smoke run drove the real terminal —
   // a live node-pty shell — to run `echo <token>` and read the marker back off the
