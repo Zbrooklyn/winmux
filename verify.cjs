@@ -86,12 +86,17 @@ const PORT_OSNOTIFY = 9936;   // attention bus: OS notification fires only when 
 const PORT_MCP = 9937;        // winmux-mcp: an MCP client drives the live app over stdio
 const PORT_DOING = 9938;      // cockpit: a session row shows a live "what's it doing" line
 const PORT_CLIP = 9939;       // cockpit: cross-device clipboard round-trips through /api/clip
+const PORT_CONFIG = 9940;     // config: durable on-disk settings via /api/config
+const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
 // run, and three concurrent servers sharing one file would clobber each other's
 // writes and make the trust checks flap for no product reason.
 const trustFile = (port) => path.join(OUT, 'trust-' + port + '.json');
+// Every harness server gets its own throwaway config file so a test can never
+// write the real ~/.winmux/config.json (the app POSTs settings on boot now).
+const configFile = (port) => path.join(OUT, 'config-' + port + '.json');
 
 const argv = process.argv.slice(2);
 const HEADED = argv.includes('--headed');
@@ -208,7 +213,7 @@ async function server(port, extraEnv) {
   if (await inUse('127.0.0.1', port)) return { port, borrowed: true, stop() {} };
   const proc = spawn(process.execPath, ['server.cjs'], {
     cwd: ROOT,
-    env: Object.assign({}, process.env, { PORT: String(port), WINMUX_TRUST_FILE: trustFile(port), WINMUX_NO_INSTANCE: '1' }, extraEnv || {}),
+    env: Object.assign({}, process.env, { PORT: String(port), WINMUX_TRUST_FILE: trustFile(port), WINMUX_CONFIG_FILE: configFile(port), WINMUX_NO_INSTANCE: '1' }, extraEnv || {}),
     stdio: 'ignore',
   });
   await waitUp(port, 15000);
@@ -2235,6 +2240,36 @@ check('clip', PORT_CLIP, async ({ base, t }) => {
   t('an oversized clip is capped at 100k, not stored whole', cap && cap.ok === true && cap.len === 100000, cap);
 });
 
+// --- config: settings live in a durable, hand-editable file on disk ---------
+// The config-file differentiator: settings persist to ~/.winmux/config.json (not
+// just localStorage), so they survive a reinstall and can be hand-edited. POST
+// writes the file atomically, GET hands it back, and a fresh page with EMPTY
+// localStorage still comes up wearing the on-disk settings (proven end-to-end:
+// disk -> the live terminal's applied font size). The server here is pointed at a
+// temp config file so the test never touches the real one.
+check('config', PORT_CONFIG, async ({ base, browser, t, shot }) => {
+  try { fs.unlinkSync(CONFIG_TMP); } catch (e) {}
+  const post = await fetch(base + '/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: { fontSize: 17, palette: 'ember' } }) }).then((r) => r.json()).catch((e) => ({ error: String(e) }));
+  t('POST /api/config persists settings', post && post.ok === true, post);
+  const got = await fetch(base + '/api/config', { cache: 'no-store' }).then((r) => r.json()).catch((e) => ({ error: String(e) }));
+  t('GET /api/config returns the persisted settings', got && got.ok === true && got.config && got.config.settings && got.config.settings.fontSize === 17, got);
+  let onDisk = null; try { onDisk = JSON.parse(fs.readFileSync(CONFIG_TMP, 'utf8')); } catch (e) {}
+  t('the config is a real hand-editable file on disk', onDisk && onDisk.settings && onDisk.settings.fontSize === 17, onDisk);
+  // A fresh install (empty localStorage) must still come up wearing the on-disk
+  // settings — the whole point of moving off localStorage-only.
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 }, colorScheme: 'dark' });
+  await page.addInitScript(() => { try { localStorage.clear(); localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4800);
+  const applied = await page.evaluate(() => {
+    const at = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
+    return { fontSize: at && at.term && at.term.options ? at.term.options.fontSize : null };
+  });
+  t('a fresh install with no localStorage adopts the on-disk settings', applied.fontSize === 17, applied);
+  await shot(page, 'config-from-disk');
+  await page.close();
+}, { WINMUX_CONFIG_FILE: CONFIG_TMP });
+
 // --- markdown: the viewer surface renders a file and follows its edits ------
 // `winmux markdown <file>` opens a read surface in the app. The server reads the
 // file (/api/md), the app renders a tiny markdown subset, and it re-pulls on a
@@ -2462,6 +2497,9 @@ check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
   // check that restarts its own server must find the file it left behind, which
   // is the whole point of "a scanned phone survives a restart".
   for (const port of ports) try { fs.unlinkSync(trustFile(port)); } catch (e) {}
+  // Each port starts with no config too, so a leftover from a prior run can't seed
+  // unexpected settings into a check that isn't about config.
+  for (const port of ports) try { fs.unlinkSync(configFile(port)); } catch (e) {}
   // A check can carry a per-port server env override (e.g. the update check).
   const envByPort = {};
   for (const c of run) if (c.env) envByPort[c.port] = Object.assign({}, envByPort[c.port], c.env);

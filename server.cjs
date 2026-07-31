@@ -235,6 +235,33 @@ function saveTrust() {
 }
 loadTrust();
 
+// The durable, hand-editable config: settings, imported terminal themes, and
+// keybinding overrides, living beside instance.json in ~/.winmux. The client
+// seeds itself from it on boot, so a setting survives a reinstall (localStorage
+// does not) and a person can edit the file by hand. Missing or corrupt reads as
+// empty — the app still boots on its built-in defaults, and the standalone
+// `node server.cjs` path needs no config file at all. WINMUX_CONFIG_FILE overrides
+// the path (the harness points it at a temp file so a test never touches the real
+// config); a dev profile gets its own file so installed and dev copies never
+// clobber each other.
+const CONFIG_FILE = process.env.WINMUX_CONFIG_FILE
+  || path.join(os.homedir(), '.winmux', process.env.WINMUX_PROFILE === 'dev' ? 'config.dev.json' : 'config.json');
+function readConfig() {
+  try { const c = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); return (c && typeof c === 'object') ? c : {}; }
+  catch (e) { return {}; }   // no file yet, or unreadable — the app runs on its defaults
+}
+function writeConfigAtomic(obj) {
+  // Temp file + rename, like the trust file: a crash mid-write can never leave a
+  // half-written config that bricks the next boot. Create the dir on first write.
+  try {
+    fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+    const tmp = CONFIG_FILE + '.' + process.pid + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+    fs.renameSync(tmp, CONFIG_FILE);
+    return true;
+  } catch (e) { return false; }
+}
+
 function deviceIdFrom(req) {
   const m = (req.headers.cookie || '').match(/(?:^|;\s*)ct_dev=([a-f0-9]{32})/);
   return m ? m[1] : '';
@@ -664,6 +691,35 @@ function handle(req, res, viaPhone) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(Object.assign({ cwd }, payload)));
     });
+    return;
+  }
+
+  // The durable config: GET hands the client its on-disk settings/themes/keymap on
+  // boot; POST persists them. This is the user's own config, so it rides the same
+  // cookie auth as the rest and is allowed over the tailnet (settings follow you to
+  // the phone). It only ever reads/writes the one fixed config path — never arbitrary
+  // disk — and is size-capped.
+  if (urlPath === '/api/config') {
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (d) => { body += d; if (body.length > 1000000) req.destroy(); });
+      req.on('end', () => {
+        let incoming = {};
+        try { incoming = JSON.parse(body || '{}') || {}; } catch (e) {}
+        const cur = readConfig();
+        // The client owns whole sub-objects (all of settings, all themes, all
+        // keymap overrides) — replace each provided one, leave the others intact.
+        ['settings', 'themes', 'keymap'].forEach((k) => {
+          if (incoming[k] && typeof incoming[k] === 'object') cur[k] = incoming[k];
+        });
+        const ok = writeConfigAtomic(cur);
+        res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok }));
+      });
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ ok: true, config: readConfig() }));
     return;
   }
 

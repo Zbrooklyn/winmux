@@ -76,7 +76,37 @@
     } catch (e) {}
     return s;
   })();
-  function saveSettings() { try { localStorage.setItem('ct-settings', JSON.stringify(S)); } catch (e) {} }
+  // Settings live in two places: localStorage (the instant, offline mirror — keeps
+  // the standalone phone/web path working with no disk) and the on-disk config the
+  // server owns (durable, hand-editable, survives a reinstall). Writing goes to
+  // both; `localOnly` mirrors disk→localStorage without echoing back to disk.
+  var DISK_CONFIG = {};
+  function saveSettings(localOnly) {
+    try { localStorage.setItem('ct-settings', JSON.stringify(S)); } catch (e) {}
+    if (localOnly) return;
+    try {
+      fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: S }) }).catch(function () {});
+    } catch (e) {}
+  }
+  // On boot, pull the on-disk config and let it win over the built-in defaults —
+  // so a fresh install (empty localStorage) still comes up with the user's real
+  // settings, and a hand-edit of the file takes effect on next load. Async and
+  // best-effort: if the server has no config or is unreachable, the app already
+  // rendered on defaults/localStorage and nothing is lost.
+  function loadDiskConfig() {
+    try {
+      fetch('/api/config', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+        if (!j || !j.ok || !j.config) return;
+        DISK_CONFIG = j.config;
+        var s = DISK_CONFIG.settings;
+        if (s && typeof s === 'object') {
+          var changed = false;
+          for (var k in s) if (k in DEFAULTS) { S[k] = s[k]; changed = true; }
+          if (changed) applySettings();   // applySettings mirrors back to localStorage + disk
+        }
+      }).catch(function () {});
+    } catch (e) {}
+  }
 
   function isLightNow() {
     var t = document.documentElement.getAttribute('data-theme');
@@ -3113,6 +3143,9 @@
     var ver = document.getElementById('wc-ver');
     if (ver && d.version) ver.textContent = 'v' + d.version;
   }).catch(function () {});
+
+  // Seed from the on-disk config so a fresh install / hand-edit takes effect.
+  loadDiskConfig();
 
   // Update notice: if GitHub has a newer WinMux, light the .upbadge pill and link
   // it to the download page. We never auto-install — this only tells and links.
