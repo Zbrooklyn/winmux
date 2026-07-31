@@ -94,6 +94,7 @@ const PORT_MARKS = 9945;      // terminal command-marks jump + reset (browser ve
 const PORT_AGENTENV = 9946;   // agent: every shell exports WINMUX_SID/WINMUX_PORT
 const PORT_AGENTSTATE = 9947; // agent: winmux agent <state> flips the session's cockpit status
 const PORT_AGENTHOOKS = 9948; // agent: the Claude Code hooks preset drives live state
+const PORT_WINGET = 9949;     // distribution: the winget manifest generator emits valid manifests
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
@@ -1767,6 +1768,32 @@ check('agent-hooks', PORT_AGENTHOOKS, async ({ browser, base, t }) => {
   t('a hook fired outside WinMux no-ops (state unchanged)',
     guarded.code === 0 && /skipped/.test(guarded.out) && stAfter === 'needsyou', { out: guarded.out, status: stAfter });
   await page.close();
+});
+
+// Item 9 (distribution, non-gated slice) — the winget manifest generator emits the three
+// valid-shaped manifests from a release URL + SHA, ready to submit once a release exists.
+check('winget', PORT_WINGET, async ({ t }) => {
+  const outDir = path.join(OUT, 'winget-check-' + PORT_WINGET);
+  try { fs.rmSync(outDir, { recursive: true, force: true }); } catch (e) {}
+  const url = 'https://github.com/Zbrooklyn/winmux/releases/download/v0.1.0/WinMux.Setup.0.1.0.exe';
+  const sha = 'A'.repeat(64);
+  const run = await new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'scripts', 'winget-manifest.mjs'), '--url', url, '--sha', sha, '--out', outDir],
+      { cwd: ROOT });
+    let e = ''; proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, err: e.trim() }));
+  });
+  t('the generator runs clean', run.code === 0, run.err);
+
+  const rd = (n) => { try { return fs.readFileSync(path.join(outDir, n), 'utf8'); } catch (e) { return ''; } };
+  const ver = rd('Zbrooklyn.WinMux.yaml');
+  const inst = rd('Zbrooklyn.WinMux.installer.yaml');
+  const loc = rd('Zbrooklyn.WinMux.locale.en-US.yaml');
+  t('the version manifest identifies the package', /PackageIdentifier: Zbrooklyn\.WinMux/.test(ver) && /ManifestType: version/.test(ver), ver.slice(0, 120));
+  t('the installer manifest carries the real url + sha + nullsoft type',
+    inst.indexOf('InstallerUrl: ' + url) >= 0 && inst.indexOf('InstallerSha256: ' + sha) >= 0 && /InstallerType: nullsoft/.test(inst), inst.slice(0, 200));
+  t('the locale manifest names publisher + license', /Publisher: Zbrooklyn/.test(loc) && /License: MIT/.test(loc) && /ManifestType: defaultLocale/.test(loc), loc.slice(0, 160));
+  t('no placeholder markers survive when url+sha are given', !/PLACEHOLDER/.test(ver + inst + loc), 'clean');
 });
 
 // --- approve (U4): clear a "needs you" session inline, without switching in ----

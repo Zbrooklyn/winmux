@@ -42,6 +42,7 @@
     "verify:coexist": "node verify-coexist.cjs",
     "pack": "npm run build:electron && electron-builder --dir",
     "dist": "npm run build:electron && node scripts/dist.cjs",
+    "winget": "node scripts/winget-manifest.mjs",
     "perf": "node perf.cjs"
   },
   "build": {

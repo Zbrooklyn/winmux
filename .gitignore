@@ -9,3 +9,4 @@ winmux.err.log
 dist-electron/
 
 dist-installer/
+manifests/
