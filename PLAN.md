@@ -1198,7 +1198,15 @@ layer over a feature that already exists, not a new persistence system.
 
 ### Phase 12 — OSS distribution + a production-grade GitHub presence
 Two halves. The **packaging** half: a Windows installer, auto-update, a winget entry,
-LICENSE (MIT), and flipping the repo public. The **presentation** half — the repo has
+LICENSE (MIT), and flipping the repo public.
+
+**Item 9 status (2026-07-31):** winget = the *generator* is built and tested
+(`scripts/winget-manifest.mjs`, `npm run winget`, commit df7954b) — one command from a
+submittable manifest; the actual **submit** is gated on the owner publish (#230, needs the
+released installer's URL+SHA). Auto-install updater is **NOT built and is an owner decision**:
+it reverses #231's deliberate "notify + link, don't auto-install" and can't function on
+Windows without code signing (owner-gated). Installer + LICENSE + README + gallery already
+shipped (#217/#227/#228). The **presentation** half — the repo has
 to read like a finished product the moment a stranger lands on it, because for OSS the
 README *is* the storefront:
 
