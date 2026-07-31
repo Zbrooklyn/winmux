@@ -91,6 +91,9 @@ const PORT_THEME = 9941;      // theme import: a Windows Terminal scheme recolou
 const PORT_KEYS = 9942;       // custom keybindings: a remapped chord runs the action, the old one doesn't
 const PORT_MDRICH = 9943;     // markdown richness: tables, task-list checkboxes, images render in the viewer
 const PORT_MARKS = 9945;      // terminal command-marks jump + reset (browser verbs ride the electron smoke)
+const PORT_AGENTENV = 9946;   // agent: every shell exports WINMUX_SID/WINMUX_PORT
+const PORT_AGENTSTATE = 9947; // agent: winmux agent <state> flips the session's cockpit status
+const PORT_AGENTHOOKS = 9948; // agent: the Claude Code hooks preset drives live state
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
@@ -1653,6 +1656,35 @@ check('cli', PORT_CLI, async ({ browser, base, t, shot }) => {
   await new Promise((r) => setTimeout(r, 800));
   const orphan = await winmux(['list']);
   t('with no app open the CLI fails clearly, fast', orphan.code !== 0 && /no app connected/i.test(orphan.err), orphan.err);
+});
+
+// Item 8 T1 — every shell exports its own WinMux identity (WINMUX_SID/WINMUX_PORT),
+// the way tmux exports $TMUX_PANE, so an agent's hook inside a terminal can address
+// exactly this session.
+check('agent-env', PORT_AGENTENV, async ({ browser, base, t }) => {
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);
+  const sid = await page.evaluate(() => {
+    const at = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
+    return at ? at.sid : null;
+  });
+  t('the active session has a server sid', !!sid, sid);
+  // Ask the shell to print its injected identity, then read it back off the screen.
+  await page.evaluate(() => {
+    const at = window.__winmuxActiveTerm();
+    // ${env:NAME} braces so the ':' delimiter isn't swallowed by PowerShell's $env: syntax.
+    at.ws.send(JSON.stringify({ t: 'i', d: 'echo "WMX=${env:WINMUX_SID}=${env:WINMUX_PORT}"\r' }));
+  });
+  await page.waitForTimeout(2500);
+  const screen = await page.evaluate(() => {
+    const at = window.__winmuxActiveTerm(); const b = at.term.buffer.active; let out = '';
+    for (let i = 0; i < b.length; i++) { const ln = b.getLine(i); if (ln) out += ln.translateToString(true) + '\n'; }
+    return out;
+  });
+  t('the shell exports WINMUX_SID equal to the session sid, WINMUX_PORT equal to the port',
+    new RegExp('WMX=' + sid + '=' + PORT_AGENTENV + '(?!\\d)').test(screen), { want: 'WMX=' + sid + '=' + PORT_AGENTENV, tail: screen.slice(-160) });
+  await page.close();
 });
 
 // --- approve (U4): clear a "needs you" session inline, without switching in ----

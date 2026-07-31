@@ -1149,8 +1149,13 @@ const SPARE_POOL = Math.max(1, Number(process.env.WINMUX_SPARE_POOL) || 2);
 const DEFAULT_SHELL_KEY = 'powershell';
 
 function spawnSession(shell, cwd) {
-  const term = pty.spawn(shell.exec, shell.args, { name: 'xterm-256color', cols: 80, rows: 24, cwd, env: process.env });
-  const s = { id: crypto.randomBytes(16).toString('hex'), term, dev: '', shell: shell.label, cwd, buf: '', ws: null, timer: null };
+  // Every shell learns its own WinMux identity, the way tmux exports $TMUX_PANE.
+  // The session id exists before the pty so an agent's Claude Code hook running
+  // inside this terminal can address exactly this session (winmux agent … --sid).
+  const id = crypto.randomBytes(16).toString('hex');
+  const env = Object.assign({}, process.env, { WINMUX_SID: id, WINMUX_PORT: String(PORT) });
+  const term = pty.spawn(shell.exec, shell.args, { name: 'xterm-256color', cols: 80, rows: 24, cwd, env });
+  const s = { id, term, dev: '', shell: shell.label, cwd, buf: '', ws: null, timer: null };
   term.onData((d) => {
     s.buf += d;
     if (s.buf.length > SCROLLBACK) s.buf = s.buf.slice(-SCROLLBACK);
