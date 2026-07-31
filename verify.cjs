@@ -87,6 +87,7 @@ const PORT_MCP = 9937;        // winmux-mcp: an MCP client drives the live app o
 const PORT_DOING = 9938;      // cockpit: a session row shows a live "what's it doing" line
 const PORT_CLIP = 9939;       // cockpit: cross-device clipboard round-trips through /api/clip
 const PORT_CONFIG = 9940;     // config: durable on-disk settings via /api/config
+const PORT_THEME = 9941;      // theme import: a Windows Terminal scheme recolours the terminal
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
@@ -2269,6 +2270,42 @@ check('config', PORT_CONFIG, async ({ base, browser, t, shot }) => {
   await shot(page, 'config-from-disk');
   await page.close();
 }, { WINMUX_CONFIG_FILE: CONFIG_TMP });
+
+// --- theme-import: a Windows Terminal colour scheme recolours the terminal ---
+// The theme-import differentiator: paste a WT colour scheme and the terminal wears
+// it. We feed a real scheme (Campbell), import + apply it, and assert the imported
+// ANSI colours land on the live xterm theme — including WT's "purple" mapping to
+// ANSI magenta. Renderer-independent (reads term.options.theme), and it writes a
+// coloured sample so the screenshot shows the scheme applied.
+check('theme-import', PORT_THEME, async ({ browser, base, t, shot }) => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 }, colorScheme: 'dark' });
+  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+  const scheme = {
+    name: 'Campbell',
+    black: '#0C0C0C', red: '#C50F1F', green: '#13A10E', yellow: '#C19C00', blue: '#0037DA',
+    purple: '#881798', cyan: '#3A96DD', white: '#CCCCCC',
+    brightBlack: '#767676', brightRed: '#E74856', brightGreen: '#16C60C', brightYellow: '#F9F1A5',
+    brightBlue: '#3B78FF', brightPurple: '#B4009E', brightCyan: '#61D6D6', brightWhite: '#F2F2F2',
+    background: '#0C0C0C', foreground: '#CCCCCC',
+  };
+  const res = await page.evaluate(async (sch) => {
+    const r = window.__winmuxImportTheme(JSON.stringify(sch));
+    const at = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
+    if (at && at.term) await new Promise((done) => { try { at.term.write('\x1b[31m red \x1b[32m green \x1b[33m yellow \x1b[34m blue \x1b[35m magenta \x1b[36m cyan \x1b[0m\r\n', done); } catch (e) { done(); } });
+    const th = at && at.term && at.term.options ? at.term.options.theme : null;
+    return { r, red: th && th.red, green: th && th.green, magenta: th && th.magenta, brightMagenta: th && th.brightMagenta };
+  }, scheme);
+  t('a Windows Terminal scheme imports cleanly', res.r && res.r.ok === true, res.r);
+  t('the imported ANSI colours apply to the live terminal',
+    String(res.red).toLowerCase() === '#c50f1f' && String(res.green).toLowerCase() === '#13a10e', res);
+  t('WT "purple" maps to ANSI magenta (both intensities)',
+    String(res.magenta).toLowerCase() === '#881798' && String(res.brightMagenta).toLowerCase() === '#b4009e', res);
+  await page.waitForTimeout(300);
+  await shot(page, 'theme-import');
+  await page.close();
+});
 
 // --- markdown: the viewer surface renders a file and follows its edits ------
 // `winmux markdown <file>` opens a read surface in the app. The server reads the

@@ -59,11 +59,13 @@
 
 **Done-criteria:** A user pastes/loads a Windows Terminal colour scheme, it appears in the palette picker, selecting it recolours the terminal to that scheme (verified by computed xterm theme values), and it persists across reload via the config file.
 
-- [ ] Parser: WT scheme (`{ name, background, foreground, black, red, …, brightWhite }`) → `PALETTES` entry (same colours for dark/light unless the scheme distinguishes; document the mapping).
-- [ ] UI: Appearance "Import terminal theme" (paste JSON / pick file) + validation + it lands in the picker.
-- [ ] Persist to `config.themes`; picker reads built-in + user themes.
-- [ ] `theme-import` harness check (feed scheme → computed ANSI match). `npm run verify` green.
-- [ ] Screenshot: the imported theme applied + selectable in Settings. Commit + push.
+- [x] Parser: `importTheme(text)` maps a WT scheme's 16 ANSI names (WT "purple"→ANSI magenta) onto a `PALETTES` entry, same colours dark/light; validates all 16 as `#rrggbb`.
+- [x] UI: Appearance "Import terminal theme" button → paste-a-scheme dialog (`importThemeDialog`, textarea, inline error), selects the new theme + re-renders on success.
+- [x] Persist to `config.themes` (`saveThemes` POSTs); picker + `themeColors()` read `allPalettes()` = built-in ∪ user themes; loaded on boot from disk.
+- [x] `theme-import` harness check (PORT 9941): imports Campbell, asserts the ANSI colours (incl. purple→magenta both intensities) land on the live term — 3/3.
+- [x] Screenshot: Settings → Appearance with "Campbell — imported" selected + the Import button, shipped. Commit + push.
+
+**STATUS: DONE.** Import a Windows Terminal colour scheme and the terminal wears it; it persists via the config file. Fixed a real bug found by the `colour` check: a fresh boot's `applySettings` could POST defaults and clobber the on-disk config — now the disk write waits until the config is read (`configReady`), and localStorage (this device's explicit choice) wins per-key over disk on reconcile (`LS_KEYS`); disk still fills the gaps a fresh install leaves. 28/28 across colour+config+theme-import+cli+migrate.
 
 ### Task 3: Custom keybindings — remap the shortcuts
 

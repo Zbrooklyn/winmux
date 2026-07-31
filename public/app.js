@@ -60,6 +60,16 @@
   var ANSI_KEYS = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
     'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue',
     'brightMagenta', 'brightCyan', 'brightWhite'];
+  // Imported terminal themes (Windows Terminal colour schemes) live here, loaded
+  // from the on-disk config on boot; the picker and themeColors() see them exactly
+  // like the built-in palettes.
+  var USER_THEMES = {};
+  function allPalettes() {
+    var m = {}; var k;
+    for (k in PALETTES) m[k] = PALETTES[k];
+    for (k in USER_THEMES) m[k] = USER_THEMES[k];
+    return m;
+  }
 
   var DEFAULTS = {
     theme: 'system', palette: 'aurora', fontFamily: 'Cascadia Code', fontSize: 13, lineHeight: 1.2,
@@ -67,12 +77,16 @@
     copyOnSelect: false, rightClickPaste: false, confirmClose: true,
     defaultShell: '', startFolder: '', gpuRenderer: true, osNotify: true, clipSync: false,
   };
+  // Keys this browser has an explicit stored value for. They win over the on-disk
+  // config on reconcile — localStorage is this device's stated choice; disk only
+  // fills the keys the device has never set (the fresh-install / reinstall case).
+  var LS_KEYS = {};
   var S = (function () {
     var s = {};
     for (var k in DEFAULTS) s[k] = DEFAULTS[k];
     try {
       var raw = JSON.parse(localStorage.getItem('ct-settings') || '{}');
-      for (var j in raw) if (j in s) s[j] = raw[j];
+      for (var j in raw) if (j in s) { s[j] = raw[j]; LS_KEYS[j] = true; }
     } catch (e) {}
     return s;
   })();
@@ -81,9 +95,14 @@
   // server owns (durable, hand-editable, survives a reinstall). Writing goes to
   // both; `localOnly` mirrors disk→localStorage without echoing back to disk.
   var DISK_CONFIG = {};
+  // Guards the disk write: until the on-disk config has actually been read once, a
+  // boot's applySettings() must NOT POST its defaults — otherwise a fresh browser
+  // (empty localStorage) would overwrite the real config with defaults before it
+  // ever loads it. localStorage still mirrors instantly; only the disk POST waits.
+  var configReady = false;
   function saveSettings(localOnly) {
     try { localStorage.setItem('ct-settings', JSON.stringify(S)); } catch (e) {}
-    if (localOnly) return;
+    if (localOnly || !configReady) return;
     try {
       fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: S }) }).catch(function () {});
     } catch (e) {}
@@ -94,18 +113,24 @@
   // best-effort: if the server has no config or is unreachable, the app already
   // rendered on defaults/localStorage and nothing is lost.
   function loadDiskConfig() {
+    // configReady flips true once we've read (or failed to read) the config, at
+    // which point user-initiated changes are safe to persist to disk.
+    function done() { configReady = true; }
     try {
       fetch('/api/config', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
-        if (!j || !j.ok || !j.config) return;
-        DISK_CONFIG = j.config;
-        var s = DISK_CONFIG.settings;
-        if (s && typeof s === 'object') {
-          var changed = false;
-          for (var k in s) if (k in DEFAULTS) { S[k] = s[k]; changed = true; }
-          if (changed) applySettings();   // applySettings mirrors back to localStorage + disk
+        if (j && j.ok && j.config) {
+          DISK_CONFIG = j.config;
+          if (DISK_CONFIG.themes && typeof DISK_CONFIG.themes === 'object') USER_THEMES = DISK_CONFIG.themes;
+          var s = DISK_CONFIG.settings;
+          if (s && typeof s === 'object') {
+            var changed = false;
+            for (var k in s) if (k in DEFAULTS && !LS_KEYS[k]) { S[k] = s[k]; changed = true; }
+            if (changed) applySettings();   // still !configReady → mirrors to localStorage, no POST echo
+          }
         }
-      }).catch(function () {});
-    } catch (e) {}
+        done();
+      }).catch(done);
+    } catch (e) { done(); }
   }
 
   function isLightNow() {
@@ -121,10 +146,45 @@
       : { background: '#1a1a1a', foreground: '#dadada', cursor: '#8a5cf5', selectionBackground: 'rgba(138,92,245,.30)' };
     // The cursor keeps the app's own accent in every palette on purpose — it is
     // the one thing that ties the terminal to the chrome around it.
-    var set = (PALETTES[S.palette] || PALETTES.aurora)[light ? 'light' : 'dark'];
+    var set = (allPalettes()[S.palette] || PALETTES.aurora)[light ? 'light' : 'dark'];
     for (var i = 0; i < ANSI_KEYS.length; i++) t[ANSI_KEYS[i]] = set[i];
     return t;
   }
+  // Import a Windows Terminal colour scheme (the de-facto format for this world)
+  // into a palette. A WT scheme is a flat object of 16 ANSI names (magenta is
+  // spelled "purple") plus background/foreground; we map the 16 onto WinMux's
+  // palette shape and use them for both light and dark (a scheme is a single set).
+  // Returns { ok, id, label } or { ok:false, error }.
+  var WT_TO_ANSI = { black: 'black', red: 'red', green: 'green', yellow: 'yellow', blue: 'blue',
+    purple: 'magenta', magenta: 'magenta', cyan: 'cyan', white: 'white',
+    brightBlack: 'brightBlack', brightRed: 'brightRed', brightGreen: 'brightGreen',
+    brightYellow: 'brightYellow', brightBlue: 'brightBlue', brightPurple: 'brightMagenta',
+    brightMagenta: 'brightMagenta', brightCyan: 'brightCyan', brightWhite: 'brightWhite' };
+  function importTheme(text) {
+    var scheme; try { scheme = JSON.parse(text); } catch (e) { return { ok: false, error: 'That is not valid JSON.' }; }
+    if (!scheme || typeof scheme !== 'object') return { ok: false, error: 'Expected a colour-scheme object.' };
+    var byAnsi = {};
+    for (var w in WT_TO_ANSI) if (typeof scheme[w] === 'string') byAnsi[WT_TO_ANSI[w]] = scheme[w].trim();
+    var arr = [];
+    for (var i = 0; i < ANSI_KEYS.length; i++) {
+      var c = byAnsi[ANSI_KEYS[i]];
+      if (!/^#[0-9a-fA-F]{6}$/.test(c || '')) return { ok: false, error: 'Missing or invalid colour for "' + ANSI_KEYS[i] + '". Needs all 16 ANSI colours as #rrggbb.' };
+      arr.push(c);
+    }
+    var label = String(scheme.name || 'Imported theme').slice(0, 40);
+    var id = 'user:' + label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || ('user:' + Object.keys(USER_THEMES).length);
+    USER_THEMES[id] = { label: label + ' — imported', dark: arr.slice(), light: arr.slice() };
+    saveThemes();
+    return { ok: true, id: id, label: label };
+  }
+  function saveThemes() {
+    try {
+      fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ themes: USER_THEMES }) }).catch(function () {});
+    } catch (e) {}
+  }
+  // Observability hook: import + apply a scheme now, so the harness can prove the
+  // imported colours reach the live terminal without driving the paste dialog.
+  window.__winmuxImportTheme = function (text) { var r = importTheme(text); if (r.ok) { S.palette = r.id; applySettings(); } return r; };
   function applyTheme(mode) {
     S.theme = mode;
     if (mode === 'system') document.documentElement.removeAttribute('data-theme');
@@ -2310,6 +2370,30 @@
     body.querySelector('[data-cancel]').addEventListener('click', function () { finish(false); });
     body.querySelector('[data-ok]').addEventListener('click', function () { finish(true); });
   }
+  // Paste-a-scheme dialog for theme import. A textarea (not the single-line prompt)
+  // because a colour scheme is a block of JSON. On success it selects the new theme
+  // and re-renders Settings so the picker shows it applied; on failure it shows the
+  // parser's reason inline instead of closing.
+  function importThemeDialog() {
+    var body = document.getElementById('dlg-body');
+    body.innerHTML = '<h3>Import terminal theme</h3>' +
+      '<p class="fhint" style="margin:0 0 8px">Paste a Windows Terminal colour scheme (JSON) — it needs a name and all sixteen ANSI colours.</p>' +
+      '<textarea class="dlg-in" spellcheck="false" rows="8" style="width:100%;box-sizing:border-box;resize:vertical;font-family:monospace" placeholder=\'{ "name": "Campbell", "black": "#0C0C0C", "red": "#C50F1F", ... }\'></textarea>' +
+      '<div class="dlg-err" style="color:var(--danger,#e06c75);font-size:12px;min-height:16px;margin-top:4px"></div>' +
+      '<div class="drow"><span class="btn" data-cancel>Cancel</span><span class="btn primary" data-ok>Import</span></div>';
+    openOvl('dlg-ovl');
+    var input = body.querySelector('.dlg-in');
+    var err = body.querySelector('.dlg-err');
+    input.focus();
+    input.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Escape') { e.preventDefault(); closeOvl('dlg-ovl'); } });
+    body.querySelector('[data-cancel]').addEventListener('click', function () { closeOvl('dlg-ovl'); });
+    body.querySelector('[data-ok]').addEventListener('click', function () {
+      var r = importTheme(input.value);
+      if (!r.ok) { err.textContent = r.error; return; }
+      closeOvl('dlg-ovl');
+      S.palette = r.id; applySettings(); renderSettings();
+    });
+  }
 
   // ---------------------------------------------------------- save / load
   function layouts() { try { return JSON.parse(localStorage.getItem('ct-layouts') || '[]'); } catch (e) { return []; } }
@@ -2512,7 +2596,8 @@
     if (t === 'Appearance') {
       return frow('Theme', 'Dark, light, or follow Windows', sel('theme', [['system', 'Match system'], ['dark', 'Dark'], ['light', 'Light']], S.theme)) +
         frow('Colours', 'The sixteen colours the shell paints with', sel('palette',
-          Object.keys(PALETTES).map(function (k) { return [k, PALETTES[k].label]; }), S.palette)) +
+          Object.keys(allPalettes()).map(function (k) { return [k, allPalettes()[k].label]; }), S.palette)) +
+        frow('Import terminal theme', 'Paste a Windows Terminal colour scheme (JSON) to add it to the list above', '<span class="btn" data-act="import-theme">Import theme…</span>') +
         frow('Font', 'Applied to every open terminal', sel('fontFamily', Object.keys(FONTS), S.fontFamily)) +
         frow('Font size', 'Also Ctrl + / Ctrl − / Ctrl+wheel', '<input class="ctl" type="number" min="8" max="28" value="' + S.fontSize + '" data-set="fontSize" style="width:70px">') +
         frow('Line height', '', '<input class="ctl" type="number" min="1" max="2" step="0.05" value="' + S.lineHeight + '" data-set="lineHeight" style="width:70px">');
@@ -2733,6 +2818,7 @@
     var a = act.getAttribute('data-act');
     if (a === 'cheat') { closeOvl('settings-ovl'); openCheat(); }
     if (a === 'diag') { closeOvl('settings-ovl'); openDiag(); }
+    if (a === 'import-theme') { importThemeDialog(); }
     if (a === 'phone-copy' && phoneS && phoneS.url) {
       // The copy itself works, but writeText is async and notify() only pings the
       // (silent) bell — so a click looked like nothing happened. Confirm right on
