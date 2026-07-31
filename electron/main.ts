@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { resolveProfile } from './profile';
+import { resolveServer } from './server-host';
 
 // server.cjs is CommonJS at the repo root (one level up from dist-electron/).
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -37,7 +38,21 @@ const SMOKE = !!process.env.WINMUX_SMOKE;
 let win: BrowserWindow | null = null;
 
 async function createWindow(): Promise<void> {
-  const { port } = await start();
+  // The SMOKE harness keeps the in-process server so the electron check is
+  // unaffected. A real launch RESOLVES a detached server (reattach to a live one
+  // for this profile, else spawn one) so closing the window never kills the shells.
+  let port: number;
+  if (SMOKE) {
+    ({ port } = await start());
+  } else {
+    const resolved = await resolveServer({
+      instanceFile: profile.instanceFile,
+      trustFile: process.env.WINMUX_TRUST_FILE || profile.trustFile,
+      execPath: process.execPath,
+      serverPath: path.join(__dirname, '..', 'server.cjs'),
+    });
+    port = resolved.port;
+  }
   win = new BrowserWindow({
     width: 1280,
     height: 820,
