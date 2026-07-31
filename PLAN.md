@@ -807,6 +807,8 @@ status`, clean-JSON CLI, pty pre-warm, atomic trust write, graceful shutdown, wo
 (`winmux open`); trust forget-terminal flake hardened.
 
 **P1 — Launch-critical (ship a credible v1.0; fixes the measured/real breaks):**
+> Execution plan: `docs/superpowers/plans/2026-07-31-winmux-performance-reliability-buildout.md`
+> (Phase 0 measure → 1 GPU enable → 2 font bundle → 3 instant-feel → 4 flake fix; Phase 5 = session-survival + parity, its own session).
 - Terminal-parity pass — GPU renderer + bundle font/Nerd-glyphs + ligatures + unicode11 +
   screenReaderMode — **L `[B]`**. Fixes the *measured* 10-session jank AND the clean-install
   Consolas/tofu bug. Interlocks via the renderer + a harness migration; its own session.
