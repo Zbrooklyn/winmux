@@ -80,6 +80,7 @@ const PORT_GPU = 9930;
 const PORT_FONT = 9931;
 const PORT_INSTANT = 9932;
 const PORT_SURVIVE2 = 9933;   // registered port (runner boots a throwaway here)
+const PORT_PARITY = 9934;     // terminal-parity addons (web-links, unicode11)
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1989,6 +1990,34 @@ check('detach', PORT_SURVIVE2, async ({ t }) => {
     if (boundPort) { try { await shutdownServer(boundPort); } catch (e) {} }
     try { fs.unlinkSync(instanceFile); } catch (e) {}
   }
+});
+
+// --- parity: modern-terminal addons are loaded on the live terminal --------
+// Clickable links (web-links addon) + Unicode 11 width tables — the two clean
+// parity wins that every modern emulator has. Renderer-independent: reads the
+// live term object via window.__winmuxActiveTerm, so it holds under the forced
+// DOM renderer here and the shipping WebGL default alike. Writes a URL so the
+// screenshot shows a linkified address.
+check('parity', PORT_PARITY, async ({ browser, base, t, shot }) => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+  const st = await page.evaluate(async () => {
+    const at = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
+    if (!at || !at.term) return { ok: false };
+    try { at.term.write('Docs: https://github.com/Zbrooklyn/winmux  (Ctrl+click to open)\r\n'); } catch (e) {}
+    return {
+      ok: true,
+      webLinks: at.term.__winmuxWebLinks === true,
+      unicode: at.term.unicode && at.term.unicode.activeVersion,
+    };
+  });
+  t('the web-links addon is loaded on the live terminal', st.ok && st.webLinks === true, st);
+  t('unicode 11 width tables are active on the terminal', st.unicode === '11', st);
+  await page.waitForTimeout(400);
+  await shot(page, 'parity-links');
+  await page.close();
 });
 
 // --- markdown: the viewer surface renders a file and follows its edits ------

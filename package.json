@@ -47,7 +47,10 @@
     "appId": "com.zbrooklyn.winmux",
     "productName": "WinMux",
     "npmRebuild": false,
-    "directories": { "output": "dist-installer", "buildResources": "build" },
+    "directories": {
+      "output": "dist-installer",
+      "buildResources": "build"
+    },
     "files": [
       "server.cjs",
       "public/**/*",
@@ -59,7 +62,12 @@
       "node_modules/node-pty/prebuilds/**",
       "node_modules/node-pty/build/Release/*.node"
     ],
-    "win": { "target": ["nsis"], "icon": "build/icon.ico" },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
@@ -70,6 +78,8 @@
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-search": "^0.16.0",
+    "@xterm/addon-unicode11": "^0.8.0",
+    "@xterm/addon-web-links": "^0.11.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",
     "node-pty": "^1.0.0",

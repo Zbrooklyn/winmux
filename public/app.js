@@ -935,6 +935,7 @@
   }
   function activeTermOf(p) { for (var i = 0; i < p.terms.length; i++) if (p.terms[i].id === p.activeTermId) return p.terms[i]; return null; }
   function activeTerm() { var p = paneById(activePaneId); return p ? activeTermOf(p) : null; }
+  window.__winmuxActiveTerm = activeTerm;   // observability hook (harness reads addon state)
   function sendResize(t) { if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'r', c: t.term.cols, r: t.term.rows })); }
   // Closing a tab on purpose is the one close that should take the shell with it.
   // Every other disconnect is treated as an interruption and waited out, so this
@@ -1231,6 +1232,24 @@
     term.loadAddon(fit);
     var search = new SearchAddon.SearchAddon();
     term.loadAddon(search);
+    // Clickable links (web-links addon): bare URLs and OSC-8 explicit hyperlinks
+    // become hoverable + clickable. Opens in the OS default browser — the parity
+    // behaviour every modern terminal has (VS Code, Windows Terminal). Under Electron
+    // we route through the winmux bridge's openExternal; on web we window.open.
+    if (window.WebLinksAddon) {
+      try {
+        term.loadAddon(new WebLinksAddon.WebLinksAddon(function (ev, uri) {
+          if (window.winmux && window.winmux.openExternal) window.winmux.openExternal(uri);
+          else window.open(uri, '_blank', 'noopener');
+        }));
+        term.__winmuxWebLinks = true;   // observability hook for the harness
+      } catch (e) {}
+    }
+    // Unicode 11 width tables: wide glyphs (CJK, emoji) claim their true 2 cells so
+    // they stop smearing into the next column. Cheap, renderer-independent.
+    if (window.Unicode11Addon) {
+      try { term.loadAddon(new Unicode11Addon.Unicode11Addon()); term.unicode.activeVersion = '11'; } catch (e) {}
+    }
     term.open(host);
     // GPU renderer — the big win on fast output (10 streaming agents lag the DOM
     // renderer badly, measured). Load AFTER open(); fall back to the DOM renderer
