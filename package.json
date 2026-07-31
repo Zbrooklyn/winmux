@@ -27,7 +27,8 @@
   ],
   "main": "dist-electron/main.js",
   "bin": {
-    "winmux": "bin/winmux.cjs"
+    "winmux": "bin/winmux.cjs",
+    "winmux-mcp": "bin/winmux-mcp.cjs"
   },
   "scripts": {
     "start": "node server.cjs",

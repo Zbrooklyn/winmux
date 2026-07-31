@@ -83,6 +83,7 @@ const PORT_SURVIVE2 = 9933;   // registered port (runner boots a throwaway here)
 const PORT_PARITY = 9934;     // terminal-parity addons (web-links, unicode11)
 const PORT_NOTIFY = 9935;     // attention bus: `winmux notify` flips a session to needs-you
 const PORT_OSNOTIFY = 9936;   // attention bus: OS notification fires only when unfocused
+const PORT_MCP = 9937;        // winmux-mcp: an MCP client drives the live app over stdio
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1991,6 +1992,57 @@ check('detach', PORT_SURVIVE2, async ({ t }) => {
     // Belt-and-braces: never leave the spawned server running if an assert threw.
     if (boundPort) { try { await shutdownServer(boundPort); } catch (e) {} }
     try { fs.unlinkSync(instanceFile); } catch (e) {}
+  }
+});
+
+// --- mcp: an MCP client drives the live WinMux app over stdio ---------------
+// winmux-mcp is a stdio MCP server (newline-delimited JSON-RPC) exposing the /rpc
+// verbs as tools. The harness plays the MCP client: initialize -> tools/list ->
+// call winmux_list (proves it sees the live sessions) -> send+read_screen round
+// trip (proves an agent can actually operate the terminal over MCP).
+check('mcp', PORT_MCP, async ({ browser, base, t }) => {
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);   // the app connects to /control
+
+  const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux-mcp.cjs')],
+    { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_MCP), WINMUX_HOST: '127.0.0.1' }) });
+  const pending = {};
+  let sb = '';
+  proc.stdout.setEncoding('utf8');
+  proc.stdout.on('data', (d) => {
+    sb += d; let nl;
+    while ((nl = sb.indexOf('\n')) >= 0) {
+      const line = sb.slice(0, nl).trim(); sb = sb.slice(nl + 1);
+      if (!line) continue;
+      let m; try { m = JSON.parse(line); } catch (e) { continue; }
+      if (m.id != null && pending[m.id]) { pending[m.id](m); delete pending[m.id]; }
+    }
+  });
+  let seq = 0;
+  const call = (method, params) => new Promise((resolve, reject) => {
+    const id = ++seq; pending[id] = resolve;
+    proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: id, method: method, params: params || {} }) + '\n');
+    setTimeout(() => { if (pending[id]) { delete pending[id]; reject(new Error('timeout ' + method)); } }, 8000);
+  });
+
+  try {
+    const init = await call('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'harness', version: '1' } });
+    t('MCP initialize returns the winmux serverInfo', !!(init.result && init.result.serverInfo && init.result.serverInfo.name === 'winmux'), init.result);
+    const tl = await call('tools/list');
+    t('MCP advertises the winmux tools', !!(tl.result && Array.isArray(tl.result.tools) && tl.result.tools.some((x) => x.name === 'winmux_list')), tl.result && tl.result.tools && tl.result.tools.length);
+    const lc = await call('tools/call', { name: 'winmux_list', arguments: {} });
+    const listed = JSON.parse(lc.result.content[0].text);
+    t('MCP winmux_list sees the live sessions', !!(listed && Array.isArray(listed.sessions) && listed.sessions.length >= 1), listed && listed.sessions && listed.sessions.length);
+    const marker = 'MCP_OK_' + PORT_MCP;
+    await call('tools/call', { name: 'winmux_send', arguments: { text: '"' + marker + '"', enter: true } });
+    await page.waitForTimeout(2500);
+    const rc = await call('tools/call', { name: 'winmux_read_screen', arguments: { lines: 60 } });
+    const screen = JSON.parse(rc.result.content[0].text);
+    t('MCP send + read_screen round-trips through the real shell', String(screen && screen.screen || '').indexOf(marker) >= 0, String(screen && screen.screen || '').slice(-120));
+  } finally {
+    try { proc.stdin.end(); proc.kill(); } catch (e) {}
+    await page.close();
   }
 });
 
