@@ -1729,6 +1729,46 @@ check('agent-state', PORT_AGENTSTATE, async ({ browser, base, t, shot }) => {
   await page.close();
 });
 
+// Item 8 T3 — the shipped Claude Code hooks preset is valid and its command path is
+// real: fire the exact command a hook runs, with $WINMUX_SID set like a real hook,
+// and prove the cockpit follows. Also prove the outside-WinMux no-op guard.
+check('agent-hooks', PORT_AGENTHOOKS, async ({ browser, base, t }) => {
+  // The preset is valid JSON wiring the three lifecycle events to `winmux agent`.
+  const preset = JSON.parse(fs.readFileSync(path.join(ROOT, 'agent', 'claude-code-hooks.json'), 'utf8'));
+  const cmdFor = (evt) => {
+    try { return preset.hooks[evt][0].hooks[0].command; } catch (e) { return ''; }
+  };
+  t('preset wires UserPromptSubmit → agent working', /winmux agent working/.test(cmdFor('UserPromptSubmit')), cmdFor('UserPromptSubmit'));
+  t('preset wires Notification → agent needs-you', /winmux agent needs-you/.test(cmdFor('Notification')), cmdFor('Notification'));
+  t('preset wires Stop → agent done', /winmux agent done/.test(cmdFor('Stop')), cmdFor('Stop'));
+
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);
+  const sid = await page.evaluate(() => { const at = window.__winmuxActiveTerm(); return at ? at.sid : null; });
+
+  // Fire the exact hook command with $WINMUX_SID set, the way a hook inherits it
+  // from the shell — no --sid on the command line.
+  const runHook = (args, extraEnv) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_AGENTHOOKS), WINMUX_HOST: '127.0.0.1' }, extraEnv || {}) });
+    let o = '', e = ''; proc.stdout.on('data', (d) => o += d); proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+
+  const fired = await runHook(['agent', 'needs-you', 'Claude needs your input'], { WINMUX_SID: sid });
+  await page.waitForTimeout(800);
+  const st = await page.evaluate(() => { const at = window.__winmuxActiveTerm(); return at ? at.status : null; });
+  t('the Notification-hook command (with $WINMUX_SID) flips live state', fired.code === 0 && st === 'needsyou', { code: fired.code, status: st });
+
+  // Outside a WinMux terminal ($WINMUX_SID unset, no --id): must no-op, not poke the app.
+  const guarded = await runHook(['agent', 'done', '--json'], { WINMUX_SID: '' });
+  const stAfter = await page.evaluate(() => { const at = window.__winmuxActiveTerm(); return at ? at.status : null; });
+  t('a hook fired outside WinMux no-ops (state unchanged)',
+    guarded.code === 0 && /skipped/.test(guarded.out) && stAfter === 'needsyou', { out: guarded.out, status: stAfter });
+  await page.close();
+});
+
 // --- approve (U4): clear a "needs you" session inline, without switching in ----
 // A background terminal that rings its bell flips to "needs you". Its row grows an
 // inline Approve pill; clicking it sends Enter to that terminal (accepting whatever

@@ -226,6 +226,9 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
         words.push(argv[i]);
       }
       const sid = flag(argv, '--sid') || process.env.WINMUX_SID || '';
+      // Hook safety: with no session to target (fired outside a WinMux terminal,
+      // where $WINMUX_SID is unset), no-op quietly instead of poking the active app.
+      if (!sid && !flag(argv, '--id')) { if (has(argv, '--json')) out({ ok: true, skipped: 'not inside a WinMux session' }); return; }
       const r = await rpc('agent', { state, message: words.join(' '), sid, target: flag(argv, '--id') });
       return emit('session ' + (r && r.id != null ? r.id : '') + ' → ' + (r && r.state), r);
     }

@@ -117,11 +117,19 @@ winmux browser snapshot          # list the page's clickable elements as @refs
 winmux browser click @e1         # click one of them
 winmux markdown README.md        # open a file in the live markdown viewer
 winmux open workspace.json       # open a saved set of terminals (cwd/shell/command each)
+winmux agent needs-you "..."     # set this session's agent state (working|needs-you|done)
 ```
 
 An agent (e.g. Claude) uses these to open terminals and run tools for you. The browser panel is
 the desktop app's Electron `<webview>`; the markdown viewer follows a file live as it's written.
 The CLI works only at the PC (`127.0.0.1`), never over the phone link.
+
+## Agent integration
+
+Every WinMux shell exports `WINMUX_SID`/`WINMUX_PORT`, so a Claude Code agent's hooks can flip
+its own session's row to **WORKING** / **NEEDS YOU** / done as it runs — even from your phone.
+Merge [`agent/claude-code-hooks.json`](agent/claude-code-hooks.json) into your Claude Code
+settings; see [`docs/agent-integration.md`](docs/agent-integration.md).
 
 ## Verify
 
