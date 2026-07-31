@@ -76,6 +76,7 @@ const PORT_APPROVE = 9926;
 const PORT_PWSH = 9927;
 const PORT_FOOTER = 9928;
 const PORT_UPDATE = 9929;
+const PORT_GPU = 9930;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -243,7 +244,18 @@ const desktop = async (browser) => {
   // Every check gets a fresh context, so the first-run onboarding would pop over
   // the UI and swallow clicks. Mark it seen everywhere except the check that tests
   // it (see the 'onboard' check, which deliberately leaves this unset).
-  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  // Also pin the DOM renderer here: the app's features read the renderer-independent
+  // term.buffer, so behavioural checks are the same on either renderer — but many
+  // of these checks read .xterm-rows text, which the WebGL renderer (the shipping
+  // default) paints to a <canvas> instead. Pinning DOM keeps those reads valid; the
+  // 'gpu' check separately proves the WebGL path + its DOM fallback.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('ct-onboard', '1');
+      const s = JSON.parse(localStorage.getItem('ct-settings') || '{}'); s.gpuRenderer = false;
+      localStorage.setItem('ct-settings', JSON.stringify(s));
+    } catch (e) {}
+  });
   return page;
 };
 
@@ -253,8 +265,15 @@ async function phoneCtx(browser, colorScheme) {
     isMobile: true, hasTouch: true, colorScheme: colorScheme || 'dark',
   });
   // Mark the first-run onboarding seen so it doesn't cover the phone UI mid-check
-  // (the 'onboard' check makes its own context to test it fresh).
-  await ctx.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  // (the 'onboard' check makes its own context to test it fresh). Pin the DOM
+  // renderer too (same reason as desktop(): these checks read .xterm-rows text).
+  await ctx.addInitScript(() => {
+    try {
+      localStorage.setItem('ct-onboard', '1');
+      const s = JSON.parse(localStorage.getItem('ct-settings') || '{}'); s.gpuRenderer = false;
+      localStorage.setItem('ct-settings', JSON.stringify(s));
+    } catch (e) {}
+  });
   return ctx.newPage();
 }
 
@@ -1343,11 +1362,17 @@ const SIDEBAR = () => {
 
 check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
   const p = await desktop(browser);
-  // Naming a group goes through a prompt; the harness answers it.
-  const answers = ['Client work'];
-  p.on('dialog', (d) => d.accept(answers.length ? answers.shift() : ''));
   await p.goto(base + '/', { waitUntil: 'domcontentloaded' });
   await p.waitForTimeout(4500);
+  // Naming a group goes through the in-app dialog (window.prompt is dead in
+  // Electron, so it was replaced by promptDialog) — fill + confirm it.
+  const nameGroup = async (name) => {
+    await p.click('#open-newgroup');
+    await p.waitForTimeout(400);
+    await p.fill('#dlg-body .dlg-in', name);
+    await p.click('#dlg-body [data-ok]');
+    await p.waitForTimeout(800);
+  };
 
   const first = await p.evaluate(SIDEBAR);
   t('the sidebar opens on one group, not a terminal list', first.rows.length === 1, first.rows);
@@ -1357,8 +1382,7 @@ check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
   t('that one group owns the one terminal on top', first.shown === 1, first.tabs);
 
   // A second group. Its terminals are a different set from the first group's.
-  await p.click('#open-newgroup');
-  await p.waitForTimeout(1200);
+  await nameGroup('Client work');
   const two = await p.evaluate(SIDEBAR);
   t('the new group appears on the side', two.rows.length === 2 && two.rows.some((r) => r.name === 'Client work'),
     two.rows.map((r) => r.name));
@@ -1422,8 +1446,6 @@ check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
   // context is a fresh browser — one group, one terminal — so the walk starts at
   // the bottom and climbs, which is exactly the back-arrow chain a phone needs.
   const ph = await phoneCtx(browser);
-  const phoneAnswers = ['Phone group'];
-  ph.on('dialog', (d) => d.accept(phoneAnswers.length ? phoneAnswers.shift() : ''));
   await ph.goto(base + '/', { waitUntil: 'domcontentloaded' });
   await ph.waitForTimeout(5000);
   t('a phone with one group and one terminal opens straight into the terminal — a list of one costs a pointless tap',
@@ -1455,8 +1477,11 @@ check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
   t('back again lands on the groups — the top of the phone stack',
     (await ph.evaluate(SIDEBAR)).view === 'projects');
 
-  // A second group, made from the phone, must show up as a second row here.
+  // A second group, made from the phone via the same in-app naming dialog.
   await ph.click('#open-newgroup');
+  await ph.waitForTimeout(400);
+  await ph.fill('#dlg-body .dlg-in', 'Phone group');
+  await ph.click('#dlg-body [data-ok]');
   await ph.waitForTimeout(1200);
   const madeIt = await ph.evaluate(() => ({
     view: document.getElementById('root').getAttribute('data-view'),
@@ -1515,7 +1540,7 @@ check('electron', PORT_GROUPS, async ({ t }) => {
   const res = await new Promise((resolve) => {
     const proc = spawn(electronPath, [main], {
       cwd: ROOT,
-      env: Object.assign({}, process.env, { WINMUX_SMOKE: '1', WINMUX_SMOKE_OUT: outFile }),
+      env: Object.assign({}, process.env, { WINMUX_SMOKE: '1', WINMUX_SMOKE_OUT: outFile, WINMUX_FORCE_DOM: '1' }),
       stdio: 'ignore',
     });
     const timer = setTimeout(() => {
@@ -1823,6 +1848,44 @@ check('update', PORT_UPDATE, async ({ browser, base, t }) => {
   await page.close();
 }, { WINMUX_FAKE_LATEST: '9.9.9' });
 
+// --- gpu: the WebGL renderer is live by default, and the DOM fallback still paints ---
+// The GPU renderer drops the measured 10-stream event-loop tick ~12x (perf.cjs:
+// 199ms -> 16ms), so it ships ON by default. This proves (1) it actually engages,
+// and (2) if WebGL is unavailable the terminal cleanly falls back to the DOM
+// renderer and still shows text — never a blank/broken terminal to "look fast".
+check('gpu', PORT_GPU, async ({ browser, base, t }) => {
+  // Default path: the app default is GPU on, so DON'T use desktop() (which pins
+  // it off) — a raw page that only dismisses onboarding runs the real shipping
+  // default. WebGL available -> the active terminal paints to a <canvas>.
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+  const renderer = await page.evaluate(() => {
+    const canvas = document.querySelector('.xterm-screen canvas, .xterm canvas');
+    return { flagCanvas: !!canvas };
+  });
+  t('WebGL renderer is engaged by default (canvas present)', renderer.flagCanvas, renderer);
+  await page.close();
+
+  // Fallback path: force WebglAddon absent before load -> DOM renderer, still paints.
+  const page2 = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+  await page2.addInitScript(() => {
+    try { localStorage.setItem('ct-onboard', '1'); } catch (e) {}
+    // Make the WebGL addon look unavailable so the try/catch falls back to DOM.
+    Object.defineProperty(window, 'WebglAddon', { value: undefined, configurable: true });
+  });
+  await page2.goto(base, { waitUntil: 'domcontentloaded' });
+  await page2.waitForTimeout(4000);
+  const fb = await page2.evaluate(() => {
+    const rows = document.querySelectorAll('.xterm-rows > div').length;
+    const canvas = document.querySelector('.xterm-screen canvas, .xterm canvas');
+    return { rows, hasCanvas: !!canvas };
+  });
+  t('DOM fallback paints text when WebGL is unavailable (rows, no canvas)', fb.rows > 0 && !fb.hasCanvas, fb);
+  await page2.close();
+});
+
 // --- markdown: the viewer surface renders a file and follows its edits ------
 // `winmux markdown <file>` opens a read surface in the app. The server reads the
 // file (/api/md), the app renders a tiny markdown subset, and it re-pulls on a
@@ -2053,7 +2116,13 @@ check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
   // A check can carry a per-port server env override (e.g. the update check).
   const envByPort = {};
   for (const c of run) if (c.env) envByPort[c.port] = Object.assign({}, envByPort[c.port], c.env);
-  for (const port of ports) servers[port] = await server(port, envByPort[port]);
+  // Force the DOM renderer on every server EXCEPT the gpu check's — that one must
+  // run the shipping WebGL default so the gpu check actually tests it. Everything
+  // else reads .xterm-rows text, which only the DOM renderer fills.
+  for (const port of ports) {
+    const env = Object.assign({}, envByPort[port], port === PORT_GPU ? {} : { WINMUX_FORCE_DOM: '1' });
+    servers[port] = await server(port, env);
+  }
   for (const port of ports) {
     console.log((servers[port].borrowed ? 'using the server already on ' : 'started a server on ') + port);
   }

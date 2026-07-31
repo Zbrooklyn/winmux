@@ -65,7 +65,7 @@
     theme: 'system', palette: 'aurora', fontFamily: 'Cascadia Code', fontSize: 13, lineHeight: 1.2,
     cursorStyle: 'block', cursorBlink: true, scrollback: 5000,
     copyOnSelect: false, rightClickPaste: false, confirmClose: true,
-    defaultShell: '', startFolder: '', gpuRenderer: false,
+    defaultShell: '', startFolder: '', gpuRenderer: true,
   };
   var S = (function () {
     var s = {};
@@ -1236,13 +1236,15 @@
     // renderer badly, measured). Load AFTER open(); fall back to the DOM renderer
     // if a WebGL context can't be created (headless/remote/GPU-less). The buffer
     // API (read-screen, serializeTerm) is renderer-independent, so nothing else moves.
+    term.__winmuxRenderer = 'dom';
     try {
-      if (window.WebglAddon && S.gpuRenderer) {
+      if (window.WebglAddon && S.gpuRenderer && !window.__winmuxForceDom) {
         var webgl = new WebglAddon.WebglAddon();
-        webgl.onContextLoss(function () { try { webgl.dispose(); } catch (e) {} });
+        webgl.onContextLoss(function () { try { webgl.dispose(); } catch (e) {} term.__winmuxRenderer = 'dom'; });
         term.loadAddon(webgl);
+        term.__winmuxRenderer = 'webgl';   // measured 12x fewer event-loop stalls under load
       }
-    } catch (e) { /* DOM renderer stays — perfectly fine, just slower */ }
+    } catch (e) { term.__winmuxRenderer = 'dom'; /* DOM renderer stays — perfectly fine, just slower */ }
     host.addEventListener('contextmenu', function (e) {
       e.preventDefault();
       focusPane(t.paneId);

@@ -764,6 +764,13 @@ function handle(req, res, viaPhone) {
   if (!filePath.startsWith(PUBLIC)) { res.writeHead(403); res.end('Forbidden'); return; }
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); res.end('Not found'); return; }
+    // Harness-only: WINMUX_FORCE_DOM makes the app use the DOM renderer instead of
+    // the shipping WebGL default, so verify.cjs checks that read .xterm-rows text
+    // stay valid (WebGL paints to a <canvas>). Never set in production, so the
+    // phone/browser serving path is byte-identical there.
+    if (process.env.WINMUX_FORCE_DOM && /index\.html$/.test(filePath)) {
+      data = Buffer.from(String(data).replace('</head>', '<script>window.__winmuxForceDom=true;</script></head>'));
+    }
     // Never let a browser hold on to yesterday's app. This is a local server on
     // a fixed port that gets rebuilt constantly, so a cached index.html/app.js
     // shows a version of the app that no longer exists — and the person reads
