@@ -540,6 +540,15 @@
   .sapprove.nc { min-height: 44px; margin: 0 4px; padding: 0 14px; display: inline-flex; align-items: center; font-size: 12.5px; }
   @media (prefers-reduced-motion: reduce) { .sapprove { transition: none; } }
 
+  /* Auto-resume armed marker: a small ↻ next to an armed session's name (sidebar)
+     and a matching accent dot on its tab. Says "this tab comes back on reopen"
+     without shouting. cockpit.css is the frozen contract; this override owns it. */
+  .srow .srtop { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+  .srow .sresume { flex: 0 0 auto; font-size: 11px; line-height: 1; color: var(--accent);
+    opacity: .85; cursor: default; }
+  .ptab.armed .tt::after { content: "↻"; margin-left: 5px; font-size: 10px; color: var(--accent);
+    opacity: .9; vertical-align: 1px; }
+
   .sxpv { position: fixed; top: 0; bottom: 0; left: 264px; width: 320px; z-index: 70;
     background: var(--bg0); border-right: 1px solid var(--border); display: flex; flex-direction: column;
     visibility: hidden; opacity: 0; transform: translateX(-8px);

@@ -76,6 +76,10 @@
     cursorStyle: 'block', cursorBlink: true, scrollback: 5000,
     copyOnSelect: false, rightClickPaste: false, confirmClose: true,
     defaultShell: '', startFolder: '', gpuRenderer: true, osNotify: true, clipSync: false,
+    // Auto-resume: the command an armed tab re-runs in its folder when WinMux
+    // reopens. `claude --continue` resumes that folder's last conversation;
+    // `--dangerously-skip-permissions` is Edward's "yolo remote control".
+    resumeCommand: 'claude --continue --dangerously-skip-permissions',
   };
   // Keys this browser has an explicit stored value for. They win over the on-disk
   // config on reconcile — localStorage is this device's stated choice; disk only
@@ -504,11 +508,25 @@
     if (S.confirmClose && open) confirmDialog(label, open + ' shell process' + (open === 1 ? '' : 'es') + ' will be ended.', 'Close', run);
     else run();
   }
+  // Arm/disarm auto-resume on a tab. Armed = this tab re-runs the resume command
+  // (default `claude --continue`) in its folder the next time WinMux opens. Only
+  // writes the flag + persists; it does NOT run anything now (arming a live Claude
+  // tab shouldn't launch a second one) — the run happens on the next fresh shell.
+  function armResume(t, on, cmd) {
+    t.resume = on ? (cmd || S.resumeCommand || 'claude --continue') : null;
+    if (t.tabEl) t.tabEl.classList.toggle('armed', !!t.resume);
+    persistLive();
+    renderSidebar();
+    var p = paneById(t.paneId); if (p) layoutTabs(p);
+  }
+  window.__winmuxArm = armResume;   // harness hook (3rd arg overrides S.resumeCommand)
+
   function showTabMenu(t, x, y) {
     var p = paneById(t.paneId);
     var m = newMenu();
     addMenuItem(m, 'Change tab color…', '', function () { showTabColorMenu(t, x, y); });
     addMenuItem(m, 'Rename…', '', function () { focusTerm(t.id); startRename(t); });
+    addMenuItem(m, (t.resume ? '✓ Auto-resume on reopen' : 'Auto-resume on reopen'), '', function () { armResume(t, !t.resume); });
     addMenuItem(m, 'Duplicate', '', function () { if (p) { newTerm(p, t.shell, t.cwd); focusPane(p.id); } });
     addMenuItem(m, 'Split tab', 'Ctrl+D', function () { if (p) splitRight(p, t.shell, t.cwd); });
     addMenuItem(m, 'Move to group…', '', function () { showMoveToGroupMenu(t, x, y); });
@@ -725,7 +743,9 @@
     return '<div class="srow"' + (on ? ' data-active' : '') + ' data-term="' + t.id + '">' +
       '<span class="dot ' + dotClass(t) + '"></span>' +
       '<div class="sinfo">' +
-      '<div class="srtop"><span class="sname mono">' + esc(termName(t)) + '</span></div>' +
+      '<div class="srtop"><span class="sname mono">' + esc(termName(t)) + '</span>' +
+      (t.resume ? '<span class="sresume" title="Auto-resumes on reopen: ' + esc(t.resume) + '" aria-label="Auto-resume armed">↻</span>' : '') +
+      '</div>' +
       '<div class="sstat ' + statusTone(t) + '">' + statusLine(t) +
       (t.cwd ? ' · <span class="m2">' + esc(tailPath(t.cwd)) + '</span>' : '') + '</div>' +
       (t.status === 'working' ? '<div class="sbar"><i style="width:' + Math.round(t.prog || 8) + '%"></i></div>' : '') +
@@ -1376,7 +1396,7 @@
   var closedStack = [];
   function recordClosed(p, t) {
     closedStack.push({
-      paneId: p.id, shell: t.shell, cwd: t.cwd,
+      paneId: p.id, shell: t.shell, cwd: t.cwd, resume: t.resume || null,
       name: t.renamed ? t.tabEl.querySelector('.tt').textContent : null,
     });
     if (closedStack.length > 20) closedStack.shift();
@@ -1386,7 +1406,7 @@
     if (!d) return;
     var p = paneById(d.paneId) || paneById(activePaneId) || panes[0];
     if (!p) return;
-    var t = newTerm(p, d.shell, d.cwd);
+    var t = newTerm(p, d.shell, d.cwd, null, d.resume || null);
     if (d.name) { t.tabEl.querySelector('.tt').textContent = d.name; t.renamed = true; renderSidebar(); }
     focusPane(p.id);
   }
@@ -1417,7 +1437,7 @@
     input.addEventListener('mousedown', function (e) { e.stopPropagation(); });
   }
 
-  function newTerm(p, shellKey, cwd, seedSid) {
+  function newTerm(p, shellKey, cwd, seedSid, resumeCmd) {
     shellKey = shellKey || startShell();
     var id = ++termSeq;
     var host = document.createElement('div');
@@ -1509,9 +1529,36 @@
       tabEl: tabEl, dotEl: tabEl.querySelector('.fdot'), progEl: tabEl.querySelector('.tprog'),
       state: 'idle', status: 'idle', sid: seedSid || null, ended: false,
       cwd: null, shell: shellKey, renamed: false, results: null, busyTimer: null, progTimer: null,
+      // Auto-resume: a command WinMux re-runs in this tab's folder when it reopens
+      // (e.g. `claude --continue`). Persisted with the layout; null = not armed.
+      resume: resumeCmd || null, autoResumePending: false, _openedOnce: false,
     };
+    if (t.resume) tabEl.classList.add('armed');   // restored/reopened armed tab shows the ↻ marker
     // A tab can be dragged into another pane, so never close over `p` — look the pane up live.
     function pn() { return paneById(t.paneId) || p; }
+
+    // Auto-resume: when a restored+armed tab gets its first FRESH shell (a cold
+    // reopen where the old shell is gone, or a saved-project template with no live
+    // session), type the resume command once — `cd` is unnecessary because the
+    // shell already spawned in the tab's saved cwd, so this is just `claude
+    // --continue`. One-shot: a warm reattach clears `autoResumePending` without
+    // firing (see the meta handler), so a running agent is never re-typed into.
+    function fireResume() {
+      if (!t.autoResumePending || !t.resume) return;
+      t.autoResumePending = false;
+      try { sendToShell(t, t.resume + '\r'); } catch (e) {}
+    }
+    // A freshly-spawned shell prints its prompt over several output chunks, and its
+    // line editor isn't ready until that has settled — keystrokes sent into the gap
+    // are silently dropped (a fixed delay can't win this race; a slow profile blows
+    // any guess). So wait for QUIET: every output chunk resets this timer, and only
+    // once the shell has produced nothing for a beat do we type the resume command
+    // onto a genuinely ready prompt. Also means we never type into a still-busy shell.
+    function scheduleResume() {
+      if (!t.autoResumePending || !t.resume) return;
+      clearTimeout(t.resumeQuietTimer);
+      t.resumeQuietTimer = setTimeout(fireResume, 650);
+    }
 
     // Shell integration. Modern shells advertise their state through OSC escapes;
     // wiring them is what makes WinMux feel like a real terminal: a new split
@@ -1607,17 +1654,28 @@
             // half-written screen we were left holding.
             term.reset();
             if (told) { term.write('\x1b[90m[reconnected]\x1b[0m\r\n'); told = false; }
+            // Reattached to the still-live shell — never re-run the resume command
+            // (that would type `claude --continue` into an agent already running).
+            t.autoResumePending = false;
           } else if (m.lost) {
             // We asked for a shell that is gone — say so plainly instead of
             // passing this fresh one off as the old one.
             term.write('\r\n\x1b[90m[that session ended — this is a new shell]\x1b[0m\r\n');
             told = false;
           }
+          // The armed resume command fires on the shell's first real OUTPUT (below),
+          // not here — the prompt has to be rendered and ready to receive keystrokes,
+          // and at meta time a freshly-spawned shell hasn't printed its prompt yet.
           renderSidebar();
           return;
         }
         // First real output — the terminal is alive; drop the instant skeleton.
         if (t.skel) { t.skel.remove(); t.skel = null; }
+        // Arm the resume-on-quiet watcher for an armed fresh shell. Each output
+        // chunk pushes the fire back until the prompt has settled, so the command
+        // types onto a ready line. One-shot; a warm reattach cleared the pending
+        // flag in the meta handler, so scheduleResume is a no-op there.
+        scheduleResume();
         term.write(new Uint8Array(ev.data));
         markWorking(t);
         scheduleDoing(t);
@@ -2468,7 +2526,7 @@
             // The group is saved by NAME, not id — ids are per-browser, names are the thing.
             // The session id rides along too, but only for the live-reload snapshot: a
             // saved *layout* is a template, so it drops the sid (see snapshot callers).
-            return { shell: t.shell, cwd: t.cwd || '', group: g ? g.name : '', title: t.renamed ? t.tabEl.querySelector('.tt').textContent : '', sid: t.sid || '' };
+            return { shell: t.shell, cwd: t.cwd || '', group: g ? g.name : '', title: t.renamed ? t.tabEl.querySelector('.tt').textContent : '', sid: t.sid || '', resume: t.resume || '' };
           }),
         });
       });
@@ -2494,12 +2552,13 @@
   // changes, and add a step to migrateLayout() to bring old blobs forward. The
   // point (#212): an update that changes the format must never brick a returning
   // user — old state is upgraded, or safely discarded, never thrown on.
-  var SCHEMA_VERSION = 1;
+  var SCHEMA_VERSION = 2;
   function migrateLayout(desc) {
     if (!desc || typeof desc !== 'object') return null;
     var v = desc.v || 0;                      // pre-versioning blobs are v0 (== v1 shape)
     if (v > SCHEMA_VERSION) return null;       // written by a newer WinMux — don't guess, start clean
-    // Future upgrades chain here, e.g. if (v < 2) desc = up1to2(desc);
+    // v2 added the per-tab `resume` command; an absent field is the correct
+    // "not armed" state, so v0/v1 blobs need no transform to come forward.
     return desc;
   }
   // Restores a layout, and is crash-safe on every path: a bad or future-format
@@ -2533,7 +2592,11 @@
         (pd.tabs || []).forEach(function (td) {
           // td.sid is set only by the live-reload snapshot; connect() will send it
           // and the server reattaches if the shell is still warm, else spawns fresh.
-          var t = newTerm(p, td.shell, td.cwd, td.sid);
+          var t = newTerm(p, td.shell, td.cwd, td.sid, td.resume || null);
+          // A restored+armed tab runs its resume command once, on the first FRESH
+          // shell it gets — a warm reattach (server survived a reload) clears this
+          // without firing, so a live agent is never re-typed into. See fireResume().
+          if (td.resume) t.autoResumePending = true;
           var g = groupByName(td.group);
           if (g) t.groupId = g.id;
           if (td.title) { t.tabEl.querySelector('.tt').textContent = td.title; t.renamed = true; }
@@ -2673,6 +2736,7 @@
         frow('Sync clipboard across devices', 'Copy on this device makes the text available to paste on your phone (and back) over your tailnet. Held in memory only, never saved to disk. Off by default.', sw('clipSync', S.clipSync)) +
         frow('Default shell', 'Used by new tabs and splits', sel('defaultShell', [['', 'First available (' + labelFor(DEFAULT_SHELL) + ')']].concat(SHELLS.map(function (s) { return [s.key, s.label]; })), S.defaultShell)) +
         frow('Start folder', 'Blank = your home folder', '<input class="ctl" type="text" value="' + esc(S.startFolder) + '" data-set="startFolder" placeholder="' + esc(HOME) + '" style="width:230px" spellcheck="false">') +
+        frow('Resume command', 'Run in each armed tab when WinMux reopens (right-click a tab → “Auto-resume on reopen”). Resumes that folder’s last Claude conversation.', '<input class="ctl" type="text" value="' + esc(S.resumeCommand) + '" data-set="resumeCommand" placeholder="claude --continue" style="width:280px" spellcheck="false">') +
         (isEl ? frow('Closing the window', 'Your shells and agents keep running in the background — reopen WinMux to land right back on them. Use this only when you want to stop everything.', '<span class="btn" data-act="quit-server">Quit completely &amp; stop all sessions</span>') : '');
     }
     if (t === 'Phone') return phonePane();

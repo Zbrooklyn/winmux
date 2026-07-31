@@ -96,6 +96,7 @@ const PORT_AGENTSTATE = 9947; // agent: winmux agent <state> flips the session's
 const PORT_AGENTHOOKS = 9948; // agent: the Claude Code hooks preset drives live state
 const PORT_WINGET = 9949;     // distribution: the winget manifest generator emits valid manifests
 const PORT_TUNOVR = 9950;     // #246: the WINMUX_TUNNELLED_PORTS override is honored (no fail-open under load)
+const PORT_RESUME = 9951;     // #240: an armed tab auto-runs its resume command on a cold reopen, not on a warm reattach
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
@@ -2780,6 +2781,76 @@ check('md-rich', PORT_MDRICH, async ({ browser, base, t, shot }) => {
     !!r && r.boxes.length === 2 && r.boxes[0] === false && r.boxes[1] === true, r && r.boxes);
   t('an image renders inline with its src', !!r && /pic\.png$/.test(String(r.imgSrc)), r && r.imgSrc);
   await shot(page, 'md-rich');
+  await page.close();
+});
+
+// #240 — save-project auto-resume. Arm a tab (it stores a resume command); on a
+// COLD reopen (the saved session id is gone, the exact case after you X out and
+// relaunch) the fresh shell auto-runs the command — Edward's `cd folder; claude
+// --continue`. On a WARM reattach (the shell survived, e.g. a page reload) it must
+// NOT re-type the command into a still-running agent. The resume command is the
+// configurable S.resumeCommand; the test swaps in a harmless echo sentinel so it
+// proves the wiring without needing a `claude` binary.
+const RESUME_SENTINEL = '__WINMUX_RESUMED__';
+check('resume', PORT_RESUME, async ({ browser, base, t, shot }) => {
+  const readScreen = () => page.evaluate(() => {
+    const at = window.__winmuxActiveTerm(); if (!at) return '';
+    const b = at.term.buffer.active; let out = '';
+    for (let i = 0; i < b.length; i++) { const ln = b.getLine(i); if (ln) out += ln.translateToString(true) + '\n'; }
+    return out;
+  });
+
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);
+
+  // Arm the active tab with the sentinel resume command.
+  const armed = await page.evaluate((cmd) => {
+    const at = window.__winmuxActiveTerm();
+    window.__winmuxArm(at, true, 'echo ' + cmd);
+    const live = JSON.parse(localStorage.getItem('ct-live') || 'null');
+    let stored = '';
+    try { stored = live.cols[0][0].tabs[0].resume; } catch (e) {}
+    return { resume: at.resume, sid: at.sid, stored: stored };
+  }, RESUME_SENTINEL);
+  t('arming a tab stores its resume command in the live layout',
+    armed.resume === 'echo ' + RESUME_SENTINEL && armed.stored === 'echo ' + RESUME_SENTINEL, armed);
+
+  // Phase 1 — WARM reattach: reload while the shell is still alive on the server
+  // (well within the grace window). The tab reattaches; the resume command must
+  // NOT run again (it would launch a second Claude into a live agent).
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);
+  const warm = await readScreen();
+  t('a warm reattach does NOT re-run the resume command',
+    warm.indexOf(RESUME_SENTINEL) < 0, { tail: warm.slice(-160) });
+  const stillArmed = await page.evaluate(() => {
+    const at = window.__winmuxActiveTerm(); return { resume: at && at.resume, pending: at && at.autoResumePending };
+  });
+  t('the tab stays armed after a warm reattach (still resumes next cold reopen)',
+    stillArmed.resume === 'echo ' + RESUME_SENTINEL && stillArmed.pending === false, stillArmed);
+
+  // Phase 2 — COLD reopen: poison the LIVE term's session id so that when this
+  // reload's beforeunload persists the layout, it stores an id the server can't
+  // resolve — exactly the real close-the-app-then-relaunch case (the old shell is
+  // gone, its saved id no longer resolves). The reattach then fails (m.lost), a
+  // fresh shell spawns, and the armed resume command must run in it.
+  await page.evaluate(() => {
+    const at = window.__winmuxActiveTerm();
+    at.sid = 'deadbeefdeadbeefdeadbeefdeadbeef';
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(5000);
+  const cold = await readScreen();
+  t('a cold reopen (session gone) auto-runs the resume command in the fresh shell',
+    cold.indexOf(RESUME_SENTINEL) >= 0, { tail: cold.slice(-200) });
+  const consumed = await page.evaluate(() => {
+    const at = window.__winmuxActiveTerm(); return { resume: at && at.resume, pending: at && at.autoResumePending };
+  });
+  t('resume fires once then clears its pending flag, keeping the arm for next time',
+    consumed.pending === false && consumed.resume === 'echo ' + RESUME_SENTINEL, consumed);
+
+  await shot(page, 'resume');
   await page.close();
 });
 

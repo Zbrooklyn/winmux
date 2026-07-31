@@ -925,6 +925,21 @@ systems**: the same file the GUI save/load reads/writes is the one `winmux open`
 4. **Unify now or later?** Fold the GUI localStorage layouts into the file format now (one system),
    or ship files alongside and migrate later. Recommend: unify — two systems is the current bug.
 
+### DELIVERED — save-project + auto-resume (the slice Edward asked for)
+Plan: `docs/superpowers/plans/2026-07-31-winmux-save-project-auto-resume.md`. The G-lifecycle
+piece Edward actually wanted: each tab can be **armed** (tab menu → "Auto-resume on reopen", or the
+↻ marker) to store a **resume command** (default `claude --continue --dangerously-skip-permissions`,
+configurable in Settings → Behaviour). Closing WinMux ends the shells; reopening auto-runs the
+command in each armed tab's saved folder — Edward's `cd folder; claude --continue`. Rides the
+existing `ct-live`/named-layout save + the reattach/`m.lost` seam: a warm reattach (page reload,
+server survived) lands back live and does NOT re-run; a cold reopen (app closed, shell gone) runs
+the resume command on a fresh shell. Fires on shell-quiet (prompt ready), not a fixed delay — a
+fixed delay would drop the command on a slow shell (caught + fixed in verify). Schema v1→v2
+(`resume` field; old blobs migrate as "not armed"). Harness: `resume` check (5/5 green). Owner
+decisions 1–4 above (flat/nested, file location, per-machine paths, unify) remain open for the
+FULL file-based config-as-code system — this slice delivers the auto-resume behaviour on the
+existing localStorage layout store without pre-deciding them.
+
 ## Upcoming phases (roadmap — not yet built)
 
 The three faces, the CLI, the browser panel, and the markdown viewer are done and
