@@ -1309,6 +1309,41 @@
     // A tab can be dragged into another pane, so never close over `p` — look the pane up live.
     function pn() { return paneById(t.paneId) || p; }
 
+    // Shell integration. Modern shells advertise their state through OSC escapes;
+    // wiring them is what makes WinMux feel like a real terminal: a new split
+    // inherits the shell's real cwd, command boundaries are captured, and the
+    // shell can name its own tab. xterm handles OSC 0/2 (title) itself and fires
+    // onTitleChange; OSC 7 (cwd) and OSC 133 (marks) are ours to parse.
+    term.parser.registerOscHandler(7, function (data) {
+      // OSC 7 ; file://HOST/PATH — the shell's current working directory.
+      try {
+        var m = /^file:\/\/[^\/]*(\/.*)$/.exec(data || '');
+        if (m) {
+          var path = decodeURIComponent(m[1]);
+          if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1);   // /C:/x -> C:/x (Windows)
+          t.cwd = path;
+          renderSidebar();
+        }
+      } catch (e) {}
+      return true;
+    });
+    term.parser.registerOscHandler(133, function (data) {
+      // OSC 133 ; A|B|C|D — FinalTerm/iTerm2 prompt & command boundary marks.
+      var kind = (data || '').charAt(0);
+      if ('ABCD'.indexOf(kind) >= 0) {
+        if (!t.marks) t.marks = [];
+        if (t.marks.length > 500) t.marks.shift();
+        try { t.marks.push({ k: kind, y: term.buffer.active.baseY + term.buffer.active.cursorY }); } catch (e) { t.marks.push({ k: kind }); }
+      }
+      return true;
+    });
+    // OSC 0/2 auto-title: the shell names the tab, unless the user renamed it by hand.
+    term.onTitleChange(function (title) {
+      if (!title || t.renamed) return;
+      t.autoTitle = title;
+      if (ttEl) ttEl.textContent = title;
+    });
+
     // Right-click the tab opens its full session menu (rename, colour, split, move,
     // export, find, the close family). Session controls live here, not on the toolbar.
     // Drop it from the tab's bottom edge, not the cursor Y — otherwise the menu opens

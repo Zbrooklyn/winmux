@@ -2007,14 +2007,30 @@ check('parity', PORT_PARITY, async ({ browser, base, t, shot }) => {
     const at = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
     if (!at || !at.term) return { ok: false };
     try { at.term.write('Docs: https://github.com/Zbrooklyn/winmux  (Ctrl+click to open)\r\n'); } catch (e) {}
+    // Shell integration: emit the OSC escapes a real shell would, then read what
+    // WinMux captured. \x1b]7 = cwd, \x1b]133;A = a prompt mark, \x1b]2 = title.
+    try {
+      at.term.write('\x1b]7;file://desktop/C:/Windows/System32\x07');
+      at.term.write('\x1b]133;A\x07');
+      at.term.write('\x1b]2;WinMux Parity Demo\x07');
+    } catch (e) {}
+    await new Promise((r) => setTimeout(r, 400));
+    const tt = at.tabEl && at.tabEl.querySelector('.tt');
     return {
       ok: true,
       webLinks: at.term.__winmuxWebLinks === true,
       unicode: at.term.unicode && at.term.unicode.activeVersion,
+      cwd: at.cwd,
+      marks: (at.marks || []).map((m) => m.k),
+      autoTitle: at.autoTitle,
+      tabLabel: tt ? tt.textContent : null,
     };
   });
   t('the web-links addon is loaded on the live terminal', st.ok && st.webLinks === true, st);
   t('unicode 11 width tables are active on the terminal', st.unicode === '11', st);
+  t('OSC-7 sets the shell cwd (new splits inherit it)', st.ok && /Windows[\\/]+System32/i.test(st.cwd || ''), st);
+  t('OSC-133 command marks are captured', st.ok && (st.marks || []).indexOf('A') >= 0, st);
+  t('OSC-0/2 auto-titles the tab', st.tabLabel === 'WinMux Parity Demo', st);
   await page.waitForTimeout(400);
   await shot(page, 'parity-links');
   await page.close();
