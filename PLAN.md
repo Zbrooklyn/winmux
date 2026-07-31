@@ -850,9 +850,9 @@ status`, clean-JSON CLI, pty pre-warm, atomic trust write, graceful shutdown, wo
 - Connection-status honesty (calm connected/reconnecting/offline) — **S–M `[G]`**.
 
 **P3 — Polish / cheap add-ons:**
-- Browser automation verbs (type/fill/get-text/eval/wait) — **S `[B]`**. Free, rides the webview.
-- Markdown richness (tables, links, images, syntax highlight, scroll-preserve) — **S–M `[G]`**.
-- Paste-safety guard · terminal reset · block/word selection · command marks/rerun — **S–M**.
+- ✅ **DONE (item 7, 2026-07-31)** Browser automation verbs (type/fill/get-text/eval/scroll) — wmux-parity set over the webview, in CLI + MCP; electron smoke 15/15 (commit adb380a).
+- ✅ **DONE (item 7, 2026-07-31)** Markdown richness — GFM tables + task-list checkboxes + inline images in the viewer; `md-rich` check (commit a052328). (Syntax-highlight still open, low value.)
+- ✅ **DONE (item 7, 2026-07-31)** Terminal reset + command-marks (jump prev/next OSC-133 prompt, remappable + menu); `marks` check 3/3 (commit 71dd6ae). Paste-safety + block/word selection already shipped earlier.
 - Config migration · diagnostics/copy-logs · pre-warm pool >1 — **S `[B]`**.
 
 **P4 — Deferred / post-v1.0:**

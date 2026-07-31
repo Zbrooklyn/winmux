@@ -38,12 +38,12 @@
 
 **Done-criteria:** A markdown file containing a pipe table, a `- [ ]`/`- [x]` task list, and an `![alt](img)` renders as a real HTML table, disabled checkboxes reflecting checked state, and an inline image — verified in the live viewer DOM.
 
-- [ ] `mdInline`: add image rule `!\[([^\]]*)\]\(([^)]+)\)` → `<img>` BEFORE the link rule.
-- [ ] `mdRender`: recognise a task-list line (`^\s*[-*+]\s+\[( |x|X)\]\s+`) inside the existing ul branch → `<li class="task"><input type="checkbox" disabled` + `checked` when `x`/`X` + label.
-- [ ] `mdRender`: GFM table — a header line, a `---|---` separator line, then body rows of `| a | b |`; close any open list first; emit thead/tbody. A non-table line ends the table.
-- [ ] `index.html` override CSS: table borders/padding, `.task` list-style none + gap, `img` max-width 100%.
-- [ ] `md-rich` harness check (new PORT) — feed a fixture doc, assert table cells, checkbox states, img src on the rendered `.wmm-body`.
-- [ ] Screenshot: the viewer showing a table + task list + image. Commit + push.
+- [x] `mdInline`: add image rule `!\[([^\]]*)\]\(([^)]+)\)` → `<img>` BEFORE the link rule.
+- [x] `mdRender`: recognise a task-list line (`^\s*[-*+]\s+\[( |x|X)\]\s+`) inside the existing ul branch → `<li class="task"><input type="checkbox" disabled` + `checked` when `x`/`X` + label.
+- [x] `mdRender`: GFM table — a header line, a `---|---` separator line, then body rows of `| a | b |`; close any open list first; emit thead/tbody. A non-table line ends the table.
+- [x] `index.html` override CSS: table borders/padding, `.task` list-style none + gap, `img` max-width 100%.
+- [x] `md-rich` harness check (new PORT) — feed a fixture doc, assert table cells, checkbox states, img src on the rendered `.wmm-body`.
+- [x] Screenshot: the viewer showing a table + task list + image. Commit + push.
 
 ### Task 2: Browser automation verbs — type / fill / get-text / eval / scroll
 
@@ -59,11 +59,11 @@
 
 **Done-criteria:** From the `winmux` CLI (and MCP), an agent can type into a field, read the page's text, run a snippet, and scroll — same verb surface as the wmux browser commands — proven against a live webview.
 
-- [ ] `app.js`: `TYPE_JS`/`FILL_JS`/`GETTEXT_JS`/`SCROLL_JS` helpers + the five `sub===` branches in `runControl` browser; keep the Electron guard; `eval` wraps user JS so the return is JSON-serialisable (stringify fallback).
-- [ ] `bin/winmux.cjs`: the five CLI verbs + updated usage/help + the `(open|snapshot|click|…|type|fill|get-text|eval|scroll)` error list.
-- [ ] `bin/winmux-mcp.cjs`: extend `winmux_browser` schema (`text`,`value`,`js`,`amount`) + desc listing the verbs.
-- [ ] `browser-verbs` harness check (Electron-gated; skips cleanly when Electron unavailable, like the `browser` check) — type→assert value, get-text→assert substring, eval→assert result, scroll→assert scrollY moved.
-- [ ] Screenshot (or, if Electron-headless can't render, the harness pass output) shipped. Commit + push.
+- [x] `app.js`: `TYPE_JS`/`FILL_JS`/`GETTEXT_JS`/`SCROLL_JS` helpers + the five `sub===` branches in `runControl` browser; keep the Electron guard; `eval` wraps user JS so the return is JSON-serialisable (stringify fallback).
+- [x] `bin/winmux.cjs`: the five CLI verbs + updated usage/help + the `(open|snapshot|click|…|type|fill|get-text|eval|scroll)` error list.
+- [x] `bin/winmux-mcp.cjs`: extend `winmux_browser` schema (`text`,`value`,`js`,`amount`) + desc listing the verbs.
+- [x] `browser-verbs` harness check (Electron-gated; skips cleanly when Electron unavailable, like the `browser` check) — type→assert value, get-text→assert substring, eval→assert result, scroll→assert scrollY moved.
+- [x] Screenshot (or, if Electron-headless can't render, the harness pass output) shipped. Commit + push.
 
 ### Task 3: Terminal command-marks navigation + reset
 
@@ -78,11 +78,11 @@
 
 **Done-criteria:** With prompt marks present, prev/next-prompt jumps scroll the viewport to the surrounding command boundaries; a Reset terminal action clears the screen and scrollback — both reachable from the keyboard (remappable) and the menu, proven in the harness.
 
-- [ ] `jumpMark(t, dir)`: filter `t.marks` to prompt marks (`k==='A'`), pick the nearest above/below the current `viewportY+baseY`, `term.scrollToLine`; no-op safely when no marks.
-- [ ] `resetTerm(t)`: `term.reset()` (+ `term.clear()` fallback); leave the shell/socket untouched (visual reset only).
-- [ ] Register `jump-prev-mark`/`jump-next-mark`/`reset-terminal` in `ACTIONS` (remappable) + add "Reset terminal" to the term menu near "Select all"; `__winmuxJumpMark`/`__winmuxResetTerm` hooks.
-- [ ] `marks` harness check (new PORT): seed marks, assert jump lands on the mark line; assert reset clears the buffer.
-- [ ] Screenshot: term menu showing "Reset terminal" (+ a jumped viewport). Commit + push.
+- [x] `jumpMark(t, dir)`: filter `t.marks` to prompt marks (`k==='A'`), pick the nearest above/below the current `viewportY+baseY`, `term.scrollToLine`; no-op safely when no marks.
+- [x] `resetTerm(t)`: `term.reset()` (+ `term.clear()` fallback); leave the shell/socket untouched (visual reset only).
+- [x] Register `jump-prev-mark`/`jump-next-mark`/`reset-terminal` in `ACTIONS` (remappable) + add "Reset terminal" to the term menu near "Select all"; `__winmuxJumpMark`/`__winmuxResetTerm` hooks.
+- [x] `marks` harness check (new PORT): seed marks, assert jump lands on the mark line; assert reset clears the buffer.
+- [x] Screenshot: term menu showing "Reset terminal" (+ a jumped viewport). Commit + push.
 
 ---
 
