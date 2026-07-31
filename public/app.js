@@ -2352,9 +2352,11 @@
         frow('Right-click pastes', 'Otherwise right-click opens the menu', sw('rightClickPaste', S.rightClickPaste));
     }
     if (t === 'Behaviour') {
+      var isEl = !!(window.winmux && window.winmux.isElectron);
       return frow('Confirm before closing', 'Ask before ending a running shell', sw('confirmClose', S.confirmClose)) +
         frow('Default shell', 'Used by new tabs and splits', sel('defaultShell', [['', 'First available (' + labelFor(DEFAULT_SHELL) + ')']].concat(SHELLS.map(function (s) { return [s.key, s.label]; })), S.defaultShell)) +
-        frow('Start folder', 'Blank = your home folder', '<input class="ctl" type="text" value="' + esc(S.startFolder) + '" data-set="startFolder" placeholder="' + esc(HOME) + '" style="width:230px" spellcheck="false">');
+        frow('Start folder', 'Blank = your home folder', '<input class="ctl" type="text" value="' + esc(S.startFolder) + '" data-set="startFolder" placeholder="' + esc(HOME) + '" style="width:230px" spellcheck="false">') +
+        (isEl ? frow('Closing the window', 'Your shells and agents keep running in the background — reopen WinMux to land right back on them. Use this only when you want to stop everything.', '<span class="btn" data-act="quit-server">Quit completely &amp; stop all sessions</span>') : '');
     }
     if (t === 'Phone') return phonePane();
     if (t === 'Shortcuts') {
@@ -2585,6 +2587,13 @@
       confirmDialog('Reset settings?', 'Fonts, cursor, scrollback and behaviour go back to their defaults.', 'Reset', function () {
         for (var k in DEFAULTS) S[k] = DEFAULTS[k];
         applyTheme(S.theme); applySettings(); renderSettings();
+      });
+    }
+    if (a === 'quit-server') {
+      confirmDialog('Quit WinMux completely?', 'This stops the background server and ends every running shell and agent on this machine. Just closing the window leaves them running.', 'Quit & stop all', function () {
+        // Ask the server to stop (it replies before exiting), then close the window.
+        var done = function () { var b = winBridge(); if (b && b.close) b.close(); else window.close(); };
+        fetch('/api/shutdown', { method: 'POST' }).then(done, done);
       });
     }
   });
