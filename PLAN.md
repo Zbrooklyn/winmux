@@ -815,8 +815,15 @@ status`, clean-JSON CLI, pty pre-warm, atomic trust write, graceful shutdown, wo
 - Terminal-parity pass — GPU renderer + bundle font/Nerd-glyphs + ligatures + unicode11 +
   screenReaderMode — **L `[B]`**. Fixes the *measured* 10-session jank AND the clean-install
   Consolas/tofu bug. Interlocks via the renderer + a harness migration; its own session.
+  **STATUS:** GPU + font bundle + instant-feel + flake-fix DONE (Phases 0-4). Ride-along DONE
+  bar ligatures: clickable links/OSC-8 + unicode11 (`ea3e1e1`), shell integration OSC-7 cwd /
+  OSC-133 marks / OSC-0-2 auto-title (`6900512`). Ligatures (T4) is **owner-gated** — GPU vs
+  DOM-renderer tradeoff, decision packet open (default-off recommended). Plan:
+  `docs/superpowers/plans/2026-07-31-winmux-terminal-parity.md`.
 - Session survival — detached server the app attaches to — **M–L `[B]`**. Closing never kills
-  live agents; biggest "real software" gap; de-risks the 10-agent workload.
+  live agents; biggest "real software" gap; de-risks the 10-agent workload. **STATUS: DONE**
+  (`d3e63a4`) — detached Electron-run-as-Node server + reattach + "Quit completely" control,
+  `detach` regression check green.
 - node-pty native-module handling in the build — **M `[B]`**. The #1 way an Electron terminal
   fails to even start on someone else's machine (OSS-launch killer).
 - Security hardening — server input safety (`/rpc`, findpath) + scrollback-as-secrets decision —

@@ -81,6 +81,7 @@ const PORT_FONT = 9931;
 const PORT_INSTANT = 9932;
 const PORT_SURVIVE2 = 9933;   // registered port (runner boots a throwaway here)
 const PORT_PARITY = 9934;     // terminal-parity addons (web-links, unicode11)
+const PORT_NOTIFY = 9935;     // attention bus: `winmux notify` flips a session to needs-you
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1990,6 +1991,42 @@ check('detach', PORT_SURVIVE2, async ({ t }) => {
     if (boundPort) { try { await shutdownServer(boundPort); } catch (e) {} }
     try { fs.unlinkSync(instanceFile); } catch (e) {}
   }
+});
+
+// --- notify: an agent flips a session to "needs you" via the CLI -----------
+// The attention bus's explicit signal. `winmux notify --id <n> <msg>` marks that
+// session needs-you exactly like a bell would — the counter, the row's Approve,
+// and (unfocused) the desktop notification all follow. Driven through the real
+// CLI -> /rpc -> /control path, like the `cli` check.
+check('notify', PORT_NOTIFY, async ({ browser, base, t, shot }) => {
+  const winmux = (a) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...a],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_NOTIFY), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = ''; proc.stdout.on('data', (d) => o += d); proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);   // the app connects to /control
+
+  const before = await page.evaluate(() => {
+    const at = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
+    const need = document.getElementById('d-need');
+    return { status: at && at.status, need: need ? need.textContent.trim() : null };
+  });
+  const r = await winmux(['notify', 'the deploy needs your call']);
+  t('notify exits clean and names the session', r.code === 0, r.err || r.out);
+  await page.waitForTimeout(600);
+  const after = await page.evaluate(() => {
+    const at = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
+    const need = document.getElementById('d-need');
+    const approve = document.querySelector('[data-approve]');
+    return { status: at && at.status, need: need ? need.textContent.trim() : null, hasApprove: !!approve };
+  });
+  t('the targeted session flips to needs-you', after.status === 'needsyou', { before, after });
+  t('the NEEDS YOU counter and an Approve control appear', after.need === '1' && after.hasApprove, after);
+  await shot(page, 'notify-needsyou');
+  await page.close();
 });
 
 // --- parity: modern-terminal addons are loaded on the live terminal --------

@@ -72,6 +72,7 @@ const HELP = [
   '  send <text> [--id N] [--enter]   type text into a terminal (default: active)',
   '  read-screen [--id N] [--lines N] print a terminal\'s visible text',
   '  focus <id>                       focus a terminal',
+  '  notify [--id N] <message>        flag a session as needing you (attention bus)',
   '',
   '  browser open <url>               open the browser panel at a URL (desktop app)',
   '  browser snapshot                 list the page\'s interactive elements as @refs',
@@ -138,6 +139,19 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
       return out(r.screen);
     }
     if (cmd === 'focus') { if (!argv[1]) die('focus needs a terminal id'); return emit('focused ' + argv[1], await rpc('focus', { target: argv[1] })); }
+    if (cmd === 'notify') {
+      // Attention bus: mark a session as needing Edward. Message is the free text
+      // after the verb; --id targets a specific session, else the active one.
+      const words = [];
+      for (let i = 1; i < argv.length; i++) {
+        if (argv[i] === '--id') { i++; continue; }   // skip flag + its value
+        if (argv[i] === '--json') continue;
+        words.push(argv[i]);
+      }
+      const msg = words.join(' ') || 'needs your attention';
+      const r = await rpc('notify', { message: msg, target: flag(argv, '--id') });
+      return emit('flagged session ' + (r && r.id != null ? r.id : '') + ' as needing you', r);
+    }
     if (cmd === 'browser') {
       const sub = argv[1] || 'open';
       if (sub === 'open') { if (!argv[2]) die('browser open needs a URL'); return out(await rpc('browser', { sub: 'open', url: argv[2] })); }

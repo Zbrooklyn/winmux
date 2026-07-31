@@ -3345,6 +3345,18 @@
       if (pf) { activateTerm(pf, tf.id); focusPane(pf.id); }
       return { id: tf.id };
     }
+    if (cmd === 'notify') {
+      // Attention bus: an agent/script explicitly says "this session needs you".
+      // Targets a session by id/title, or the active one, and escalates it exactly
+      // like a bell would — the NEEDS YOU counter, the row's Approve, and (when the
+      // window is unfocused) the desktop notification all follow from setStatus.
+      var tnfy = args.target ? termByTarget(args.target) : activeTerm();
+      if (!tnfy) throw new Error('no such terminal');
+      var nmsg = String(args.message == null ? 'needs your attention' : args.message);
+      if (tnfy.status !== 'needsyou') setStatus(tnfy, 'needsyou');
+      notify(termName(tnfy) + ' needs you', nmsg, tnfy.id);
+      return { id: tnfy.id, notified: true };
+    }
     if (cmd === 'browser') {
       if (!isElectronApp()) throw new Error('the browser panel needs the WinMux desktop app');
       var sub = args.sub || 'open';
