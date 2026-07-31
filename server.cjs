@@ -190,6 +190,12 @@ function phoneURL() {
   return phone.on ? 'http://' + phone.ip + ':' + PORT + '/?k=' + phone.token : '';
 }
 
+// Cross-device clipboard (opt-in). Holds only the most recently copied text, in
+// memory — never written to disk — so a copy on the PC can be pulled on the phone
+// over the tailnet and back. Ephemeral and small; a client only touches it when
+// the user has turned "Sync clipboard across devices" on (default off).
+let CLIP = { text: '', at: 0 };
+
 function tokenFrom(req) {
   try {
     const k = new URL(req.url, 'http://x').searchParams.get('k');
@@ -658,6 +664,29 @@ function handle(req, res, viaPhone) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(Object.assign({ cwd }, payload)));
     });
+    return;
+  }
+
+  // Cross-device clipboard (opt-in). POST { text } stores the latest clip in
+  // memory; GET returns it. Allowed over the tailnet on purpose — that is the whole
+  // point (copy on the PC, paste on the phone) — and safe because it only ever hands
+  // back text a client chose to sync, never touches the disk, and the client only
+  // uses it when the toggle is on. Size-capped so it can't be used to hoard memory.
+  if (urlPath === '/api/clip') {
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (d) => { body += d; if (body.length > 200000) req.destroy(); });
+      req.on('end', () => {
+        let text = '';
+        try { text = String((JSON.parse(body || '{}') || {}).text || ''); } catch (e) {}
+        CLIP = { text: text.slice(0, 100000), at: Date.now() };
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok: true, at: CLIP.at, len: CLIP.text.length }));
+      });
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ ok: true, text: CLIP.text, at: CLIP.at }));
     return;
   }
 

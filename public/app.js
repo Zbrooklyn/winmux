@@ -65,7 +65,7 @@
     theme: 'system', palette: 'aurora', fontFamily: 'Cascadia Code', fontSize: 13, lineHeight: 1.2,
     cursorStyle: 'block', cursorBlink: true, scrollback: 5000,
     copyOnSelect: false, rightClickPaste: false, confirmClose: true,
-    defaultShell: '', startFolder: '', gpuRenderer: true, osNotify: true,
+    defaultShell: '', startFolder: '', gpuRenderer: true, osNotify: true, clipSync: false,
   };
   var S = (function () {
     var s = {};
@@ -233,7 +233,25 @@
     var r = anchor.getBoundingClientRect();
     placeMenu(m, r.left, r.bottom + 4);
   }
-  function copySel(t) { try { var s = t.term.getSelection(); if (s && navigator.clipboard) navigator.clipboard.writeText(s); } catch (e) {} }
+  // Cross-device clipboard (opt-in, default off). When on, a copy also pushes the
+  // text to the server's in-memory clip so another device on the tailnet can pull
+  // it; "Paste from other device" pulls the latest. Same-origin fetch carries the
+  // phone cookie, so it authenticates over the tailnet exactly like the rest.
+  function postClip(text) {
+    if (!S.clipSync || !text) return;
+    try {
+      fetch('/api/clip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: String(text) }) }).catch(function () {});
+    } catch (e) {}
+  }
+  function pasteFromOtherDevice(t) {
+    if (!t) return;
+    try {
+      fetch('/api/clip', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+        if (j && j.ok && j.text) { deliverPaste(t, j.text); try { t.term.focus(); } catch (e) {} }
+      }).catch(function () {});
+    } catch (e) {}
+  }
+  function copySel(t) { try { var s = t.term.getSelection(); if (s) { if (navigator.clipboard) navigator.clipboard.writeText(s); postClip(s); } } catch (e) {} }
   // Paste safety (#214). A pasted block with newlines runs every line as its own
   // command the instant it lands — a footgun, and a worse one in front of an
   // agent. A single trailing newline (paste one command + run it) is fine; two
@@ -276,6 +294,7 @@
     var hasSel = false; try { hasSel = !!t.term.getSelection(); } catch (e) {}
     if (hasSel) addMenuItem(m, 'Copy', 'Ctrl+Shift+C', function () { copySel(t); });
     addMenuItem(m, 'Paste', 'Ctrl+Shift+V', function () { pasteInto(t); });
+    if (S.clipSync) addMenuItem(m, 'Paste from other device', '', function () { pasteFromOtherDevice(t); });
     addMenuItem(m, 'Select all', '', function () { try { t.term.selectAll(); } catch (e) {} });
     addMenuItem(m, 'Clear', '', function () { try { t.term.clear(); t.term.focus(); } catch (e) {} });
     addMenuItem(m, 'Find…', 'Ctrl+F', function () { openFind(p); });
@@ -2479,6 +2498,7 @@
       var isEl = !!(window.winmux && window.winmux.isElectron);
       return frow('Confirm before closing', 'Ask before ending a running shell', sw('confirmClose', S.confirmClose)) +
         frow('Desktop notifications', 'Alert you when a session needs you and WinMux is not the window you are looking at', sw('osNotify', S.osNotify)) +
+        frow('Sync clipboard across devices', 'Copy on this device makes the text available to paste on your phone (and back) over your tailnet. Held in memory only, never saved to disk. Off by default.', sw('clipSync', S.clipSync)) +
         frow('Default shell', 'Used by new tabs and splits', sel('defaultShell', [['', 'First available (' + labelFor(DEFAULT_SHELL) + ')']].concat(SHELLS.map(function (s) { return [s.key, s.label]; })), S.defaultShell)) +
         frow('Start folder', 'Blank = your home folder', '<input class="ctl" type="text" value="' + esc(S.startFolder) + '" data-set="startFolder" placeholder="' + esc(HOME) + '" style="width:230px" spellcheck="false">') +
         (isEl ? frow('Closing the window', 'Your shells and agents keep running in the background — reopen WinMux to land right back on them. Use this only when you want to stop everything.', '<span class="btn" data-act="quit-server">Quit completely &amp; stop all sessions</span>') : '');
@@ -2825,6 +2845,7 @@
       { cat: 'Terminal', name: 'Clear terminal', run: function () { var t = activeTerm(); if (t) { t.term.clear(); t.term.focus(); } } },
       { cat: 'Terminal', name: 'Copy selection', kbd: 'Ctrl+Shift+C', run: function () { var t = activeTerm(); if (t) copySel(t); } },
       { cat: 'Terminal', name: 'Paste', kbd: 'Ctrl+Shift+V', run: function () { var t = activeTerm(); if (t) pasteInto(t); } },
+      { cat: 'Terminal', name: 'Paste from other device (clipboard sync)', run: function () { var t = activeTerm(); if (t) pasteFromOtherDevice(t); } },
       { cat: 'Terminal', name: 'Rename tab', run: function () { var t = activeTerm(); if (t) startRename(t); } },
       { cat: 'Terminal', name: 'Find in terminal', kbd: 'Ctrl+F', run: function () { var p = paneById(activePaneId); if (p) openFind(p); } },
       { cat: 'Terminal', name: 'Copy mode — select scrollback with the keyboard', kbd: 'Ctrl+Shift+M', run: enterCopyMode },

@@ -85,6 +85,7 @@ const PORT_NOTIFY = 9935;     // attention bus: `winmux notify` flips a session 
 const PORT_OSNOTIFY = 9936;   // attention bus: OS notification fires only when unfocused
 const PORT_MCP = 9937;        // winmux-mcp: an MCP client drives the live app over stdio
 const PORT_DOING = 9938;      // cockpit: a session row shows a live "what's it doing" line
+const PORT_CLIP = 9939;       // cockpit: cross-device clipboard round-trips through /api/clip
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -2213,6 +2214,25 @@ check('doing', PORT_DOING, async ({ browser, base, t, shot }) => {
   await page.waitForTimeout(300);
   await shot(page, 'doing-activity-line');
   await page.close();
+});
+
+// --- clip: the cross-device clipboard round-trips through /api/clip ----------
+// The opt-in clipboard-sync differentiator: a copy on one device POSTs the text
+// to the server's in-memory clip, and another device GETs it — so copy-on-PC,
+// paste-on-phone works over the tailnet without the text ever touching disk. This
+// check drives the raw endpoint (the client only calls it when the toggle is on):
+// POST stores it, GET returns exactly it, and an oversized clip is capped.
+check('clip', PORT_CLIP, async ({ base, t }) => {
+  const marker = 'CLIP_SYNC_9939_hello_from_the_pc';
+  const post = await fetch(base + '/api/clip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: marker }) }).then((r) => r.json()).catch((e) => ({ error: String(e) }));
+  t('POST /api/clip stores the copied text', post && post.ok === true && post.len === marker.length, post);
+  const got = await fetch(base + '/api/clip', { cache: 'no-store' }).then((r) => r.json()).catch((e) => ({ error: String(e) }));
+  t('GET /api/clip returns the same text (copy here, paste there)', got && got.ok === true && got.text === marker, got);
+  // A clip under the raw-body wall but over the store cap is truncated, never
+  // stored whole — the endpoint can't be used to hoard memory.
+  const big = 'y'.repeat(150000);
+  const cap = await fetch(base + '/api/clip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: big }) }).then((r) => r.json()).catch((e) => ({ error: String(e) }));
+  t('an oversized clip is capped at 100k, not stored whole', cap && cap.ok === true && cap.len === 100000, cap);
 });
 
 // --- markdown: the viewer surface renders a file and follows its edits ------

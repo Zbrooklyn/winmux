@@ -69,10 +69,20 @@
 
 **Done-criteria:** With the toggle on, copying on the PC makes the text available to pull on the phone (and vice-versa) over the tailnet, never persisted to disk. Default off. Harness asserts the round-trip through `/api/clip`.
 
-- [ ] `/api/clip` in-memory latest-clip endpoint (guarded).
-- [ ] Client opt-in copy→POST + pull-latest affordance + Settings toggle (default off).
-- [ ] Add the `clip` check; `npm run verify` green; screenshot the toggle + the paste affordance.
-- [ ] Commit + push.
+- [x] `/api/clip` in-memory latest-clip endpoint (guarded). — POST stores, GET returns; in-memory only, never disk; size-capped (200k body wall / 100k store cap); reachable over the tailnet via the phone cookie on purpose.
+- [x] Client opt-in copy→POST + pull-latest affordance + Settings toggle (default off). — `postClip` on copy (only when `S.clipSync`), `pasteFromOtherDevice` pull; term-menu item (shown when on) + command-palette action; `clipSync` DEFAULT false + Behaviour toggle.
+- [x] Add the `clip` check; `npm run verify` green; screenshot the toggle + the paste affordance. — `clip` check (PORT 9939) 3/3 (POST/GET round-trip + oversize cap); Settings toggle screenshot `clip-settings-toggle.png` shipped.
+- [x] Commit + push.
+
+**STATUS: DONE.** Copy on the PC (with the toggle on) POSTs to the server's in-memory clip; another tailnet device pulls it via "Paste from other device". Default off, never written to disk. Round-trip proven; toggle rendered.
+
+---
+
+## Item-5 differentiators — ALL DONE
+- Task A MCP — DONE (21f1807).
+- Task B "what's it doing" line — DONE (280e181).
+- Task C clipboard sync — DONE (this commit).
+- Remote permission approval — already DONE (attention bus, item 3 / 15f2b90).
 
 ---
 
