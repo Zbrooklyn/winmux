@@ -22,7 +22,11 @@ const { chromium } = require('playwright');
 
 const ROOT = __dirname;
 const HEADED = process.argv.includes('--headed');
-const GPU = process.argv.includes('--gpu');        // seed S.gpuRenderer=true before load
+// The renderer is now GPU-on by DEFAULT (app.js), so a bare run measures the shipping
+// config. `--dom` forces the DOM renderer to reproduce the ~132ms baseline for the
+// honesty gate. (`--gpu` is kept as an explicit alias for the default.)
+const FORCE_DOM = process.argv.includes('--dom');
+const GPU = !FORCE_DOM;
 const PORT_WARM = 9940;   // pre-warm ON (default)
 const PORT_COLD = 9941;   // pre-warm OFF (WINMUX_NO_PREWARM=1)
 
@@ -79,8 +83,12 @@ async function measureNewTab(page) {
     const deadline = t0 + 8000;
     while (performance.now() < deadline) {
       const tabs = document.querySelectorAll('.ptab').length;
-      const rows = document.querySelectorAll('.xterm-rows > div, .xterm-rows').length;
-      if (tabs > before && rows > 0) break;
+      // Renderer-agnostic paint signal: DOM renderer fills .xterm-rows; the WebGL
+      // renderer paints to a <canvas> instead. Either one being present in a newly
+      // mounted terminal means the tab has painted.
+      const painted = document.querySelector('.xterm-rows > div') ||
+                      document.querySelector('.xterm-screen canvas, .xterm canvas');
+      if (tabs > before && painted) break;
       await new Promise((r) => requestAnimationFrame(r));
     }
     return Math.round(performance.now() - t0);
@@ -112,8 +120,11 @@ async function measureTick(page, ms) {
 }
 
 (async () => {
-  const warm = boot(PORT_WARM);
-  const cold = boot(PORT_COLD, { WINMUX_NO_PREWARM: '1' });
+  // A DOM run forces the DOM renderer server-side (app.js honours __winmuxForceDom);
+  // the default (GPU) run leaves it unset so the shipping default is what's measured.
+  const domEnv = FORCE_DOM ? { WINMUX_FORCE_DOM: '1' } : {};
+  const warm = boot(PORT_WARM, domEnv);
+  const cold = boot(PORT_COLD, Object.assign({ WINMUX_NO_PREWARM: '1' }, domEnv));
   await Promise.all([waitUp(PORT_WARM, 15000), waitUp(PORT_COLD, 15000)]);
   const browser = await chromium.launch({ channel: 'msedge', headless: !HEADED });
 
@@ -160,7 +171,7 @@ async function measureTick(page, ms) {
   // NOT report "targets met" off it, and NO GPU decision may rest on it.
   const BASELINE_FLOOR = 80;   // a real 10-stream DOM run must clear this
   const loadReproduced = out.tickMs10 >= BASELINE_FLOOR;
-  if (!GPU && !loadReproduced) {
+  if (FORCE_DOM && !loadReproduced) {
     console.log('\nINSTRUMENT NOT YET VALID: 10-stream tick read ' + out.tickMs10 +
       'ms on the DOM renderer, below the ~132ms baseline PLAN.md documented. The load is not' +
       ' reproducing (streams not landing) — the tick number is meaningless and no GPU decision' +
@@ -169,9 +180,12 @@ async function measureTick(page, ms) {
   }
 
   const fails = [];
+  // A pre-warmed new tab must be instant in BOTH renderers.
   if (out.newTabWarmMs > TARGETS.newTabWarmMs) fails.push('newTabWarmMs ' + out.newTabWarmMs + ' > ' + TARGETS.newTabWarmMs);
-  if (out.tickMs10 > TARGETS.tickMs10) fails.push('tickMs10 ' + out.tickMs10 + ' > ' + TARGETS.tickMs10);
+  // The <50ms tick is the SHIPPING (GPU) target. The --dom run is the baseline it's
+  // measured against and is EXPECTED to read high (~132ms) — don't enforce <50 on it.
+  if (!FORCE_DOM && out.tickMs10 > TARGETS.tickMs10) fails.push('tickMs10 ' + out.tickMs10 + ' > ' + TARGETS.tickMs10);
   if (fails.length) { console.log('\nMISSED TARGETS:\n  ' + fails.join('\n  ')); process.exit(1); }
-  console.log('\nAll pre-registered targets met.');
+  console.log('\n' + (FORCE_DOM ? 'DOM baseline captured (load reproduced; <50ms tick is not a DOM target).' : 'All pre-registered targets met.'));
   process.exit(0);
 })().catch((e) => { console.error('perf ERR', e && e.stack || e); process.exit(2); });

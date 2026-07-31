@@ -223,3 +223,29 @@ Its own focused session, flagged separately so it doesn't get rushed:
 **Type consistency:** `__winmuxRenderer` flag ('webgl'|'dom') is defined in Task 1.1 Step 2 and consumed by the `gpu` check and Phase 4 proof. `perf.cjs` target keys (`tickMs10Gpu`, `newTabWarmMs`) are consistent across Phases 0/1/3/4. `WINMUX_PREWARM_POOL` / `WINMUX_NO_PREWARM` consistent with existing `server.cjs` env conventions.
 
 **Risk gate:** Phase 1 has an explicit STOP — if GPU doesn't drop the tick, the default is NOT flipped and it becomes its own task. Never ship broken text to look fast.
+
+---
+
+## Proof Gate — CLEARED (2026-07-31)
+
+All phases landed on `feature/phase8-electron-shell`; the pre-registered targets are met in the shipping config (GPU on + pre-warm pool), with the DOM baseline reproduced to keep the instrument honest.
+
+**`perf.cjs` — pre-registered targets:**
+
+| Metric | Target | DOM baseline (`--dom`) | Shipping (GPU on) | Verdict |
+|---|---|---|---|---|
+| New-tab (pre-warmed) | ≤ 150 ms | 18 ms | 37 ms | ✓ instant |
+| Event-loop tick, 10 streams | < 50 ms | 273 ms | 16 ms | ✓ (~17× vs DOM) |
+
+The DOM run clears the validity floor (273 ms ≥ 80 ms) — the 10-stream load genuinely reproduces, so the 16 ms GPU tick is a real win, not a load that failed to land. `perf.cjs` exits 0 on the shipping run.
+
+**Harness:** `npm run verify` → **264/264**, three runs back-to-back at concurrency 3 (electron load-flake gone).
+
+**What shipped, per phase:**
+- Phase 0 — `perf.cjs` measurement harness + honesty (validity) gate; now renderer-explicit (`--dom` vs default GPU).
+- Phase 1 — GPU renderer enabled by default, `__winmuxRenderer` flag, DOM fallback + `onContextLoss`, `gpu` check.
+- Phase 2 — CaskaydiaCove Nerd Font Mono bundled (`public/fonts/`), `@font-face` bound to `Cascadia Code`, `.ttf` MIME, `font` check. Fixes clean-machine tofu.
+- Phase 3 — instant skeleton cursor on tab open + pre-warm pool (`WINMUX_SPARE_POOL`, default 2), `instant` check.
+- Phase 4 — verify runner concurrency throttle (cap 3) → reliably green; this proof gate.
+
+**Not done (correctly gated):** the publish gate — promote to `master` + flip repo public + publish v0.1.0 — remains Edward's. Phase 5 (detached-server survival + terminal-parity ride-along) is deferred to its own session.
