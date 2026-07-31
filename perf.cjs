@@ -87,13 +87,16 @@ async function measureNewTab(page) {
   });
 }
 
-// Arm a sustained burst in the CURRENTLY active terminal (no Enter). A large
-// count so all 10 keep streaming through the measurement window (concurrency,
-// not a quick blip, is what stresses the DOM renderer).
-async function armBurst(page) {
-  // Focus the active terminal's input, then type the command (no Enter).
-  await page.evaluate(() => { const ta = document.querySelector('.term.active .xterm-helper-textarea, .xterm-helper-textarea'); if (ta) ta.focus(); });
-  await page.keyboard.type('1..60000 | % { "perf ' + 'x'.repeat(72) + ' $_" }');
+// A winmux CLI call pointed at a specific test server (the proven injection path
+// the `cli` harness check uses — reliable, unlike synthesised keystrokes).
+function winmuxOn(port, args) {
+  return new Promise((resolve) => {
+    const p = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(port), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    p.stdout.on('data', (d) => o += d); p.stderr.on('data', (d) => e += d);
+    p.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
 }
 
 // Sample event-loop tick drift over `ms` while the page is under load.
@@ -126,19 +129,18 @@ async function measureTick(page, ms) {
 
   // --- 10-stream event-loop tick (the DOM-renderer jank the GPU work fixes) ---
   // Open 10 tabs on the warm server, arm a burst in each, fire them, sample tick.
-  for (let i = 0; i < 9; i++) { await warmPage.click('#open-new'); await warmPage.waitForTimeout(250); }
-  await warmPage.waitForTimeout(800);
-  const tabs = await warmPage.$$('.ptab');
-  // Pass 1 — ARM every tab (type the burst, no Enter) so nothing streams yet.
-  for (const tab of tabs) {
-    try { await tab.click(); await warmPage.waitForTimeout(120); await armBurst(warmPage); } catch (e) {}
-  }
-  // Pass 2 — FIRE every tab in a tight loop so all 10 stream concurrently.
-  for (const tab of tabs) {
-    try { await tab.click(); await warmPage.keyboard.press('Enter'); } catch (e) {}
-  }
-  // Give the streams a beat to all be in flight, then sample under real load.
-  await warmPage.waitForTimeout(400);
+  // Open 10 terminals total via the CLI (server-driven, so the app really mounts
+  // them), then read their ids back.
+  for (let i = 0; i < 9; i++) await winmuxOn(PORT_WARM, ['new-tab']);
+  await warmPage.waitForTimeout(1800);
+  let ids = [];
+  try { const l = JSON.parse((await winmuxOn(PORT_WARM, ['list', '--json'])).out); ids = (l.sessions || []).map((s) => s.id); } catch (e) {}
+  out.streams = ids.length;
+  // Fire a sustained 60k-line burst into EVERY terminal concurrently (fire-and-
+  // forget: send returns after injecting; the shells then stream the output).
+  const burst = '1..60000 | % { "perf ' + 'x'.repeat(72) + ' $_" }';
+  ids.forEach((id) => { winmuxOn(PORT_WARM, ['send', burst, '--id', String(id), '--enter']); });
+  await warmPage.waitForTimeout(700);   // let all bursts be in flight
   const tick = await measureTick(warmPage, 3000);
   out.tickMs10 = tick.avg; out.tickMs10Worst = tick.worst;
 
