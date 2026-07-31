@@ -1687,6 +1687,48 @@ check('agent-env', PORT_AGENTENV, async ({ browser, base, t }) => {
   await page.close();
 });
 
+// Item 8 T2 — `winmux agent <state>` drives the session's cockpit status by sid,
+// the exact path a Claude Code hook fires. needs-you raises the alarm; done clears it.
+check('agent-state', PORT_AGENTSTATE, async ({ browser, base, t, shot }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_AGENTSTATE), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => o += d);
+    proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+  const statusOf = () => page.evaluate(() => {
+    const at = window.__winmuxActiveTerm(); return at ? at.status : null;
+  });
+
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);
+  const sid = await page.evaluate(() => { const at = window.__winmuxActiveTerm(); return at ? at.sid : null; });
+  t('a session sid is available to target', !!sid, sid);
+
+  const nu = await winmux(['agent', 'needs-you', '--sid', sid, 'waiting on your approval']);
+  t('winmux agent needs-you exits clean', nu.code === 0, nu.err);
+  await page.waitForTimeout(800);
+  const s1 = await statusOf();
+  const approve = await page.evaluate(() => !!document.querySelector('.sapprove'));
+  t('the session flipped to needs-you (status + Approve pill)', s1 === 'needsyou' && approve === true, { status: s1, approve });
+  await shot(page, 'agent-needsyou');
+
+  const dn = await winmux(['agent', 'done', '--sid', sid]);
+  t('winmux agent done exits clean', dn.code === 0, dn.err);
+  await page.waitForTimeout(800);
+  const s2 = await statusOf();
+  t('agent done clears it back to idle', s2 === 'idle', { status: s2 });
+
+  const wk = await winmux(['agent', 'working', '--sid', sid, 'running the build']);
+  await page.waitForTimeout(800);
+  const s3 = await statusOf();
+  t('agent working moves it to the working lane', wk.code === 0 && s3 === 'working', { code: wk.code, status: s3 });
+  await page.close();
+});
+
 // --- approve (U4): clear a "needs you" session inline, without switching in ----
 // A background terminal that rings its bell flips to "needs you". Its row grows an
 // inline Approve pill; clicking it sends Enter to that terminal (accepting whatever

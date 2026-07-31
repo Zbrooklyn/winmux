@@ -70,6 +70,9 @@ const TOOLS = [
     cmd: 'browser' },
   { name: 'winmux_markdown', desc: 'Open a markdown file in the WinMux viewer surface.',
     schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }, cmd: 'markdown' },
+  { name: 'winmux_agent', desc: "Set a session's agent state in the cockpit: working | needs-you | done | idle. Omit id/sid for the active session; needs-you raises the NEEDS YOU alarm + Approve, done/idle clear it.",
+    schema: { type: 'object', properties: { state: { type: 'string', enum: ['working', 'needs-you', 'done', 'idle'] }, message: { type: 'string' }, id: { type: 'number' } }, required: ['state'] },
+    cmd: 'agent', map: (a) => ({ state: a.state, message: a.message, target: a.id }) },
 ];
 const BY_NAME = {}; TOOLS.forEach((t) => { BY_NAME[t.name] = t; });
 

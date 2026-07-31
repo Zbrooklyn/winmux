@@ -73,6 +73,7 @@ const HELP = [
   '  read-screen [--id N] [--lines N] print a terminal\'s visible text',
   '  focus <id>                       focus a terminal',
   '  notify [--id N] <message>        flag a session as needing you (attention bus)',
+  '  agent <state> [--sid S] [msg]    set a session\'s agent state: working|needs-you|done|idle',
   '',
   '  browser open <url>               open the browser panel at a URL (desktop app)',
   '  browser snapshot                 list the page\'s interactive elements as @refs',
@@ -211,7 +212,23 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
       }
       return emit('opened ' + opened.filter(Boolean).length + ' terminal(s) from ' + argv[1], { opened });
     }
-    if (cmd === 'agent') die('agent arrives in Phase 11. Run `winmux help` for what works today.');
+    if (cmd === 'agent') {
+      // Agent lifecycle → cockpit state. `winmux agent <state> [message]`.
+      // --sid targets a session (defaults to $WINMUX_SID so a hook needs no args);
+      // --id also works; else the active session.
+      const state = (argv[1] || '').toLowerCase();
+      if (['working', 'needs-you', 'needsyou', 'blocked', 'done', 'idle'].indexOf(state) < 0)
+        die('agent needs a state: working | needs-you | done | idle');
+      const words = [];
+      for (let i = 2; i < argv.length; i++) {
+        if (argv[i] === '--sid' || argv[i] === '--id') { i++; continue; }
+        if (argv[i] === '--json') continue;
+        words.push(argv[i]);
+      }
+      const sid = flag(argv, '--sid') || process.env.WINMUX_SID || '';
+      const r = await rpc('agent', { state, message: words.join(' '), sid, target: flag(argv, '--id') });
+      return emit('session ' + (r && r.id != null ? r.id : '') + ' → ' + (r && r.state), r);
+    }
     die('unknown command: ' + cmd + '. Run `winmux help`.');
   } catch (e) { die(e.message); }
 })();

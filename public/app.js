@@ -3495,6 +3495,14 @@
     for (var i = 0; i < all.length; i++) if (String(all[i].id) === String(target)) return all[i];
     return null;
   }
+  // Resolve a terminal by its server session id (sid) — what a shell's $WINMUX_SID
+  // holds, so an agent's hook can address exactly the session it runs in.
+  function termBySid(sid) {
+    if (!sid) return null;
+    var all = allTerms();
+    for (var i = 0; i < all.length; i++) if (String(all[i].sid) === String(sid)) return all[i];
+    return null;
+  }
   // --- Browser panel (Phase 10) — Electron-only <webview> dock -------------
   var _wmb = null;
   function isElectronApp() { return !!(window.winmux && window.winmux.isElectron); }
@@ -3740,6 +3748,30 @@
       if (tnfy.status !== 'needsyou') setStatus(tnfy, 'needsyou');
       notify(termName(tnfy) + ' needs you', nmsg, tnfy.id);
       return { id: tnfy.id, notified: true };
+    }
+    if (cmd === 'agent') {
+      // Agent integration (Phase 11): a Claude Code hook inside a terminal drives
+      // that session's cockpit state. Targets by sid ($WINMUX_SID) first, then id,
+      // then the active session. working → the WORKING lane; needs-you → the same
+      // escalation as a bell (NEEDS YOU + Approve + notification); done/idle clear it.
+      var st = String(args.state == null ? '' : args.state).toLowerCase();
+      var ag = args.sid ? termBySid(args.sid) : (args.target ? termByTarget(args.target) : activeTerm());
+      if (!ag) throw new Error('no such terminal');
+      var amsg = args.message == null ? '' : String(args.message);
+      if (st === 'needs-you' || st === 'needsyou' || st === 'blocked') {
+        if (ag.status !== 'needsyou') setStatus(ag, 'needsyou');
+        notify(termName(ag) + ' needs you', amsg || 'needs your attention', ag.id);
+        st = 'needs-you';
+      } else if (st === 'working') {
+        setStatus(ag, 'working');
+        if (amsg) { ag.lastLine = amsg; renderSidebar(); }
+      } else if (st === 'done' || st === 'idle') {
+        setStatus(ag, 'idle');
+        st = 'idle';
+      } else {
+        throw new Error('unknown agent state: ' + st + ' (working|needs-you|done|idle)');
+      }
+      return { id: ag.id, sid: ag.sid, state: st };
     }
     if (cmd === 'browser') {
       if (!isElectronApp()) throw new Error('the browser panel needs the WinMux desktop app');
