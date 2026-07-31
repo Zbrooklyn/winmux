@@ -40,9 +40,9 @@ This plan builds the **hooks → cockpit-state bridge** — the higher-value, cl
 
 **Done-criteria:** Inside any WinMux terminal, `$WINMUX_SID` equals that session's id and `$WINMUX_PORT` equals the server's port; unchanged for a spare-adopted (instant-open) tab; `survive`/`reload` stay green.
 
-- [ ] `spawnSession`: `const id = crypto.randomBytes(16).toString('hex')` first; `const env = Object.assign({}, process.env, { WINMUX_SID: id, WINMUX_PORT: String(PORT) })`; pass `env` to `pty.spawn`; use `id` in the session object.
-- [ ] `agent-env` harness check (new PORT): send `echo "SID=$env:WINMUX_SID PORT=$env:WINMUX_PORT"` to the active terminal, read the screen, assert SID matches the live session id (from `winmux list --json`) and PORT matches.
-- [ ] Confirm `survive` + `reload` still pass (spawn-path regression). Commit + push.
+- [x] `spawnSession`: `const id = crypto.randomBytes(16).toString('hex')` first; `const env = Object.assign({}, process.env, { WINMUX_SID: id, WINMUX_PORT: String(PORT) })`; pass `env` to `pty.spawn`; use `id` in the session object.
+- [x] `agent-env` harness check (new PORT): send `echo "SID=$env:WINMUX_SID PORT=$env:WINMUX_PORT"` to the active terminal, read the screen, assert SID matches the live session id (from `winmux list --json`) and PORT matches.
+- [x] Confirm `survive` + `reload` still pass (spawn-path regression). Commit + push.
 
 ### Task 2: `winmux agent` state verb (RPC + CLI + MCP)
 
@@ -58,12 +58,12 @@ This plan builds the **hooks → cockpit-state bridge** — the higher-value, cl
 
 **Done-criteria:** From the CLI (and MCP), an agent sets its own session's state and the cockpit reflects it — `needs-you` raises the Approve + NEEDS YOU counter exactly like a bell, `done` returns it to idle — targeted precisely by sid, proven live.
 
-- [ ] `app.js`: `runControl` `agent` branch; resolve target by `args.sid` (new) / `args.target` / active; map state→status; `needs-you` calls the same escalation path as `notify`.
-- [ ] `termByTarget` (or a small `termBySid`) resolves a session by its `sid`/`id`.
-- [ ] `bin/winmux.cjs`: `agent` verb (replace the placeholder), `--sid` default `process.env.WINMUX_SID`, clean JSON out, help text.
-- [ ] `bin/winmux-mcp.cjs`: `winmux_agent` tool + schema.
-- [ ] `agent-state` harness check (new PORT): drive `winmux agent needs-you/done --sid <sid>` against the live app; assert the row status + counter change.
-- [ ] Screenshot: a session flipped to NEEDS YOU by `winmux agent`. Commit + push.
+- [x] `app.js`: `runControl` `agent` branch; resolve target by `args.sid` (new) / `args.target` / active; map state→status; `needs-you` calls the same escalation path as `notify`.
+- [x] `termByTarget` (or a small `termBySid`) resolves a session by its `sid`/`id`.
+- [x] `bin/winmux.cjs`: `agent` verb (replace the placeholder), `--sid` default `process.env.WINMUX_SID`, clean JSON out, help text.
+- [x] `bin/winmux-mcp.cjs`: `winmux_agent` tool + schema.
+- [x] `agent-state` harness check (new PORT): drive `winmux agent needs-you/done --sid <sid>` against the live app; assert the row status + counter change.
+- [x] Screenshot: a session flipped to NEEDS YOU by `winmux agent`. Commit + push.
 
 ### Task 3: Claude Code hooks preset + doc
 
@@ -79,10 +79,10 @@ This plan builds the **hooks → cockpit-state bridge** — the higher-value, cl
 
 **Done-criteria:** A user can merge the preset into their Claude Code settings and a real agent's lifecycle drives the WinMux cockpit with no per-terminal setup; the harness proves the exact hook command flips live state.
 
-- [ ] `agent/claude-code-hooks.json`: the three hooks, commands shaped `winmux agent <state> --sid $WINMUX_SID [message]`, guarded to no-op when `$WINMUX_SID` is unset (outside WinMux).
-- [ ] `docs/agent-integration.md` + README pointer.
-- [ ] `agent-hooks` harness check: parse the preset (valid JSON, correct events/commands) + fire the working-hook command live and assert state.
-- [ ] Screenshot or preset+doc excerpt shipped. Commit + push.
+- [x] `agent/claude-code-hooks.json`: the three hooks, commands shaped `winmux agent <state> --sid $WINMUX_SID [message]`, guarded to no-op when `$WINMUX_SID` is unset (outside WinMux).
+- [x] `docs/agent-integration.md` + README pointer.
+- [x] `agent-hooks` harness check: parse the preset (valid JSON, correct events/commands) + fire the working-hook command live and assert state.
+- [x] Screenshot or preset+doc excerpt shipped. Commit + push.
 
 ---
 

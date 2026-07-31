@@ -1139,6 +1139,16 @@ Claude Code hooks, a live fleet/transcript view, and shell integration that keep
 prompt's cwd and git branch current. This is what makes WinMux an *agent* cockpit,
 not just a terminal.
 
+**✅ DONE (item 8, 2026-07-31) — the hooks → cockpit-state bridge.** Every shell now exports
+`WINMUX_SID`/`WINMUX_PORT` (the tmux `$TMUX_PANE` precedent, commit b6737ec); a `winmux agent
+<working|needs-you|done|idle>` verb (RPC + CLI + `winmux_agent` MCP, commit b7521b3) drives a
+session's cockpit status by sid; and a ready-to-merge Claude Code hooks preset
+(`agent/claude-code-hooks.json` + `docs/agent-integration.md`, commit 1b8a76f) wires
+UserPromptSubmit→working, Notification→needs-you, Stop→done, no-op outside WinMux. Harness:
+agent-env/agent-state/agent-hooks (13 checks). Session survival (detached server) already
+shipped as item 1 (#237). STILL OPEN: the richer transcript/fleet reader (parsing Claude Code
+session `.jsonl`) — a larger follow-on, documented but not built.
+
 **Session survival across a full app close (known gap, verified 2026-07-27).** Today the
 Electron app boots `server.cjs` *in-process*, so fully closing the window quits the server
 and kills every live shell — including a running `claude`/`codex`. The tab/group layout is
