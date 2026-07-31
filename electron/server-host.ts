@@ -55,6 +55,7 @@ export interface ResolveOpts {
   execPath: string;    // process.execPath (electron binary / node)
   serverPath: string;  // absolute path to server.cjs
   timeoutMs?: number;
+  port?: number;       // force a specific port on the spawned server (tests/pinning)
 }
 
 // Reattach to a live server for this profile, else spawn a detached one and wait
@@ -70,7 +71,7 @@ export async function resolveServer(opts: ResolveOpts): Promise<Resolved> {
       ELECTRON_RUN_AS_NODE: '1',
       WINMUX_INSTANCE_FILE: opts.instanceFile,
       WINMUX_TRUST_FILE: opts.trustFile,
-    }),
+    }, opts.port ? { PORT: String(opts.port) } : {}),
   });
   child.unref();
 

@@ -79,6 +79,7 @@ const PORT_UPDATE = 9929;
 const PORT_GPU = 9930;
 const PORT_FONT = 9931;
 const PORT_INSTANT = 9932;
+const PORT_SURVIVE2 = 9933;   // registered port (runner boots a throwaway here)
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1952,6 +1953,43 @@ check('instant', PORT_INSTANT, async ({ browser, base, t, shot }) => {
   t('the skeleton is removed once the terminal is live', cleared);
   await page.close();
 }, { WINMUX_NO_PREWARM: '1' });
+
+// --- survive: the server outlives its launcher — spawn, reattach, quit-completely -
+// Session survival's automatable core (electron/server-host.js): a real launch RESOLVES
+// a server — spawning a DETACHED one that outlives the window, reattaching to a live
+// one instead of double-spawning, and stopping it deliberately via /api/shutdown. Runs
+// self-contained on a forced port (9935) so it never touches the harness's own servers.
+check('detach', PORT_SURVIVE2, async ({ t }) => {
+  const { resolveServer, shutdownServer } = require('./dist-electron/server-host.js');
+  const scratch = path.join(OUT, 'survive2');
+  fs.mkdirSync(scratch, { recursive: true });
+  const instanceFile = path.join(scratch, 'instance.json');
+  try { fs.unlinkSync(instanceFile); } catch (e) {}
+  // No forced port — let the server pick a FREE candidate and report it back, so a
+  // stale server from a prior run can never make this refuse-and-timeout.
+  const opts = { instanceFile, trustFile: path.join(scratch, 'devices.json'), execPath: process.execPath, serverPath: path.join(ROOT, 'server.cjs'), timeoutMs: 15000 };
+  const alive = (port) => new Promise((res) => {
+    const rq = http.get({ host: '127.0.0.1', port: port, path: '/api/info' }, (x) => { x.resume(); res(true); });
+    rq.on('error', () => res(false)); rq.setTimeout(900, () => { rq.destroy(); res(false); });
+  });
+  let boundPort = 0;
+  try {
+    const a = await resolveServer(opts);
+    boundPort = a.port;
+    t('a detached server spawns and advertises its port', a.attached === false && a.port > 0, a);
+    const b = await resolveServer(opts);
+    t('a relaunch reattaches to the live server instead of spawning again', b.attached === true && b.port === a.port, b);
+    const ok = await shutdownServer(a.port);
+    await new Promise((r) => setTimeout(r, 700));
+    const stillUp = await alive(a.port);
+    const fileGone = !fs.existsSync(instanceFile);
+    t('quit-completely (/api/shutdown) stops the server and clears discovery', ok && !stillUp && fileGone, { ok, stillUp, fileGone });
+  } finally {
+    // Belt-and-braces: never leave the spawned server running if an assert threw.
+    if (boundPort) { try { await shutdownServer(boundPort); } catch (e) {} }
+    try { fs.unlinkSync(instanceFile); } catch (e) {}
+  }
+});
 
 // --- markdown: the viewer surface renders a file and follows its edits ------
 // `winmux markdown <file>` opens a read surface in the app. The server reads the

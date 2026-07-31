@@ -94,11 +94,14 @@ throttle is a future cleanup, not a product bug.
   non-HTTPS page, so on the phone the button falls back to "Select the link to copy it" (manual
   select) rather than a silent one-tap. Desktop copy is one-tap and confirms on the button. Not
   fixable without serving the phone side over HTTPS.
-- **Session survival across a full app restart:** shells survive a dropped socket and a page reload
-  (10-min grace + reattach — `survive`/`reload`/`drop` checks). They do **not** survive quitting and
-  reopening the app: the server runs inside Electron and deliberately kills all shells on a clean exit
-  (`server.cjs` `killShells`). Reattach-after-restart needs the **detached-server** feature — an
-  explicit pending roadmap item (M `[B]`, see Build order), not a quick fix.
+- **Session survival across a full app restart:** DONE. Shells survive a dropped socket, a page
+  reload (10-min grace + reattach — `survive`/`reload`/`drop` checks), **and now closing/reopening
+  the app.** The terminal server runs as a **detached** Electron-run-as-Node child (`electron/server-host.ts`
+  `resolveServer`), discovered via the instance file; closing the window leaves it running and a
+  relaunch reattaches to the same server + live shells instead of spawning a new one. A deliberate
+  "Quit completely & stop all sessions" control (Settings → Behaviour → `/api/shutdown`) is the only
+  path that stops the shells. Proven by the committed `detach` harness check (spawn → reattach →
+  shutdown-clears-discovery), 267/267 green.
 
 **Distribution reality:** the installer is **unsigned**, so Windows SmartScreen shows an
 "unknown publisher" warning on install (works fine; looks untrusted). A freshly built installer must
