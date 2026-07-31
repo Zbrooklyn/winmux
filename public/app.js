@@ -3548,6 +3548,8 @@
     s = s.replace(/`([^`]+)`/g, function (m, c) { return '<code>' + c + '</code>'; });
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>');
+    // Images before links — the leading ! must win over the plain link rule.
+    s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (m, a, u) { return '<img src="' + u + '" alt="' + a + '">'; });
     s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (m, t, u) { return '<a href="' + u + '" target="_blank" rel="noopener">' + t + '</a>'; });
     return s;
   }
@@ -3555,6 +3557,7 @@
     var lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
     var html = [], i = 0, inCode = false, code = [], listType = null;
     function closeList() { if (listType) { html.push('</' + listType + '>'); listType = null; } }
+    function cells(row) { return row.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(function (c) { return c.trim(); }); }
     for (i = 0; i < lines.length; i++) {
       var ln = lines[i];
       if (/^```/.test(ln)) {
@@ -3563,9 +3566,35 @@
         continue;
       }
       if (inCode) { code.push(ln); continue; }
+      // GFM table: a header row, a |---|---| separator, then body rows until a non-table line.
+      if (/\|/.test(ln) && i + 1 < lines.length && /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/.test(lines[i + 1])) {
+        closeList();
+        var head = cells(ln), tbl = ['<table><thead><tr>'];
+        head.forEach(function (c) { tbl.push('<th>' + mdInline(c) + '</th>'); });
+        tbl.push('</tr></thead><tbody>');
+        i += 2;
+        for (; i < lines.length; i++) {
+          if (/^\s*$/.test(lines[i]) || !/\|/.test(lines[i])) break;
+          var rc = cells(lines[i]);
+          tbl.push('<tr>');
+          for (var ci = 0; ci < head.length; ci++) tbl.push('<td>' + mdInline(rc[ci] || '') + '</td>');
+          tbl.push('</tr>');
+        }
+        i--;   // the outer loop's i++ re-lands on the non-table line that broke us out
+        tbl.push('</tbody></table>');
+        html.push(tbl.join(''));
+        continue;
+      }
       var h = ln.match(/^(#{1,6})\s+(.*)$/);
       if (h) { closeList(); html.push('<h' + h[1].length + '>' + mdInline(h[2]) + '</h' + h[1].length + '>'); continue; }
-      if (/^\s*[-*+]\s+/.test(ln)) { if (listType !== 'ul') { closeList(); html.push('<ul>'); listType = 'ul'; } html.push('<li>' + mdInline(ln.replace(/^\s*[-*+]\s+/, '')) + '</li>'); continue; }
+      if (/^\s*[-*+]\s+/.test(ln)) {
+        if (listType !== 'ul') { closeList(); html.push('<ul>'); listType = 'ul'; }
+        var body = ln.replace(/^\s*[-*+]\s+/, '');
+        var tk = body.match(/^\[([ xX])\]\s+(.*)$/);
+        if (tk) html.push('<li class="task"><input type="checkbox" disabled' + (tk[1] === ' ' ? '' : ' checked') + '> ' + mdInline(tk[2]) + '</li>');
+        else html.push('<li>' + mdInline(body) + '</li>');
+        continue;
+      }
       if (/^\s*\d+\.\s+/.test(ln)) { if (listType !== 'ol') { closeList(); html.push('<ol>'); listType = 'ol'; } html.push('<li>' + mdInline(ln.replace(/^\s*\d+\.\s+/, '')) + '</li>'); continue; }
       if (/^\s*>\s?/.test(ln)) { closeList(); html.push('<blockquote>' + mdInline(ln.replace(/^\s*>\s?/, '')) + '</blockquote>'); continue; }
       if (/^\s*(---+|\*\*\*+|___+)\s*$/.test(ln)) { closeList(); html.push('<hr>'); continue; }

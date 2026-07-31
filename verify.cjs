@@ -89,6 +89,9 @@ const PORT_CLIP = 9939;       // cockpit: cross-device clipboard round-trips thr
 const PORT_CONFIG = 9940;     // config: durable on-disk settings via /api/config
 const PORT_THEME = 9941;      // theme import: a Windows Terminal scheme recolours the terminal
 const PORT_KEYS = 9942;       // custom keybindings: a remapped chord runs the action, the old one doesn't
+const PORT_MDRICH = 9943;     // markdown richness: tables, task-list checkboxes, images render in the viewer
+const PORT_BVERBS = 9944;     // browser automation verbs: type/fill/get-text/eval/scroll over the webview
+const PORT_MARKS = 9945;      // terminal command-marks jump + reset
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
@@ -2551,6 +2554,52 @@ check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
     return h ? h.textContent : null;
   });
   t('editing the file live-updates the open surface', after === 'Changed Title', after);
+  await page.close();
+});
+
+// Item 7 T1 — markdown richness: a plan/doc-shaped file (GFM table + task-list
+// checkboxes + an image) must render as real HTML, not fall through to <p> soup.
+check('md-rich', PORT_MDRICH, async ({ browser, base, t, shot }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_MDRICH), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => o += d);
+    proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+
+  const mdFile = path.join(OUT, 'mdrich-' + PORT_MDRICH + '.md');
+  fs.writeFileSync(mdFile,
+    '# Rich\n\n' +
+    '| Name | Role |\n| --- | --- |\n| Ada | Eng |\n| Bo | Design |\n\n' +
+    '- [ ] not done yet\n- [x] finished\n\n' +
+    '![logo](pic.png)\n');
+
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);
+
+  const opened = await winmux(['markdown', mdFile]);
+  t('winmux markdown exits clean', opened.code === 0, opened.err);
+  await page.waitForTimeout(1500);
+
+  const r = await page.evaluate(() => {
+    const e = document.querySelector('.wmm[data-open] .wmm-body');
+    if (!e) return null;
+    const th = [].map.call(e.querySelectorAll('table thead th'), (n) => n.textContent.trim());
+    const firstCell = (e.querySelector('table tbody td') || {}).textContent;
+    const rows = e.querySelectorAll('table tbody tr').length;
+    const boxes = [].map.call(e.querySelectorAll('li.task input[type=checkbox]'), (n) => n.checked);
+    const img = e.querySelector('img');
+    return { th, firstCell: firstCell && firstCell.trim(), rows, boxes, imgSrc: img && img.getAttribute('src') };
+  });
+  t('a GFM table renders with header cells + body rows',
+    !!r && r.th.join(',') === 'Name,Role' && r.rows === 2 && r.firstCell === 'Ada', r);
+  t('task-list items become disabled checkboxes reflecting checked state',
+    !!r && r.boxes.length === 2 && r.boxes[0] === false && r.boxes[1] === true, r && r.boxes);
+  t('an image renders inline with its src', !!r && /pic\.png$/.test(String(r.imgSrc)), r && r.imgSrc);
+  await shot(page, 'md-rich');
   await page.close();
 });
 
