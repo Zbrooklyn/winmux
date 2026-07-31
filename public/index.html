@@ -28,6 +28,14 @@
   .term-area { position: absolute; inset: 0; }
   .term-host { position: absolute; inset: 0; padding: 10px 6px 10px 12px; }
   .xterm { height: 100%; }
+  /* Instant skeleton — a cursor block shown the moment a tab opens, before the
+     shell's first byte, so the sub-second gap never reads as a blank "loading"
+     pane. Removed by app.js on first real output. cockpit.css is frozen; lives here. */
+  .term-skel { position: absolute; inset: 0; z-index: 4; pointer-events: none; padding: 10px 6px 10px 12px; }
+  .term-skel .cur { display: inline-block; width: 7px; height: 15px; margin-top: 2px; border-radius: 1px;
+    background: var(--accent); opacity: .5; animation: term-skel-blink 1.06s steps(1) infinite; }
+  @keyframes term-skel-blink { 0%, 49% { opacity: .5; } 50%, 100% { opacity: .12; } }
+  @media (prefers-reduced-motion: reduce) { .term-skel .cur { animation: none; opacity: .42; } }
   .pane.focused { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
   /* Tabs hug their content instead of the mockup's fixed ~166px width. */
   .ptab { flex: 0 0 auto; min-width: 0; max-width: 220px; padding: 0 10px; gap: 8px; }

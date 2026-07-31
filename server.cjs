@@ -1044,7 +1044,10 @@ server.on('upgrade', (req, socket, head) => {
 // already-booted at the default shell + home dir, sitting OFF the books (never in
 // SESSIONS, so it is not counted as a live terminal), and hand it over the instant
 // a matching tab opens — then boot the next spare. WINMUX_NO_PREWARM=1 turns it off.
-let spare = null;
+// A small POOL (not one) means two new tabs in a row are both instant, not just the
+// first — the "predicted" feel. Sized by WINMUX_SPARE_POOL (default 2).
+let spares = [];
+const SPARE_POOL = Math.max(1, Number(process.env.WINMUX_SPARE_POOL) || 2);
 const DEFAULT_SHELL_KEY = 'powershell';
 
 function spawnSession(shell, cwd) {
@@ -1056,7 +1059,8 @@ function spawnSession(shell, cwd) {
     if (s.ws && s.ws.readyState === s.ws.OPEN) s.ws.send(Buffer.from(d, 'utf8'));
   });
   term.onExit(() => {
-    if (spare === s) { spare = null; ensureSpare(); return; }   // a spare died before it was ever used
+    const si = spares.indexOf(s);
+    if (si !== -1) { spares.splice(si, 1); ensureSpare(); return; }   // a spare died before it was ever used
     if (!SESSIONS.has(s.id)) return;
     SESSIONS.delete(s.id);
     if (s.timer) { clearTimeout(s.timer); s.timer = null; }
@@ -1069,8 +1073,12 @@ function spawnSession(shell, cwd) {
 }
 
 function ensureSpare() {
-  if (spare || process.env.WINMUX_NO_PREWARM) return;
-  try { spare = spawnSession(shellByKey(DEFAULT_SHELL_KEY), os.homedir()); } catch (e) { spare = null; }
+  if (process.env.WINMUX_NO_PREWARM) return;
+  while (spares.length < SPARE_POOL) {
+    let s;
+    try { s = spawnSession(shellByKey(DEFAULT_SHELL_KEY), os.homedir()); } catch (e) { break; }
+    spares.push(s);
+  }
 }
 
 function onShellConnection(ws, req) {
@@ -1106,8 +1114,8 @@ function onShellConnection(ws, req) {
   // cold. Either way, refill the spare so the next tab is instant too. The spare's
   // onData/onExit were wired at spawn, so adopting it is just claiming the object.
   let s;
-  if (spare && key === DEFAULT_SHELL_KEY && cwd === os.homedir()) {
-    s = spare; spare = null;
+  if (spares.length && key === DEFAULT_SHELL_KEY && cwd === os.homedir()) {
+    s = spares.shift();
   } else {
     try {
       s = spawnSession(shell, cwd);
@@ -1168,7 +1176,8 @@ async function start() {
   // running on the machine. (A hard kill from outside can't run this, but a normal
   // quit and Ctrl-C both do.)
   const killShells = () => {
-    if (spare) { try { spare.term.kill(); } catch (e) {} spare = null; }
+    for (const sp of spares) { try { sp.term.kill(); } catch (e) {} }
+    spares = [];
     for (const s of SESSIONS.values()) { try { s.term.kill(); } catch (e) {} }
   };
   process.on('exit', killShells);

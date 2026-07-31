@@ -1255,6 +1255,14 @@
         try { if (host.style.display !== 'none') { fit.fit(); term.refresh(0, term.rows - 1); } } catch (e) {}
       });
     }
+    // Instant skeleton. Opening a tab has an unavoidable sub-second gap (socket open
+    // -> shell first byte) where a fresh terminal is a black rectangle and reads as
+    // "loading". A cursor block sits in the pane the moment it's shown, so the open
+    // feels instant; it's removed the instant real output lands (see ws.onmessage).
+    var skel = document.createElement('div');
+    skel.className = 'term-skel';
+    skel.innerHTML = '<span class="cur"></span>';
+    host.appendChild(skel);
     host.addEventListener('contextmenu', function (e) {
       e.preventDefault();
       focusPane(t.paneId);
@@ -1274,6 +1282,7 @@
 
     var t = {
       id: id, paneId: p.id, groupId: activeGroupId, term: term, fit: fit, search: search, ws: null, host: host,
+      skel: skel,
       tabEl: tabEl, dotEl: tabEl.querySelector('.fdot'), progEl: tabEl.querySelector('.tprog'),
       state: 'idle', status: 'idle', sid: seedSid || null, ended: false,
       cwd: null, shell: shellKey, renamed: false, results: null, busyTimer: null, progTimer: null,
@@ -1349,6 +1358,8 @@
           renderSidebar();
           return;
         }
+        // First real output — the terminal is alive; drop the instant skeleton.
+        if (t.skel) { t.skel.remove(); t.skel = null; }
         term.write(new Uint8Array(ev.data));
         markWorking(t);
       };

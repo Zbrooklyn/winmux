@@ -78,6 +78,7 @@ const PORT_FOOTER = 9928;
 const PORT_UPDATE = 9929;
 const PORT_GPU = 9930;
 const PORT_FONT = 9931;
+const PORT_INSTANT = 9932;
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -1928,6 +1929,30 @@ check('font', PORT_FONT, async ({ browser, base, t }) => {
   await page.close();
 });
 
+// --- instant: opening a tab shows a cursor immediately, then hands off cleanly ---
+// A fresh tab has an unavoidable gap (socket open -> shell first byte). We paint an
+// instant skeleton cursor so it never reads as a blank "loading" pane, and remove it
+// the moment real output lands. Pre-warm is disabled on THIS server so the shell
+// spawn is slow enough that the skeleton has a deterministic window to be caught.
+check('instant', PORT_INSTANT, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);   // first terminal settles (its own skeleton clears)
+  const settled = await page.$$eval('.term-skel', function (els) { return els.length; });
+  // Open a second tab. makeTerm creates the skeleton synchronously on click, before
+  // the socket even opens — so it is present the instant the pane mounts.
+  await page.click('#open-new');
+  const appeared = await page.waitForSelector('.term-skel .cur', { state: 'attached', timeout: 3000 })
+    .then(function () { return true; }).catch(function () { return false; });
+  t('a skeleton cursor appears the instant a new tab opens', appeared, { firstTermSkelSettled: settled });
+  if (appeared) await shot(page, 'skeleton');
+  // Once the shell's first byte lands, every skeleton is gone — no leftover overlay.
+  const cleared = await page.waitForFunction(function () { return document.querySelectorAll('.term-skel').length === 0; }, null, { timeout: 9000 })
+    .then(function () { return true; }).catch(function () { return false; });
+  t('the skeleton is removed once the terminal is live', cleared);
+  await page.close();
+}, { WINMUX_NO_PREWARM: '1' });
+
 // --- markdown: the viewer surface renders a file and follows its edits ------
 // `winmux markdown <file>` opens a read surface in the app. The server reads the
 // file (/api/md), the app renders a tiny markdown subset, and it re-pulls on a
@@ -2210,7 +2235,11 @@ check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
   // pool keeps enough parallelism to stay fast while leaving headroom so no check
   // is starved. Override with WINMUX_VERIFY_CONCURRENCY (1 = fully serial).
   const cpu = (os.cpus() || []).length || 4;
-  const MAX_CONCURRENCY = Math.max(1, Number(process.env.WINMUX_VERIFY_CONCURRENCY) || Math.min(4, cpu - 2));
+  // Cap at 3, not 4: the electron check spawns a full Electron process and, alongside
+  // three other browser-driving checks, occasionally trips its own internal timeouts
+  // under CPU saturation. 3 keeps the run fast while leaving that headroom so green is
+  // reproducible every run, not just most runs.
+  const MAX_CONCURRENCY = Math.max(1, Number(process.env.WINMUX_VERIFY_CONCURRENCY) || Math.min(3, cpu - 2));
   console.log('running ' + run.length + ' checks, ' + MAX_CONCURRENCY + ' at a time');
   const queue = run.slice();
   const workers = Array.from({ length: Math.min(MAX_CONCURRENCY, queue.length) }, async () => {
