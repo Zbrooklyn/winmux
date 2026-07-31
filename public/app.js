@@ -65,7 +65,7 @@
     theme: 'system', palette: 'aurora', fontFamily: 'Cascadia Code', fontSize: 13, lineHeight: 1.2,
     cursorStyle: 'block', cursorBlink: true, scrollback: 5000,
     copyOnSelect: false, rightClickPaste: false, confirmClose: true,
-    defaultShell: '', startFolder: '', gpuRenderer: true,
+    defaultShell: '', startFolder: '', gpuRenderer: true, osNotify: true,
   };
   var S = (function () {
     var s = {};
@@ -401,6 +401,30 @@
     if (notifs.length > 60) notifs.length = 60;
     paintNotifBadge();
     if (npanel.hasAttribute('data-open')) renderNotif();
+    maybeOsNotify(title, sub, termId);
+  }
+  // Reach Edward when WinMux isn't the window he's looking at. In-app badges are
+  // invisible then; an OS notification is the whole point of an attention bus.
+  // Only fires when the window is unfocused, the setting is on, and permission is
+  // granted (asked once, silent no-op if denied). Works under Electron and the
+  // web/phone path alike via the standard Notification API; click -> focus + jump.
+  function maybeOsNotify(title, sub, termId) {
+    try {
+      if (S.osNotify === false) return;
+      if (document.hasFocus()) return;           // he's already looking — the badge suffices
+      if (typeof window.Notification === 'undefined') return;
+      var fire = function () {
+        try {
+          var n = new window.Notification(String(title || 'WinMux'), { body: String(sub || ''), tag: 'winmux-' + (termId || 'x') });
+          n.onclick = function () {
+            try { window.focus(); var b = winBridge(); if (b && b.focus) b.focus(); } catch (e) {}
+            if (termId != null) { var tj = termById(termId); if (tj) { var pj = paneById(tj.paneId) || paneById(activePaneId); if (pj) { activateTerm(pj, tj.id); focusPane(pj.id); } } }
+          };
+        } catch (e) {}
+      };
+      if (window.Notification.permission === 'granted') fire();
+      else if (window.Notification.permission !== 'denied') { try { window.Notification.requestPermission().then(function (p) { if (p === 'granted') fire(); }); } catch (e) {} }
+    } catch (e) {}
   }
   function unreadCount() { return notifs.filter(function (n) { return n.unread; }).length; }
   function paintNotifBadge() {
@@ -2408,6 +2432,7 @@
     if (t === 'Behaviour') {
       var isEl = !!(window.winmux && window.winmux.isElectron);
       return frow('Confirm before closing', 'Ask before ending a running shell', sw('confirmClose', S.confirmClose)) +
+        frow('Desktop notifications', 'Alert you when a session needs you and WinMux is not the window you are looking at', sw('osNotify', S.osNotify)) +
         frow('Default shell', 'Used by new tabs and splits', sel('defaultShell', [['', 'First available (' + labelFor(DEFAULT_SHELL) + ')']].concat(SHELLS.map(function (s) { return [s.key, s.label]; })), S.defaultShell)) +
         frow('Start folder', 'Blank = your home folder', '<input class="ctl" type="text" value="' + esc(S.startFolder) + '" data-set="startFolder" placeholder="' + esc(HOME) + '" style="width:230px" spellcheck="false">') +
         (isEl ? frow('Closing the window', 'Your shells and agents keep running in the background — reopen WinMux to land right back on them. Use this only when you want to stop everything.', '<span class="btn" data-act="quit-server">Quit completely &amp; stop all sessions</span>') : '');

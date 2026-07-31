@@ -82,6 +82,7 @@ const PORT_INSTANT = 9932;
 const PORT_SURVIVE2 = 9933;   // registered port (runner boots a throwaway here)
 const PORT_PARITY = 9934;     // terminal-parity addons (web-links, unicode11)
 const PORT_NOTIFY = 9935;     // attention bus: `winmux notify` flips a session to needs-you
+const PORT_OSNOTIFY = 9936;   // attention bus: OS notification fires only when unfocused
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -2027,6 +2028,54 @@ check('notify', PORT_NOTIFY, async ({ browser, base, t, shot }) => {
   t('the NEEDS YOU counter and an Approve control appear', after.need === '1' && after.hasApprove, after);
   await shot(page, 'notify-needsyou');
   await page.close();
+});
+
+// --- osnotify: an attention alert reaches Edward when the window is unfocused -
+// The point of the attention bus: when a session needs you and WinMux is NOT the
+// window you're looking at, an OS notification fires (in-app badges are invisible
+// then). When it IS focused, the badge suffices and no OS notification fires. We
+// stub window.Notification + document.hasFocus so both cases are deterministic,
+// and drive a real `winmux notify` to trigger the path.
+check('osnotify', PORT_OSNOTIFY, async ({ browser, base, t }) => {
+  const winmux = (a) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...a],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_OSNOTIFY), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = ''; proc.stdout.on('data', (d) => o += d); proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+  const stub = (focused) => {
+    // eslint-disable-next-line no-undef
+    try { localStorage.setItem('ct-onboard', '1'); } catch (e) {}
+    window.__osNotes = [];
+    function FakeNote(title, opts) { window.__osNotes.push({ title: title, body: opts && opts.body }); this.onclick = null; }
+    FakeNote.permission = 'granted';
+    FakeNote.requestPermission = function () { return Promise.resolve('granted'); };
+    window.Notification = FakeNote;
+    Object.defineProperty(document, 'hasFocus', { value: function () { return focused; }, configurable: true });
+  };
+
+  // Unfocused → the OS notification MUST fire.
+  const p1 = await browser.newPage({ viewport: { width: 1280, height: 860 }, colorScheme: 'dark' });
+  await p1.addInitScript(stub, false);
+  await p1.goto(base, { waitUntil: 'domcontentloaded' });
+  await p1.waitForTimeout(4500);
+  await winmux(['notify', 'the deploy needs your call']);
+  await p1.waitForTimeout(500);
+  const unfocused = await p1.evaluate(() => window.__osNotes || []);
+  t('an OS notification fires when a session needs you and WinMux is unfocused',
+    unfocused.length >= 1 && /needs you/i.test(unfocused[0].title || ''), unfocused);
+  await p1.close();
+
+  // Focused → NO OS notification (the in-app badge is enough).
+  const p2 = await browser.newPage({ viewport: { width: 1280, height: 860 }, colorScheme: 'dark' });
+  await p2.addInitScript(stub, true);
+  await p2.goto(base, { waitUntil: 'domcontentloaded' });
+  await p2.waitForTimeout(4500);
+  await winmux(['notify', 'this should stay quiet']);
+  await p2.waitForTimeout(500);
+  const focused = await p2.evaluate(() => window.__osNotes || []);
+  t('no OS notification fires while WinMux is the focused window', focused.length === 0, focused);
+  await p2.close();
 });
 
 // --- parity: modern-terminal addons are loaded on the live terminal --------
