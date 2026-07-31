@@ -88,6 +88,7 @@ const PORT_DOING = 9938;      // cockpit: a session row shows a live "what's it 
 const PORT_CLIP = 9939;       // cockpit: cross-device clipboard round-trips through /api/clip
 const PORT_CONFIG = 9940;     // config: durable on-disk settings via /api/config
 const PORT_THEME = 9941;      // theme import: a Windows Terminal scheme recolours the terminal
+const PORT_KEYS = 9942;       // custom keybindings: a remapped chord runs the action, the old one doesn't
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
@@ -2304,6 +2305,41 @@ check('theme-import', PORT_THEME, async ({ browser, base, t, shot }) => {
     String(res.magenta).toLowerCase() === '#881798' && String(res.brightMagenta).toLowerCase() === '#b4009e', res);
   await page.waitForTimeout(300);
   await shot(page, 'theme-import');
+  await page.close();
+});
+
+// --- keybindings: a remapped shortcut moves; the old chord goes dead ---------
+// The custom-keybindings differentiator: rebind an action and the new chord runs
+// it while the old default no longer does. We remap the command palette to Ctrl+K,
+// then fire real keydown events: Ctrl+K must open the palette, and the old
+// Ctrl+Shift+P must not. Proves the keydown chain is keymap-driven, not hardcoded.
+check('keybindings', PORT_KEYS, async ({ browser, base, t, shot }) => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 }, colorScheme: 'dark' });
+  // Clear any stored keymap so the default-chord assertion tests a real default.
+  await page.addInitScript(() => { try { localStorage.clear(); localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+  const res = await page.evaluate(() => {
+    function fire(init) { document.dispatchEvent(new KeyboardEvent('keydown', Object.assign({ bubbles: true, cancelable: true }, init))); }
+    function paletteOpen() { var w = document.getElementById('palette-wrap'); return !!(w && w.hasAttribute('data-open')); }
+    // Default chord still works after the keymap refactor.
+    fire({ key: 'P', ctrlKey: true, shiftKey: true });
+    var defOpens = paletteOpen();
+    fire({ key: 'Escape' });
+    window.__winmuxSetKeymap('palette', 'Ctrl+K');
+    fire({ key: 'Escape' });
+    fire({ key: 'k', ctrlKey: true });
+    var newOpens = paletteOpen();
+    fire({ key: 'Escape' });
+    fire({ key: 'P', ctrlKey: true, shiftKey: true });
+    var oldOpens = paletteOpen();
+    fire({ key: 'Escape' });
+    return { effective: window.__winmuxKeymap().map.palette, defOpens: defOpens, newOpens: newOpens, oldOpens: oldOpens };
+  });
+  t('the default chord still works after the keymap refactor', res.defOpens === true, res);
+  t('a remapped shortcut is recorded', res.effective === 'Ctrl+K', res);
+  t('the new chord runs the action', res.newOpens === true, res);
+  t('the old default no longer triggers it', res.oldOpens === false, res);
   await page.close();
 });
 

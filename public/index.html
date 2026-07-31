@@ -517,6 +517,10 @@
     color: color-mix(in srgb, var(--text) 46%, transparent);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .cockpit[data-mode="narrow"] .srow .sdoing { font-size: 12px; }
+  /* Shortcuts settings rows: the current chord, then Rebind / Reset, spaced from
+     each other. cockpit.css is frozen; this override owns the layout. */
+  .frow .kb-chord { margin-right: 8px; }
+  .frow .kb-rebind, .frow .kb-reset { margin-left: 6px; }
   /* U4 — inline Approve on a "needs you" row: clear a waiting session in one click,
      without switching into it. Green (--ok) so it reads as the affirmative action. */
   .sapprove { flex: 0 0 auto; align-self: center; margin-right: 3px; padding: 3px 9px; border-radius: 999px;

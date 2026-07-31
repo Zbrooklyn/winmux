@@ -80,12 +80,21 @@
 
 **Done-criteria:** A user rebinds an action in Settings, the new chord runs it, the old chord doesn't, and the binding persists via the config file. Unremapped actions behave exactly as before (no regression).
 
-- [ ] `ACTIONS` registry + `chordOf(e)` normaliser (Ctrl/Alt/Shift/Meta + key, stable order).
-- [ ] Refactor keydown: resolve chord → keymap → action; preserve the terminal-is-king fall-through and copy-mode capture verbatim.
-- [ ] Shortcuts settings tab: list, rebind (capture next chord), reset one / reset all; conflict warning.
-- [ ] Persist `config.keymap`; merge over defaults on boot.
-- [ ] `keybindings` harness check (remap → new chord fires, old doesn't). `npm run verify` green.
-- [ ] Screenshot: the Shortcuts tab with a rebound action. Commit + push.
+- [x] `ACTIONS` registry (18 remappable app actions) + `chordOf(e)` normaliser (fixed Ctrl/Alt/Shift order) + `effectiveChord`/`keymapLookup`.
+- [x] Refactored keydown: the clean app-chord if-chain → one `keymapLookup(chordOf(e))` dispatch. Copy-mode capture, Ctrl+Tab MRU, the terminal-is-king fall-through, Escape, font-size (=/+/−/0) and Alt+1-9 tab-jump all kept hardcoded/verbatim (not remappable by design).
+- [x] Shortcuts settings tab: every action with its current chord + Rebind (captures the next chord via a modal that stands the global handler down through `rebindCapture`) + per-row Reset + Reset-all; collision warning; requires a modifier or function key.
+- [x] Persist `config.keymap` (`saveKeymap`, gated by `configReady`); localStorage mirror; disk fills gaps on boot.
+- [x] `keybindings` harness check (PORT 9942): default chord still fires after the refactor · a remap is recorded · the new chord runs it · the old default goes dead — 4/4.
+- [x] Screenshot: Shortcuts tab with "Command palette → Ctrl+K" (default-hint + Reset) shipped. Commit + push.
+
+**STATUS: DONE.** Shortcuts are remappable in Settings → Shortcuts and persist via the config file; the keydown chain is keymap-driven, not hardcoded, with every special case preserved. 46/46 across keybindings+config+theme-import+colour+cli+migrate+doing+parity+notify+mcp — the core keyboard refactor is regression-clean.
+
+---
+
+## Item 6 — ALL THREE TASKS DONE
+- T1 config file — DONE (10bd305).
+- T2 theme import — DONE (735781e).
+- T3 custom keybindings — DONE (this commit).
 
 ---
 

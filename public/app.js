@@ -121,6 +121,9 @@
         if (j && j.ok && j.config) {
           DISK_CONFIG = j.config;
           if (DISK_CONFIG.themes && typeof DISK_CONFIG.themes === 'object') USER_THEMES = DISK_CONFIG.themes;
+          if (DISK_CONFIG.keymap && typeof DISK_CONFIG.keymap === 'object') {
+            for (var km in DISK_CONFIG.keymap) if (!(km in KEYMAP)) KEYMAP[km] = DISK_CONFIG.keymap[km];   // localStorage wins; disk fills gaps
+          }
           var s = DISK_CONFIG.settings;
           if (s && typeof s === 'object') {
             var changed = false;
@@ -2394,6 +2397,37 @@
       S.palette = r.id; applySettings(); renderSettings();
     });
   }
+  // Capture the next chord and bind it to an action. rebindCapture makes the app's
+  // global handler stand down; a one-shot capture listener (registered after it, so
+  // it runs second and does the work) reads the chord, requires a modifier or a
+  // function key, rejects a collision, then persists it and re-renders.
+  function rebindShortcut(id) {
+    var a = actionById(id); if (!a) return;
+    var body = document.getElementById('dlg-body');
+    body.innerHTML = '<h3>Rebind: ' + esc(a.label) + '</h3>' +
+      '<p class="fhint" style="margin:0 0 8px">Press the new shortcut. It needs at least one of Ctrl / Alt / Shift, or a function key. Esc cancels.</p>' +
+      '<div class="dlg-err" style="color:var(--danger,#e06c75);font-size:12px;min-height:16px"></div>' +
+      '<div class="drow"><span class="btn" data-cancel>Cancel</span></div>';
+    openOvl('dlg-ovl');
+    var err = body.querySelector('.dlg-err');
+    rebindCapture = true;
+    function cleanup() { rebindCapture = false; document.removeEventListener('keydown', onKey, true); }
+    function onKey(e) {
+      e.preventDefault(); e.stopPropagation();
+      var k = e.key;
+      if (k === 'Escape') { cleanup(); closeOvl('dlg-ovl'); return; }
+      if (k === 'Control' || k === 'Alt' || k === 'Shift' || k === 'Meta') return;   // wait for the real key
+      var hasMod = e.ctrlKey || e.metaKey || e.altKey || e.shiftKey;
+      if (!hasMod && !/^F\d+$/.test(k)) { err.textContent = 'That needs a modifier (Ctrl / Alt / Shift) or a function key.'; return; }
+      var chord = chordOf(e);
+      var clash = keymapLookup(chord);
+      if (clash && clash.id !== id) { err.textContent = '"' + chord + '" is already used by "' + clash.label + '".'; return; }
+      if (chord === a.def) delete KEYMAP[id]; else KEYMAP[id] = chord;
+      saveKeymap(); cleanup(); closeOvl('dlg-ovl'); renderSettings();
+    }
+    body.querySelector('[data-cancel]').addEventListener('click', function () { cleanup(); closeOvl('dlg-ovl'); });
+    document.addEventListener('keydown', onKey, true);
+  }
 
   // ---------------------------------------------------------- save / load
   function layouts() { try { return JSON.parse(localStorage.getItem('ct-layouts') || '[]'); } catch (e) { return []; } }
@@ -2620,8 +2654,17 @@
     }
     if (t === 'Phone') return phonePane();
     if (t === 'Shortcuts') {
-      return KEYS.map(function (k) { return frow(k[0], '', '<span class="kbd">' + k[1] + '</span>'); }).join('') +
-        '<div style="margin-top:14px"><span class="btn" data-act="cheat">Open the full list (F1)</span></div>';
+      var rows = ACTIONS.map(function (a) {
+        var custom = !!KEYMAP[a.id];
+        return '<div class="frow"><div class="fl"><div class="fname">' + esc(a.label) + '</div>' +
+          (custom ? '<div class="fhint">default ' + esc(a.def) + '</div>' : '') + '</div>' +
+          '<span class="kbd kb-chord">' + esc(effectiveChord(a)) + '</span>' +
+          '<span class="btn kb-rebind" data-rebind="' + a.id + '">Rebind</span>' +
+          (custom ? '<span class="btn kb-reset" data-resetkey="' + a.id + '">Reset</span>' : '') +
+          '</div>';
+      }).join('');
+      return rows +
+        '<div style="margin-top:14px"><span class="btn" data-act="reset-keys">Reset all shortcuts</span> <span class="btn" data-act="cheat">Full list (F1)</span></div>';
     }
     return '<div style="font-size:13px;margin-bottom:6px">WinMux v1.0</div>' +
       '<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:14px">A terminal multiplexer for Windows. Runs real shells on this machine. It always listens on 127.0.0.1, where only this PC can reach it. Reaching it from your phone is off until you switch it on in Settings → Phone.</div>' +
@@ -2813,12 +2856,17 @@
       applySettings();
       return;
     }
+    var rb = e.target.closest ? e.target.closest('[data-rebind]') : null;
+    if (rb) { rebindShortcut(rb.getAttribute('data-rebind')); return; }
+    var rk = e.target.closest ? e.target.closest('[data-resetkey]') : null;
+    if (rk) { delete KEYMAP[rk.getAttribute('data-resetkey')]; saveKeymap(); renderSettings(); return; }
     var act = e.target.closest ? e.target.closest('[data-act]') : null;
     if (!act) return;
     var a = act.getAttribute('data-act');
     if (a === 'cheat') { closeOvl('settings-ovl'); openCheat(); }
     if (a === 'diag') { closeOvl('settings-ovl'); openDiag(); }
     if (a === 'import-theme') { importThemeDialog(); }
+    if (a === 'reset-keys') { KEYMAP = {}; saveKeymap(); renderSettings(); }
     if (a === 'phone-copy' && phoneS && phoneS.url) {
       // The copy itself works, but writeText is async and notify() only pings the
       // (silent) bell — so a click looked like nothing happened. Confirm right on
@@ -3076,10 +3124,67 @@
     if (npanel.hasAttribute('data-open') && !npanel.contains(e.target) && !e.target.closest('#open-notif') && !e.target.closest('#notif-backdrop')) closeNotif();
   });
 
+  // ---- Remappable keyboard actions -------------------------------------------
+  // The app-level chords a user can rebind. Each has a stable id, a label, a
+  // default chord, and the fn it runs (state looked up live, so never a stale pane
+  // ref). The non-remappable captures — copy mode, Ctrl+Tab MRU, the terminal-is-
+  // king fall-through, Escape, font size, Alt+digit tab-jump — are deliberately NOT
+  // here: they belong to the shell or aren't worth the ambiguity of remapping.
+  var KEYMAP = {};   // id -> chord override
+  try { var _rawKm = JSON.parse(localStorage.getItem('ct-keymap') || '{}'); if (_rawKm && typeof _rawKm === 'object') KEYMAP = _rawKm; } catch (e) {}
+  var ACTIONS = [
+    { id: 'help', label: 'Keyboard help', def: 'F1', run: function () { openCheat(); } },
+    { id: 'palette', label: 'Command palette', def: 'Ctrl+Shift+P', run: function () { openPalette(); } },
+    { id: 'settings', label: 'Settings', def: 'Ctrl+,', run: function () { openSettings(); } },
+    { id: 'toggle-sidebar', label: 'Toggle sidebar', def: 'Ctrl+B', run: function () { toggleSidebar(); } },
+    { id: 'toggle-dock', label: 'Toggle dock', def: 'Ctrl+Alt+D', run: function () { toggleDock(); } },
+    { id: 'notifications', label: 'Notifications', def: 'Ctrl+Alt+N', run: function () { toggleNotif(document.getElementById('open-notif')); } },
+    { id: 'broadcast', label: 'Broadcast to all panes', def: 'Ctrl+Alt+B', run: function () { setBroadcast(!broadcastOn); } },
+    { id: 'save-layout', label: 'Save layout', def: 'Ctrl+Alt+S', run: function () { saveLayoutDialog(); } },
+    { id: 'load-layout', label: 'Load layout', def: 'Ctrl+Alt+O', run: function () { loadLayoutDialog(); } },
+    { id: 'find', label: 'Find in terminal', def: 'Ctrl+F', run: function () { var p = paneById(activePaneId); if (p) openFind(p); } },
+    { id: 'copy', label: 'Copy selection', def: 'Ctrl+Shift+C', run: function () { var t = activeTerm(); if (t) copySel(t); } },
+    { id: 'paste', label: 'Paste', def: 'Ctrl+Shift+V', run: function () { var t = activeTerm(); if (t) pasteInto(t); } },
+    { id: 'zoom', label: 'Zoom pane', def: 'Ctrl+Shift+Enter', run: function () { var p = paneById(activePaneId); if (p) toggleZoom(p); } },
+    { id: 'split-down', label: 'Split down', def: 'Ctrl+Shift+D', run: function () { var p = paneById(activePaneId); if (p) splitDown(p, startShell()); } },
+    { id: 'split-right', label: 'Split right', def: 'Ctrl+D', run: function () { var p = paneById(activePaneId); if (p) splitRight(p, startShell()); } },
+    { id: 'close-pane', label: 'Close pane', def: 'Alt+Shift+W', run: function () { var p = paneById(activePaneId); if (p) askClosePane(p); } },
+    { id: 'close-tab', label: 'Close tab', def: 'Alt+W', run: function () { var p = paneById(activePaneId); if (p && p.activeTermId) askCloseTerm(p, p.activeTermId); } },
+    { id: 'new-tab', label: 'New tab', def: 'Alt+T', run: function () { var p = paneById(activePaneId); if (p) newTerm(p, startShell()); } },
+  ];
+  function actionById(id) { for (var i = 0; i < ACTIONS.length; i++) if (ACTIONS[i].id === id) return ACTIONS[i]; return null; }
+  function effectiveChord(a) { return KEYMAP[a.id] || a.def; }
+  // Normalise a keyboard event to a chord string like "Ctrl+Shift+P". Modifier
+  // order is fixed (Ctrl, Alt, Shift) so it matches the default chords above.
+  function chordOf(e) {
+    var k = e.key;
+    if (k === ' ') k = 'Space';
+    else if (k.length === 1) k = k.toUpperCase();
+    var mods = [];
+    if (e.ctrlKey || e.metaKey) mods.push('Ctrl');
+    if (e.altKey) mods.push('Alt');
+    if (e.shiftKey) mods.push('Shift');
+    return mods.concat([k]).join('+');
+  }
+  function keymapLookup(chord) {
+    for (var i = 0; i < ACTIONS.length; i++) if (effectiveChord(ACTIONS[i]) === chord) return ACTIONS[i];
+    return null;
+  }
+  function saveKeymap() {
+    try { localStorage.setItem('ct-keymap', JSON.stringify(KEYMAP)); } catch (e) {}
+    if (!configReady) return;
+    try { fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keymap: KEYMAP }) }).catch(function () {}); } catch (e) {}
+  }
+  var rebindCapture = false;   // true while the Shortcuts UI is waiting to catch a chord
+  // Observability hooks (mirror __winmuxActiveTerm) so the harness can drive rebinds.
+  window.__winmuxSetKeymap = function (id, chord) { if (chord) KEYMAP[id] = chord; else delete KEYMAP[id]; saveKeymap(); };
+  window.__winmuxKeymap = function () { return { map: KEYMAP, effective: ACTIONS.map(function (a) { return { id: a.id, chord: effectiveChord(a) }; }) }; };
+
   // -------------------------------------------------------------- keyboard
   // One capture-phase handler for the whole app: xterm's own textarea listener
   // never sees a shortcut we claim here.
   document.addEventListener('keydown', function (e) {
+    if (rebindCapture) return;   // the Shortcuts rebind UI owns the keyboard right now
     var tgt = e.target;
     var inField = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'SELECT' || (tgt.tagName === 'TEXTAREA' && !tgt.classList.contains('xterm-helper-textarea')));
     // A real button fires on Enter and Space. Every icon control here is a span
@@ -3125,27 +3230,16 @@
       return;
     }
 
-    if (e.key === 'F1') { stop(); openCheat(); return; }
-    if (ctrl && e.shiftKey && (e.key === 'P' || e.key === 'p')) { stop(); openPalette(); return; }
-    if (ctrl && !e.shiftKey && !e.altKey && e.key === ',') { stop(); openSettings(); return; }
-    if (ctrl && !e.shiftKey && !e.altKey && (e.key === 'b' || e.key === 'B')) { stop(); toggleSidebar(); return; }
-    if (ctrl && e.altKey && (e.key === 'd' || e.key === 'D')) { stop(); toggleDock(); return; }
-    if (ctrl && e.altKey && (e.key === 'n' || e.key === 'N')) { stop(); toggleNotif(document.getElementById('open-notif')); return; }
-    if (ctrl && e.altKey && (e.key === 'b' || e.key === 'B')) { stop(); setBroadcast(!broadcastOn); return; }
-    if (ctrl && e.altKey && (e.key === 's' || e.key === 'S')) { stop(); saveLayoutDialog(); return; }
-    if (ctrl && e.altKey && (e.key === 'o' || e.key === 'O')) { stop(); loadLayoutDialog(); return; }
-    if (ctrl && !e.altKey && !e.shiftKey && (e.key === 'f' || e.key === 'F')) { stop(); if (p) openFind(p); return; }
-    if (ctrl && e.shiftKey && (e.key === 'C' || e.key === 'c')) { stop(); var tc = activeTerm(); if (tc) copySel(tc); return; }
-    if (ctrl && e.shiftKey && (e.key === 'V' || e.key === 'v')) { stop(); var tv = activeTerm(); if (tv) pasteInto(tv); return; }
-    if (ctrl && e.shiftKey && e.key === 'Enter') { stop(); if (p) toggleZoom(p); return; }
-    if (ctrl && e.shiftKey && (e.key === 'D' || e.key === 'd')) { stop(); if (p) splitDown(p, startShell()); return; }
-    if (ctrl && !e.shiftKey && !e.altKey && (e.key === 'd' || e.key === 'D')) { stop(); if (p) splitRight(p, startShell()); return; }
+    // Remappable app chords: resolve the pressed chord to an action (defaults,
+    // overridden by the user's keymap). This replaces the old hardcoded if-chain,
+    // so a rebind in Settings actually moves the shortcut.
+    var _act = keymapLookup(chordOf(e));
+    if (_act) { stop(); _act.run(); return; }
+    // Not remappable — the =/+ and -/_ variants aren't worth the ambiguity.
     if (ctrl && !e.altKey && (e.key === '=' || e.key === '+')) { stop(); setFontSize(S.fontSize + 1); return; }
     if (ctrl && !e.altKey && (e.key === '-' || e.key === '_')) { stop(); setFontSize(S.fontSize - 1); return; }
     if (ctrl && !e.altKey && e.key === '0') { stop(); S.fontSize = DEFAULTS.fontSize; applySettings(); return; }
-    if (e.altKey && e.shiftKey && (e.key === 'W' || e.key === 'w')) { stop(); if (p) askClosePane(p); return; }
-    if (e.altKey && !e.shiftKey && (e.key === 'w' || e.key === 'W')) { stop(); if (p && p.activeTermId) askCloseTerm(p, p.activeTermId); return; }
-    if (e.altKey && !e.shiftKey && (e.key === 't' || e.key === 'T')) { stop(); if (p) newTerm(p, startShell()); return; }
+    // Not remappable — Alt+1..9 jumps to a tab by position.
     if (e.altKey && !ctrl && e.key >= '1' && e.key <= '9') {
       var n = parseInt(e.key, 10) - 1;
       if (p && p.terms[n]) { stop(); activateTerm(p, p.terms[n].id); }
