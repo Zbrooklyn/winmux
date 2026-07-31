@@ -2609,6 +2609,45 @@ check('md-rich', PORT_MDRICH, async ({ browser, base, t, shot }) => {
   await page.close();
 });
 
+// Item 7 T3 — terminal command-marks navigation + reset. Seed OSC-133 prompt
+// marks at known buffer lines, jump the viewport to one, and reset the buffer.
+check('marks', PORT_MARKS, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);
+
+  const res = await page.evaluate(async () => {
+    function write(term, s) { return new Promise((r) => term.write(s, r)); }
+    const term0 = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
+    if (! term0 || ! term0.term) return { error: 'no active term' };
+    const term = term0.term;
+     term0.marks = [];                       // start from a clean mark list
+    const A = '\x1b]133;A\x07';              // OSC 133 ; A = prompt start mark
+    const marks = [];
+    for (let blk = 0; blk < 3; blk++) {
+      await write(term, A);
+      marks.push(term.buffer.active.baseY + term.buffer.active.cursorY);
+      for (let i = 0; i < 20; i++) await write(term, 'line ' + blk + '-' + i + '\r\n');
+    }
+    term.scrollToBottom();
+    const beforeTop = term.buffer.active.viewportY;
+    const jumped = window.__winmuxJumpMark(-1);   // to the previous prompt
+    const afterTop = term.buffer.active.viewportY;
+    const captured = term0.marks.filter((m) => m.k === 'A').map((m) => m.y);
+    const reset = window.__winmuxResetTerm();
+    const lenAfterReset = term.buffer.active.length;
+    return { marks, captured, jumped, beforeTop, afterTop, reset, lenAfterReset, rows: term.rows };
+  });
+  t('OSC-133 prompt marks are captured at their buffer lines',
+    !!res && !res.error && res.captured.length === 3 && res.captured.join(',') === res.marks.join(','), res);
+  t('jump-to-previous-prompt scrolls the viewport onto a mark line',
+    !!res && res.jumped === true && res.afterTop < res.beforeTop && res.marks.indexOf(res.afterTop) >= 0, res);
+  t('reset clears the terminal buffer back to a clean screen',
+    !!res && res.reset === true && res.lenAfterReset <= res.rows, res);
+  await shot(page, 'marks');
+  await page.close();
+});
+
 // -------------------------------------------------------------------- main
 
 (async () => {

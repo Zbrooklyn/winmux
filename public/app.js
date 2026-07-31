@@ -345,6 +345,28 @@
     } catch (e) {}
   }
   function copySel(t) { try { var s = t.term.getSelection(); if (s) { if (navigator.clipboard) navigator.clipboard.writeText(s); postClip(s); } } catch (e) {} }
+  // Command-mark navigation: OSC-133 'A' marks are the prompt boundaries the shell
+  // emits. Jump the viewport to the previous/next prompt so you can walk command
+  // history without scrolling by eye. No-op safely when the shell emits no marks.
+  function jumpMark(t, dir) {
+    if (!t || !t.term || !t.marks || !t.marks.length) return false;
+    var term = t.term, cur = term.buffer.active.viewportY, ys = [];
+    for (var i = 0; i < t.marks.length; i++) if (t.marks[i].k === 'A' && typeof t.marks[i].y === 'number') ys.push(t.marks[i].y);
+    if (!ys.length) return false;
+    ys.sort(function (a, b) { return a - b; });
+    var target = null;
+    if (dir > 0) { for (var j = 0; j < ys.length; j++) if (ys[j] > cur) { target = ys[j]; break; } }
+    else { for (var k = ys.length - 1; k >= 0; k--) if (ys[k] < cur) { target = ys[k]; break; } }
+    if (target == null) return false;
+    try { term.scrollToLine(target); } catch (e) { return false; }
+    return true;
+  }
+  // Reset terminal: clear the screen AND scrollback and reset modes/colours to a
+  // clean slate. Purely visual — the shell and socket underneath are untouched.
+  function resetTerm(t) {
+    if (!t || !t.term) return false;
+    try { t.term.reset(); t.term.focus(); return true; } catch (e) { return false; }
+  }
   // Paste safety (#214). A pasted block with newlines runs every line as its own
   // command the instant it lands — a footgun, and a worse one in front of an
   // agent. A single trailing newline (paste one command + run it) is fine; two
@@ -390,6 +412,7 @@
     if (S.clipSync) addMenuItem(m, 'Paste from other device', '', function () { pasteFromOtherDevice(t); });
     addMenuItem(m, 'Select all', '', function () { try { t.term.selectAll(); } catch (e) {} });
     addMenuItem(m, 'Clear', '', function () { try { t.term.clear(); t.term.focus(); } catch (e) {} });
+    addMenuItem(m, 'Reset terminal', effectiveChord(actionById('reset-terminal')), function () { resetTerm(t); });
     addMenuItem(m, 'Find…', 'Ctrl+F', function () { openFind(p); });
     addMenuItem(m, 'Split right', 'Ctrl+D', function () { splitRight(p, startShell()); });
     addMenuItem(m, 'Close tab', 'Alt+W', function () { askCloseTerm(p, t.id); });
@@ -3151,6 +3174,9 @@
     { id: 'close-pane', label: 'Close pane', def: 'Alt+Shift+W', run: function () { var p = paneById(activePaneId); if (p) askClosePane(p); } },
     { id: 'close-tab', label: 'Close tab', def: 'Alt+W', run: function () { var p = paneById(activePaneId); if (p && p.activeTermId) askCloseTerm(p, p.activeTermId); } },
     { id: 'new-tab', label: 'New tab', def: 'Alt+T', run: function () { var p = paneById(activePaneId); if (p) newTerm(p, startShell()); } },
+    { id: 'jump-prev-mark', label: 'Jump to previous prompt', def: 'Ctrl+Shift+ArrowUp', run: function () { var t = activeTerm(); if (t) jumpMark(t, -1); } },
+    { id: 'jump-next-mark', label: 'Jump to next prompt', def: 'Ctrl+Shift+ArrowDown', run: function () { var t = activeTerm(); if (t) jumpMark(t, 1); } },
+    { id: 'reset-terminal', label: 'Reset terminal', def: 'Ctrl+Shift+K', run: function () { var t = activeTerm(); if (t) resetTerm(t); } },
   ];
   function actionById(id) { for (var i = 0; i < ACTIONS.length; i++) if (ACTIONS[i].id === id) return ACTIONS[i]; return null; }
   function effectiveChord(a) { return KEYMAP[a.id] || a.def; }
@@ -3179,6 +3205,8 @@
   // Observability hooks (mirror __winmuxActiveTerm) so the harness can drive rebinds.
   window.__winmuxSetKeymap = function (id, chord) { if (chord) KEYMAP[id] = chord; else delete KEYMAP[id]; saveKeymap(); };
   window.__winmuxKeymap = function () { return { map: KEYMAP, effective: ACTIONS.map(function (a) { return { id: a.id, chord: effectiveChord(a) }; }) }; };
+  window.__winmuxJumpMark = function (dir) { var t = activeTerm(); return jumpMark(t, dir); };
+  window.__winmuxResetTerm = function () { var t = activeTerm(); return resetTerm(t); };
 
   // -------------------------------------------------------------- keyboard
   // One capture-phase handler for the whole app: xterm's own textarea listener
