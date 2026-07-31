@@ -2140,7 +2140,9 @@ check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
   const browser = await chromium.launch({ channel: 'msedge', headless: !HEADED });
   const report = [];
 
-  await Promise.all(run.map(async (c) => {
+  // Run one check, capturing its result into `report`. Kept as a named worker so
+  // the pool below can call it under a concurrency cap.
+  const runOne = async (c) => {
     const lines = [];
     let fails = 0, skipped = null;
     const t = (name, pass, note) => {
@@ -2158,7 +2160,21 @@ check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
       lines.push('  FAIL  the check itself threw\n          ' + String(e.message || e).slice(0, 200));
     }
     report.push({ id: c.id, port: c.port, lines, fails, skipped });
-  }));
+  };
+
+  // Concurrency throttle. Running EVERY check at once (unbounded Promise.all)
+  // saturates the CPU and makes the timing-sensitive checks (busyport/cli/trust/
+  // pwsh) flake — they pass in isolation, fail under a full parallel run. A bounded
+  // pool keeps enough parallelism to stay fast while leaving headroom so no check
+  // is starved. Override with WINMUX_VERIFY_CONCURRENCY (1 = fully serial).
+  const cpu = (os.cpus() || []).length || 4;
+  const MAX_CONCURRENCY = Math.max(1, Number(process.env.WINMUX_VERIFY_CONCURRENCY) || Math.min(4, cpu - 2));
+  console.log('running ' + run.length + ' checks, ' + MAX_CONCURRENCY + ' at a time');
+  const queue = run.slice();
+  const workers = Array.from({ length: Math.min(MAX_CONCURRENCY, queue.length) }, async () => {
+    while (queue.length) { await runOne(queue.shift()); }
+  });
+  await Promise.all(workers);
 
   await browser.close();
   if (busyHold) busyHold.stop();
