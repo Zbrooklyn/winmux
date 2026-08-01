@@ -2495,6 +2495,28 @@ check('parity', PORT_PARITY, async ({ browser, base, t, shot }) => {
   t('OSC-7 sets the shell cwd (new splits inherit it)', st.ok && /Windows[\\/]+System32/i.test(st.cwd || ''), st);
   t('OSC-133 command marks are captured', st.ok && (st.marks || []).indexOf('A') >= 0, st);
   t('OSC-0/2 auto-titles the tab', st.tabLabel === 'WinMux Parity Demo', st);
+
+  // OSC-8 explicit hyperlinks are handled by xterm CORE, not by the web-links addon
+  // ("the addon is loaded" proves nothing about them). With a null linkHandler xterm
+  // falls back to its own confirm() + window.open, which bypasses WinMux's opener.
+  // So click a real hyperlink and watch where it actually lands.
+  await page.evaluate(() => {
+    window.__linkProbe = { opened: [], confirms: 0 };
+    window.open = function (u) { window.__linkProbe.opened.push(u); return null; };
+    window.confirm = function () { window.__linkProbe.confirms++; return false; };
+    const at = window.__winmuxActiveTerm();
+    at.term.write('\r\n\x1b]8;;https://winmux.example/osc8\x07OSC8-LINK-PROOF\x1b]8;;\x07\r\n');
+  });
+  await page.waitForTimeout(700);
+  const linkCell = page.locator('.xterm-rows span', { hasText: 'OSC8-LINK-PROOF' }).first();
+  await linkCell.hover();
+  await page.waitForTimeout(250);
+  await linkCell.click();
+  await page.waitForTimeout(400);
+  const osc8 = await page.evaluate(() => window.__linkProbe);
+  t('an OSC-8 hyperlink opens through WinMux\'s opener, not xterm\'s confirm() fallback',
+    osc8.opened.indexOf('https://winmux.example/osc8') >= 0 && osc8.confirms === 0, osc8);
+
   await page.waitForTimeout(400);
   await shot(page, 'parity-links');
   await page.close();

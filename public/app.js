@@ -1571,27 +1571,38 @@
     host.style.display = 'none';
     p.termArea.appendChild(host);
 
+    // One opener for every kind of link so a bare URL and an explicit hyperlink can't
+    // behave differently. Under Electron the bridge hands it to the OS browser; on the
+    // web there is no bridge, so a new tab is the honest equivalent.
+    function openLink(uri) {
+      if (window.winmux && window.winmux.openExternal) window.winmux.openExternal(uri);
+      else window.open(uri, '_blank', 'noopener');
+    }
     var term = new Terminal({
       fontFamily: FONTS[S.fontFamily] || FONTS['Cascadia Code'],
       fontSize: S.fontSize, lineHeight: S.lineHeight, cursorBlink: !!S.cursorBlink,
       cursorStyle: S.cursorStyle, scrollback: S.scrollback, theme: themeColors(),
       // Search highlight decorations are a proposed API; the find bar needs them.
       allowProposedApi: true,
+      // OSC-8 hyperlinks (ESC]8;;URI BEL label ESC]8;; BEL) are handled by xterm core,
+      // NOT by the web-links addon. Leave this null and xterm falls back to its own
+      // window.confirm("...could potentially be dangerous") plus a raw window.open —
+      // a dialog that isn't ours, on a path that ignores the Electron bridge. Routing
+      // it here makes an explicit hyperlink open exactly like a bare URL.
+      linkHandler: { activate: function (ev, uri) { openLink(uri); } },
     });
     var fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     var search = new SearchAddon.SearchAddon();
     term.loadAddon(search);
-    // Clickable links (web-links addon): bare URLs and OSC-8 explicit hyperlinks
-    // become hoverable + clickable. Opens in the OS default browser — the parity
-    // behaviour every modern terminal has (VS Code, Windows Terminal). Under Electron
-    // we route through the winmux bridge's openExternal; on web we window.open.
+    // Clickable links, half one: the web-links addon detects BARE URLs in the output
+    // and makes them hoverable + clickable — the parity behaviour every modern terminal
+    // has (VS Code, Windows Terminal). It does NOT handle OSC-8 explicit hyperlinks;
+    // those are core xterm, wired through the linkHandler option above. Same opener for
+    // both, so a hyperlink and a bare URL can't behave differently.
     if (window.WebLinksAddon) {
       try {
-        term.loadAddon(new WebLinksAddon.WebLinksAddon(function (ev, uri) {
-          if (window.winmux && window.winmux.openExternal) window.winmux.openExternal(uri);
-          else window.open(uri, '_blank', 'noopener');
-        }));
+        term.loadAddon(new WebLinksAddon.WebLinksAddon(function (ev, uri) { openLink(uri); }));
         term.__winmuxWebLinks = true;   // observability hook for the harness
       } catch (e) {}
     }
