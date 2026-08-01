@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Each WinMux tab remembers its folder and (optionally) a resume command; closing WinMux ends the shells, and reopening auto-runs `cd <folder>` → `claude --continue` in each armed tab so you land back in every conversation without touching anything.
+**Goal:** Each WinMux tab remembers its folder **and the specific Claude conversation it was in**; closing WinMux ends the shells, and reopening auto-runs `cd <folder>` → `claude --resume <that conversation id>` in each armed tab so you land back in every conversation without touching anything.
 
-**Architecture:** This is roadmap item #240 (workspace config-as-code). The save/restore machinery already exists — named layouts (`ct-layouts`) save `{cwd, shell, group, title}` per tab and `restoreLayout()` spawns fresh shells in each folder; the live snapshot (`ct-live`) reattaches by session id on reload. The feature adds ONE field — a per-tab **resume command** — carried through both, and runs it exactly once on the first *fresh* shell a restored tab gets. It slots into the existing reattach seam: on reconnect the server answers `m.resumed` (warm shell still there → you're back live, no resume) or `m.lost` (shell gone → cold reopen → run the resume command). So a full-app close-and-reopen resumes via `claude --continue`; a page reload where the detached server kept the shell warm reattaches live. Never orphans a running agent, never double-runs.
+**Architecture:** This is roadmap item #240 (workspace config-as-code). The save/restore machinery already exists — named layouts (`ct-layouts`) save `{cwd, shell, group, title}` per tab and `restoreLayout()` spawns fresh shells in each folder; the live snapshot (`ct-live`) reattaches by session id on reload. The feature adds a per-tab **resume command plus the pinned conversation id** — carried through both, and runs it exactly once on the first *fresh* shell a restored tab gets. It slots into the existing reattach seam: on reconnect the server answers `m.resumed` (warm shell still there → you're back live, no resume) or `m.lost` (shell gone → cold reopen → run the resume command). So a full-app close-and-reopen resumes via `claude --resume <id>`; a page reload where the detached server kept the shell warm reattaches live. Never orphans a running agent, never double-runs.
+
+**Not `--continue`.** `--continue` reopens whatever conversation the folder touched last, which is the wrong one the moment a folder holds more than one — the tab would silently come back to a different chat than it left. Arming therefore resolves the folder's real conversations from Claude's own store (`~/.claude/projects/<encoded-cwd>/*.jsonl`) through a desk-door-only `GET /api/claude-sessions?dir=…` (403 over the phone door; returns ids + mtimes for the one asked-for folder, never transcript contents, never a fleet scan) and pins the newest id into `t.resumeId`. The tab menu's "choose conversation…" picker pins any of them by hand; a hand-pinned tab (`t.resumePinnedByHand`) is never moved by the 30s refresh that keeps un-pinned tabs pointed at their newest chat.
 
 **Tech Stack:** vanilla `public/app.js` (client), `public/index.html` `<style>` override layer for any new styling (cockpit.css is FROZEN), `verify.cjs` Playwright harness.
 
@@ -13,7 +15,7 @@
 - `public/cockpit.css` is FROZEN — any new styling goes in the `index.html` `<style>` override layer only.
 - Keep `server.cjs`'s standalone `node server.cjs` phone/browser path unchanged — this is a pure client-side feature (no new server RPCs; the resume command is typed into the pty via the existing `t: 'i'` input channel).
 - Every task keeps `npm run verify` green and ships its own committed harness check.
-- Default resume command: `claude --continue --dangerously-skip-permissions` (Edward's "claude resume yolo"). It is a **setting** (`S.resumeCommand`), editable — not a silent hardcode.
+- Default resume command: `claude --resume {id} --dangerously-skip-permissions` (Edward's "claude resume yolo"), where `{id}` is substituted with the tab's pinned conversation. It is a **setting** (`S.resumeCommand`), editable — not a silent hardcode. `--continue` is explicitly NOT the default: Edward asked to resume the specific conversation, and `--continue` resumes the folder's latest instead.
 - Die-on-close + auto-resume-on-reopen is the intended UX (Edward's explicit spec). Do NOT rely on session survival for armed tabs; the resume path must work when the shells are gone.
 - Screenshots for any rendered change go to Edward (rule 21).
 - Build stays on `feature/phase8-electron-shell`. Do NOT touch the owner-gated publish (#230).
@@ -82,18 +84,18 @@ git commit -m "feat(resume): carry per-tab resume command through save/restore +
 - Modify: `public/index.html` — `<style>` override for the `.armed` indicator dot; Settings row for the resume command input.
 
 **Interfaces:**
-- Consumes: `t.resume`, `S.resumeCommand`, `persistLive()`.
-- Produces: `__winmuxArm(t, on)` test hook; a visible armed indicator.
+- Consumes: `t.resume`, `t.resumeId`, `t.resumePinnedByHand`, `S.resumeCommand`, `persistLive()`.
+- Produces: `__winmuxArm(t, on, id)` and `__winmuxClaudeSessions(dir, cb)` test hooks; a visible armed indicator.
 
-- [ ] **Step 1: Default setting.** In the `S` defaults add `resumeCommand: 'claude --continue --dangerously-skip-permissions'`. Mirror it through the same localStorage/disk config path as the other settings.
+- [ ] **Step 1: Default setting.** In the `S` defaults add `resumeCommand: 'claude --resume {id} --dangerously-skip-permissions'`. `{id}` is substituted with the tab's pinned conversation. Mirror it through the same localStorage/disk config path as the other settings.
 
-- [ ] **Step 2: Arm/disarm function.** Add `function armResume(t, on) { t.resume = on ? (S.resumeCommand || 'claude --continue') : null; persistLive(); renderSidebar(); layoutTabs(paneById(t.paneId)); }` and expose `window.__winmuxArm = armResume;` for the harness.
+- [ ] **Step 2: Arm/disarm function.** `armResume(t, on, id)` — when `on`, pin a conversation id (the explicit `id` argument if given, else the newest from `claudeSessions(t.cwd, …)`), store it as `t.resumeId`, and build `t.resume` by substituting `{id}` into `S.resumeCommand`; when off, clear both. Then `persistLive(); renderSidebar(); layoutTabs(paneById(t.paneId));`. Expose `window.__winmuxArm = armResume;` for the harness. An explicit `id` also sets `t.resumePinnedByHand` so the background refresh leaves it alone.
 
-- [ ] **Step 3: Tab context-menu toggle.** In the tab menu, add a checkbox-style item: label `Auto-resume on reopen`, checked when `t.resume`, click → `armResume(t, !t.resume)`. Place it near Rename/Duplicate.
+- [ ] **Step 3: Tab context-menu toggle.** In the tab menu, add a checkbox-style item: label `Auto-resume on reopen`, checked when `t.resume`, click → `armResume(t, !t.resume)`. Add a second item `choose conversation…` that lists the folder's real conversations (id + last-modified, newest first, ✓ on the pinned one) and pins the clicked one. Place them near Rename/Duplicate.
 
-- [ ] **Step 4: Visible indicator.** In `renderSidebar()` (and the tab chrome) add a small `↻` / dot with class `armed` when `t.resume`. Style it in the index.html override layer only (cockpit.css frozen) — a low-key accent glyph, not a loud badge.
+- [ ] **Step 4: Visible indicator.** In `renderSidebar()` (and the tab chrome) add a small `↻` / dot with class `armed` when `t.resume`, tooltipped with the pinned conversation id. Style it in the index.html override layer only (cockpit.css frozen) — a low-key accent glyph, not a loud badge. **The marker must live in its own element, NOT as a `::after` on the truncating title**: the tab title is a real shell path with `overflow: hidden`, so a marker inside it is clipped away, and an unconstrained sidebar name pushes the marker off the rail entirely. Verify by measuring the marker's rendered box against its container, not by glancing at a short-title screenshot.
 
-- [ ] **Step 5: Settings field.** Add a Settings row "Resume command" bound to `S.resumeCommand`, with helper text "Run in each armed tab when WinMux reopens (e.g. claude --continue)."
+- [ ] **Step 5: Settings field.** Add a Settings row "Resume command" bound to `S.resumeCommand`, with helper text "Run in each armed tab when WinMux reopens. `{id}` is replaced with that tab's pinned conversation (e.g. claude --resume {id})."
 
 - [ ] **Step 6: Screenshot proof to Edward** — armed tab (indicator visible) + the Settings row. Ship via SendUserFile.
 
@@ -125,7 +127,35 @@ git push origin feature/phase8-electron-shell
 
 ## Self-Review
 
-- **Spec coverage:** folder remembered (existing cwd) ✓; conversation remembered as a resume command ✓; die-on-close (existing kill-on-close) ✓; auto-run on reopen (Task 2) ✓; per-tab (Task 3) ✓; configurable command, no silent hardcode ✓.
+- **Spec coverage:** folder remembered (existing cwd) ✓; **the specific conversation** remembered as a pinned id inside the resume command ✓; die-on-close (existing kill-on-close) ✓; auto-run on reopen (Task 2) ✓; per-tab (Task 3) ✓; configurable command, no silent hardcode ✓.
 - **Placeholder scan:** none — every step names the exact function and line region.
-- **Type consistency:** `t.resume` is string|null everywhere; snapshot serializes `''` for none; `newTerm`'s 5th param is `resumeCmd`.
+- **Type consistency:** `t.resume` is string|null everywhere; `t.resumeId` is the pinned conversation uuid|null; snapshot serializes `''` for none; `newTerm`'s 5th param is `resumeCmd`.
 - **Risk:** double-run guarded by `autoResumePending` (one-shot) + `_openedOnce`; reattach explicitly clears without firing so a warm server never re-types into a live agent.
+
+## Revision — `--resume <id>`, not `--continue` (2026-07-31)
+
+The first build shipped `claude --continue`. That was wrong: Edward asked for the tab to come back
+to **the specific conversation**, and `--continue` reopens whichever conversation the folder touched
+most recently. Everything above is the corrected plan; the delta actually shipped was:
+
+- **Resolve real conversations.** `GET /api/claude-sessions?dir=<abs>` reads
+  `~/.claude/projects/<cwd-with-non-alphanumerics-replaced-by-dashes>/*.jsonl` and returns
+  `{id, mtime}` newest-first for that one folder. Desk-door only — 403 when `viaPhone` — and it
+  never returns transcript contents. It is deliberately not a fleet scan: Edward cut that scope
+  ("keep it only to what's directly related to our tool").
+- **Pin, don't guess.** `t.resumeId` holds the conversation; a 30s refresh keeps un-pinned armed
+  tabs pointed at their folder's newest chat, and `t.resumePinnedByHand` freezes any tab the user
+  chose by hand.
+- **Migration v2 → v3.** A saved blob still carrying a `--continue` arm is dropped to "not armed"
+  rather than silently resuming the wrong conversation on the next open.
+- **Falsifiable proof, not an assertion.** The scratch E2E puts two real Claude conversations in one
+  folder — the older told to remember `PINEAPPLE-42`, the newer `BANANA-99` — pins the tab to the
+  OLDER, then does a cold reopen. The terminal answered `PINEAPPLE-42` and never `BANANA-99`, which
+  `--continue` structurally could not do. The committed `resume` check in `verify.cjs` grew from 5
+  to 10 assertions, all against `--resume <id>` semantics.
+- **Marker defect found by measurement.** The `↻` armed marker was invisible in both places: on the
+  tab it was a `::after` inside `.tt`, which is the truncating element (`scrollWidth 350` vs
+  `clientWidth 154`), and in the sidebar the unconstrained `.sname` pushed it to `x=483` inside a
+  282px rail. Fixed with a dedicated `.tres` span outside `.tt` and an ellipsizing `.sname` in a
+  real flex `.srtop`; re-measured inside its container in both places. A short-title screenshot
+  would have passed — this is why mechanics get measured, not eyeballed.

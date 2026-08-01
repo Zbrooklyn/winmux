@@ -543,11 +543,17 @@
   /* Auto-resume armed marker: a small ↻ next to an armed session's name (sidebar)
      and a matching accent dot on its tab. Says "this tab comes back on reopen"
      without shouting. cockpit.css is the frozen contract; this override owns it. */
-  .srow .srtop { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+  .srow .srtop { display: flex; align-items: center; gap: 5px; min-width: 0; }
+  /* The session name is a real shell path; without this it overruns the row and
+     drags the ↻ off the sidebar entirely (measured: marker at x=483 in a 282px rail). */
+  .srow .srtop .sname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .srow .sresume { flex: 0 0 auto; font-size: 11px; line-height: 1; color: var(--accent);
     opacity: .85; cursor: default; }
-  .ptab.armed .tt::after { content: "↻"; margin-left: 5px; font-size: 10px; color: var(--accent);
-    opacity: .9; vertical-align: 1px; }
+  /* Same failure on the tab: .tt is the truncating element, so the marker lives
+     beside it, not inside it. */
+  .ptab .tres { display: none; flex: 0 0 auto; margin-left: 4px; font-size: 10px; line-height: 1;
+    color: var(--accent); opacity: .9; }
+  .ptab.armed .tres { display: inline-block; }
 
   .sxpv { position: fixed; top: 0; bottom: 0; left: 264px; width: 320px; z-index: 70;
     background: var(--bg0); border-right: 1px solid var(--border); display: flex; flex-direction: column;

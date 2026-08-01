@@ -844,6 +844,44 @@ function handle(req, res, viaPhone) {
     return;
   }
 
+  // Which Claude Code conversations belong to a folder. An armed tab pins ONE of
+  // these ids so reopening WinMux resumes exactly that conversation (`claude
+  // --resume <id>`) instead of guessing at "the latest". Claude keeps one directory
+  // per cwd under ~/.claude/projects, named by replacing every non-alphanumeric
+  // character of the path with '-', holding one <conversation-id>.jsonl each. We
+  // read file NAMES and mtimes in that one directory — never a transcript's
+  // contents, and never other folders. Desk-door only, like /rpc.
+  if (urlPath === '/api/claude-sessions') {
+    if (viaPhone) { res.writeHead(403); return res.end('winmux: available only at the PC, not over the network'); }
+    const reply = (o) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(o));
+    };
+    let cwd = '';
+    try { cwd = new URL(req.url, 'http://x').searchParams.get('cwd') || ''; } catch (e) {}
+    if (!cwd) return reply({ ok: false, error: 'missing cwd', sessions: [] });
+    let dir;
+    try { dir = path.join(os.homedir(), '.claude', 'projects', path.resolve(cwd).replace(/[^a-zA-Z0-9]/g, '-')); }
+    catch (e) { return reply({ ok: false, error: 'bad cwd', sessions: [] }); }
+    fs.readdir(dir, (err, names) => {
+      // No directory = this folder has never run Claude. That is a normal answer,
+      // not an error: the UI must say "nothing to resume here" rather than arm
+      // something that would fail on reopen.
+      if (err) return reply({ ok: true, dir, sessions: [] });
+      const out = [];
+      for (const n of names || []) {
+        if (!/\.jsonl$/i.test(n)) continue;
+        let st = null;
+        try { st = fs.statSync(path.join(dir, n)); } catch (e) { continue; }
+        if (!st.size) continue;                     // an empty transcript resumes into nothing
+        out.push({ id: n.replace(/\.jsonl$/i, ''), mtime: st.mtimeMs, size: st.size });
+      }
+      out.sort((a, b) => b.mtime - a.mtime);
+      reply({ ok: true, dir, sessions: out.slice(0, 25) });
+    });
+    return;
+  }
+
   // The command channel for the `winmux` CLI. Desk-door only: the phone must
   // never be able to drive the app. Forwards to a connected /control client.
   if (urlPath === '/rpc') {

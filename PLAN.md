@@ -928,14 +928,25 @@ systems**: the same file the GUI save/load reads/writes is the one `winmux open`
 ### DELIVERED — save-project + auto-resume (the slice Edward asked for)
 Plan: `docs/superpowers/plans/2026-07-31-winmux-save-project-auto-resume.md`. The G-lifecycle
 piece Edward actually wanted: each tab can be **armed** (tab menu → "Auto-resume on reopen", or the
-↻ marker) to store a **resume command** (default `claude --continue --dangerously-skip-permissions`,
-configurable in Settings → Behaviour). Closing WinMux ends the shells; reopening auto-runs the
-command in each armed tab's saved folder — Edward's `cd folder; claude --continue`. Rides the
-existing `ct-live`/named-layout save + the reattach/`m.lost` seam: a warm reattach (page reload,
-server survived) lands back live and does NOT re-run; a cold reopen (app closed, shell gone) runs
-the resume command on a fresh shell. Fires on shell-quiet (prompt ready), not a fixed delay — a
-fixed delay would drop the command on a slow shell (caught + fixed in verify). Schema v1→v2
-(`resume` field; old blobs migrate as "not armed"). Harness: `resume` check (5/5 green). Owner
+↻ marker) to store its folder **and the specific Claude conversation** it was in, then rebuild
+`claude --resume <conversation-id> --dangerously-skip-permissions` (template configurable in
+Settings → Behaviour; `{id}` is the pin). Closing WinMux ends the shells; reopening auto-runs the
+command in each armed tab's saved folder — Edward's `cd folder; claude --resume <that chat>`.
+**Not `--continue`**: `--continue` reopens whatever the folder touched last, which is the wrong
+conversation the moment a folder has more than one. Arming resolves the folder's real conversations
+from Claude's own store (`~/.claude/projects/<encoded-cwd>/*.jsonl`) via the desk-door-only
+`/api/claude-sessions` (403 over the phone door; ids + mtimes only, never transcript contents) and
+pins the newest; the tab menu's "choose conversation…" picker pins any of them by hand, and a
+hand-pinned tab is never moved by the 30s refresh. Rides the existing `ct-live`/named-layout save +
+the reattach/`m.lost` seam: a warm reattach (page reload, server survived) lands back live and does
+NOT re-run; a cold reopen (app closed, shell gone) runs the resume command on a fresh shell. Fires
+on shell-quiet (prompt ready), not a fixed delay — a fixed delay would drop the command on a slow
+shell (caught + fixed in verify). Schema v1→v3 (`resume`/`resumeId`/`resumePinnedByHand`; old blobs
+migrate as "not armed", and v2 blobs carrying a stale `--continue` arm are dropped rather than
+silently resuming the wrong chat). Harness: `resume` check (10/10 green) asserting `--resume <id>`
+semantics. E2E proof against real Claude: two real conversations in one folder — the older told to
+remember PINEAPPLE-42, the newer BANANA-99 — with the tab pinned to the OLDER; the cold reopen
+answered PINEAPPLE-42 and never BANANA-99, which `--continue` could not have done. Owner
 decisions 1–4 above (flat/nested, file location, per-machine paths, unify) remain open for the
 FULL file-based config-as-code system — this slice delivers the auto-resume behaviour on the
 existing localStorage layout store without pre-deciding them.

@@ -111,6 +111,9 @@ const configFile = (port) => path.join(OUT, 'config-' + port + '.json');
 const argv = process.argv.slice(2);
 const HEADED = argv.includes('--headed');
 const ONLY = argv.filter((a) => !a.startsWith('-'));
+// Ceiling on a single check. The slowest honest check (survive/detach, which sit out
+// real grace windows) lands well under this; anything past it is stuck, not slow.
+const CHECK_TIMEOUT = Number(process.env.WINMUX_CHECK_TIMEOUT_MS) || 300000;
 
 // ---------------------------------------------------------------- plumbing
 
@@ -2784,74 +2787,138 @@ check('md-rich', PORT_MDRICH, async ({ browser, base, t, shot }) => {
   await page.close();
 });
 
-// #240 — save-project auto-resume. Arm a tab (it stores a resume command); on a
-// COLD reopen (the saved session id is gone, the exact case after you X out and
-// relaunch) the fresh shell auto-runs the command — Edward's `cd folder; claude
-// --continue`. On a WARM reattach (the shell survived, e.g. a page reload) it must
-// NOT re-type the command into a still-running agent. The resume command is the
-// configurable S.resumeCommand; the test swaps in a harmless echo sentinel so it
-// proves the wiring without needing a `claude` binary.
+// #240 — save-project auto-resume, pinned to a SPECIFIC conversation. An armed
+// tab stores its folder AND the exact Claude conversation used in it, and on a
+// COLD reopen (the saved shell id no longer resolves — the real X-out-and-relaunch
+// case) the fresh shell runs `claude --resume <that id>`. On a WARM reattach (the
+// shell survived, e.g. a page reload) it must NOT re-type anything into a live
+// agent. "Resume the folder's latest" is not good enough: resuming the wrong
+// conversation is worse than not resuming, so the id is the thing under test.
+//
+// The conversation ids come from Claude's own store (~/.claude/projects/<cwd with
+// every non-alphanumeric replaced by '-'>/<id>.jsonl), so the check seeds one
+// there for a folder it owns and removes it afterwards. The warm/cold injection
+// halves swap the command template for a harmless `echo` so the wiring is provable
+// without launching a real agent — the echoed text still carries the pinned id.
 const RESUME_SENTINEL = '__WINMUX_RESUMED__';
+const RESUME_CWD = path.join(OUT, 'resume-cwd');
+const RESUME_EMPTY = path.join(OUT, 'resume-empty');
+const RESUME_ID = '11111111-2222-3333-4444-555555555555';
+const claudeStoreFor = (p) => path.join(os.homedir(), '.claude', 'projects', path.resolve(p).replace(/[^a-zA-Z0-9]/g, '-'));
 check('resume', PORT_RESUME, async ({ browser, base, t, shot }) => {
+  fs.mkdirSync(RESUME_CWD, { recursive: true });
+  fs.mkdirSync(RESUME_EMPTY, { recursive: true });
+  const store = claudeStoreFor(RESUME_CWD);
+  fs.mkdirSync(store, { recursive: true });
+  fs.writeFileSync(path.join(store, RESUME_ID + '.jsonl'), '{"type":"user","message":"seeded by verify.cjs"}\n');
+  // The empty case must be genuinely empty — a leftover store from an earlier run
+  // would turn "does not arm" into a false pass.
+  try { fs.rmSync(claudeStoreFor(RESUME_EMPTY), { recursive: true, force: true }); } catch (e) {}
+
+  const page = await desktop(browser);
   const readScreen = () => page.evaluate(() => {
     const at = window.__winmuxActiveTerm(); if (!at) return '';
     const b = at.term.buffer.active; let out = '';
     for (let i = 0; i < b.length; i++) { const ln = b.getLine(i); if (ln) out += ln.translateToString(true) + '\n'; }
     return out;
   });
+  try {
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(4500);
 
-  const page = await desktop(browser);
-  await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);
+    // 1. The server answers with the folder's REAL conversation ids — read from
+    //    Claude's own store, not guessed.
+    const listed = await page.evaluate((dir) => new Promise((res) => window.__winmuxClaudeSessions(dir, res)), RESUME_CWD);
+    t('the server resolves a folder’s real Claude conversation ids',
+      listed.length === 1 && listed[0].id === RESUME_ID, listed);
 
-  // Arm the active tab with the sentinel resume command.
-  const armed = await page.evaluate((cmd) => {
-    const at = window.__winmuxActiveTerm();
-    window.__winmuxArm(at, true, 'echo ' + cmd);
-    const live = JSON.parse(localStorage.getItem('ct-live') || 'null');
-    let stored = '';
-    try { stored = live.cols[0][0].tabs[0].resume; } catch (e) {}
-    return { resume: at.resume, sid: at.sid, stored: stored };
-  }, RESUME_SENTINEL);
-  t('arming a tab stores its resume command in the live layout',
-    armed.resume === 'echo ' + RESUME_SENTINEL && armed.stored === 'echo ' + RESUME_SENTINEL, armed);
+    // 2. A folder Claude has never run in must NOT arm. Arming it would store a
+    //    command that fails on reopen, which reads as "it resumed" and isn't.
+    const noArm = await page.evaluate(async (dir) => {
+      const at = window.__winmuxActiveTerm();
+      at.cwd = dir;
+      window.__winmuxArm(at, true);
+      await new Promise((r) => setTimeout(r, 1500));
+      return { resume: at.resume, resumeId: at.resumeId };
+    }, RESUME_EMPTY);
+    t('arming a folder with no Claude conversation does NOT arm',
+      !noArm.resume && !noArm.resumeId, noArm);
 
-  // Phase 1 — WARM reattach: reload while the shell is still alive on the server
-  // (well within the grace window). The tab reattaches; the resume command must
-  // NOT run again (it would launch a second Claude into a live agent).
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);
-  const warm = await readScreen();
-  t('a warm reattach does NOT re-run the resume command',
-    warm.indexOf(RESUME_SENTINEL) < 0, { tail: warm.slice(-160) });
-  const stillArmed = await page.evaluate(() => {
-    const at = window.__winmuxActiveTerm(); return { resume: at && at.resume, pending: at && at.autoResumePending };
-  });
-  t('the tab stays armed after a warm reattach (still resumes next cold reopen)',
-    stillArmed.resume === 'echo ' + RESUME_SENTINEL && stillArmed.pending === false, stillArmed);
+    // 3. Arming a folder that HAS one pins that conversation and builds
+    //    `claude --resume <id>` — the command Edward asked for, not `--continue`.
+    const pinned = await page.evaluate(async (dir) => {
+      const at = window.__winmuxActiveTerm();
+      at.cwd = dir;
+      window.__winmuxArm(at, true);
+      for (let i = 0; i < 40 && !at.resume; i++) await new Promise((r) => setTimeout(r, 100));
+      let td = null;
+      try { td = JSON.parse(localStorage.getItem('ct-live')).cols[0][0].tabs[0]; } catch (e) {}
+      return { resume: at.resume, resumeId: at.resumeId, storedCmd: td && td.resume, storedId: td && td.resumeId, storedCwd: td && td.cwd };
+    }, RESUME_CWD);
+    t('arming pins the conversation and builds `claude --resume <id>`',
+      pinned.resumeId === RESUME_ID && !!pinned.resume && pinned.resume.indexOf('--resume ' + RESUME_ID) >= 0, pinned);
+    t('the tab persists BOTH its folder and its pinned conversation',
+      pinned.storedId === RESUME_ID && pinned.storedCmd === pinned.resume && !!pinned.storedCwd, pinned);
 
-  // Phase 2 — COLD reopen: poison the LIVE term's session id so that when this
-  // reload's beforeunload persists the layout, it stores an id the server can't
-  // resolve — exactly the real close-the-app-then-relaunch case (the old shell is
-  // gone, its saved id no longer resolves). The reattach then fails (m.lost), a
-  // fresh shell spawns, and the armed resume command must run in it.
-  await page.evaluate(() => {
-    const at = window.__winmuxActiveTerm();
-    at.sid = 'deadbeefdeadbeefdeadbeefdeadbeef';
-  });
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(5000);
-  const cold = await readScreen();
-  t('a cold reopen (session gone) auto-runs the resume command in the fresh shell',
-    cold.indexOf(RESUME_SENTINEL) >= 0, { tail: cold.slice(-200) });
-  const consumed = await page.evaluate(() => {
-    const at = window.__winmuxActiveTerm(); return { resume: at && at.resume, pending: at && at.autoResumePending };
-  });
-  t('resume fires once then clears its pending flag, keeping the arm for next time',
-    consumed.pending === false && consumed.resume === 'echo ' + RESUME_SENTINEL, consumed);
+    // Disarm before swapping the template — a reload while armed with the real
+    // command would launch an actual agent inside the harness.
+    await page.evaluate((sent) => {
+      window.__winmuxArm(window.__winmuxActiveTerm(), false);
+      const s = JSON.parse(localStorage.getItem('ct-settings') || '{}');
+      s.resumeCommand = 'echo ' + sent + ' {id}';
+      localStorage.setItem('ct-settings', JSON.stringify(s));
+    }, RESUME_SENTINEL);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(4500);
 
-  await shot(page, 'resume');
-  await page.close();
+    const rearmed = await page.evaluate(async (dir) => {
+      const at = window.__winmuxActiveTerm();
+      at.cwd = dir;
+      window.__winmuxArm(at, true);
+      for (let i = 0; i < 40 && !at.resume; i++) await new Promise((r) => setTimeout(r, 100));
+      return { resume: at.resume, resumeId: at.resumeId };
+    }, RESUME_CWD);
+    t('the resume command is a template — {id} is replaced with the pinned conversation',
+      rearmed.resume === 'echo ' + RESUME_SENTINEL + ' ' + RESUME_ID, rearmed);
+
+    // Phase 1 — WARM reattach: reload while the shell is still alive on the
+    // server. The tab reattaches; nothing may be typed into the running agent.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(4500);
+    const warm = await readScreen();
+    t('a warm reattach does NOT re-run the resume command',
+      warm.indexOf(RESUME_SENTINEL) < 0, { tail: warm.slice(-160) });
+    const stillArmed = await page.evaluate(() => {
+      const at = window.__winmuxActiveTerm();
+      return { resume: at && at.resume, resumeId: at && at.resumeId, pending: at && at.autoResumePending };
+    });
+    t('the tab stays armed after a warm reattach (still resumes next cold reopen)',
+      stillArmed.resumeId === RESUME_ID && stillArmed.pending === false, stillArmed);
+
+    // Phase 2 — COLD reopen: poison the LIVE term's session id so this reload's
+    // beforeunload persists an id the server cannot resolve — exactly the real
+    // close-the-app-then-relaunch case. The reattach fails (m.lost), a fresh
+    // shell spawns, and the armed resume command runs in it, carrying the id.
+    await page.evaluate(() => { window.__winmuxActiveTerm().sid = 'deadbeefdeadbeefdeadbeefdeadbeef'; });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(5000);
+    const cold = await readScreen();
+    t('a cold reopen auto-runs the resume command in the fresh shell',
+      cold.indexOf(RESUME_SENTINEL) >= 0, { tail: cold.slice(-200) });
+    t('the command that runs names the PINNED conversation, not "the latest"',
+      cold.indexOf(RESUME_ID) >= 0, { tail: cold.slice(-200) });
+    const consumed = await page.evaluate(() => {
+      const at = window.__winmuxActiveTerm();
+      return { resume: at && at.resume, resumeId: at && at.resumeId, pending: at && at.autoResumePending };
+    });
+    t('resume fires once then clears its pending flag, keeping the arm for next time',
+      consumed.pending === false && consumed.resumeId === RESUME_ID, consumed);
+
+    await shot(page, 'resume');
+  } finally {
+    try { fs.rmSync(store, { recursive: true, force: true }); } catch (e) {}
+    await page.close();
+  }
 });
 
 // Item 7 T3 — terminal command-marks navigation + reset. Seed OSC-133 prompt
@@ -2963,12 +3030,25 @@ check('marks', PORT_MARKS, async ({ browser, base, t, shot }) => {
     const skip = (why) => { skipped = why; };
     const shot = (page, name) => page.screenshot({ path: path.join(OUT, c.id + '-' + name + '.png') });
     const errs = [];
+    // A hung check used to hang the WHOLE run silently: the per-check report is only
+    // printed after every worker drains, so one stuck await meant zero output, forever,
+    // with no way to tell which check was stuck. Stream a start/end line per check and
+    // cap each one — a check that overruns fails loudly instead of eating the run.
+    const started = Date.now();
+    console.log('  → ' + c.id + ' (:' + c.port + ')');
+    let bell;
+    const capped = new Promise((_, rej) => {
+      bell = setTimeout(() => rej(new Error('check timed out after ' + (CHECK_TIMEOUT / 1000) + 's')), CHECK_TIMEOUT);
+    });
     try {
-      await c.run({ browser, base: 'http://127.0.0.1:' + c.port, t, skip, shot, errs });
+      await Promise.race([c.run({ browser, base: 'http://127.0.0.1:' + c.port, t, skip, shot, errs }), capped]);
     } catch (e) {
       fails++;
       lines.push('  FAIL  the check itself threw\n          ' + String(e.message || e).slice(0, 200));
     }
+    clearTimeout(bell);
+    console.log('  ' + (skipped ? 'SKIP' : fails ? '✗' : '✓') + ' ' + c.id +
+      ' (' + Math.round((Date.now() - started) / 1000) + 's)');
     report.push({ id: c.id, port: c.port, lines, fails, skipped });
   };
 

@@ -76,10 +76,12 @@
     cursorStyle: 'block', cursorBlink: true, scrollback: 5000,
     copyOnSelect: false, rightClickPaste: false, confirmClose: true,
     defaultShell: '', startFolder: '', gpuRenderer: true, osNotify: true, clipSync: false,
-    // Auto-resume: the command an armed tab re-runs in its folder when WinMux
-    // reopens. `claude --continue` resumes that folder's last conversation;
-    // `--dangerously-skip-permissions` is Edward's "yolo remote control".
-    resumeCommand: 'claude --continue --dangerously-skip-permissions',
+    // Auto-resume: the command template an armed tab re-runs in its folder when
+    // WinMux reopens. {id} is replaced with the exact Claude conversation the tab
+    // pinned, so a reopen lands back in THAT conversation — not merely whatever
+    // was last touched in the folder. `--dangerously-skip-permissions` is the
+    // "yolo remote control" mode these tabs are meant to come back in.
+    resumeCommand: 'claude --resume {id} --dangerously-skip-permissions',
   };
   // Keys this browser has an explicit stored value for. They win over the on-disk
   // config on reconcile — localStorage is this device's stated choice; disk only
@@ -92,6 +94,13 @@
       var raw = JSON.parse(localStorage.getItem('ct-settings') || '{}');
       for (var j in raw) if (j in s) { s[j] = raw[j]; LS_KEYS[j] = true; }
     } catch (e) {}
+    // A resume command with no {id} placeholder can't pin a conversation — it is
+    // either the older `--continue` form or a hand-edit that would silently resume
+    // the wrong chat. Bring it forward to the template rather than obeying it.
+    if (typeof s.resumeCommand !== 'string' || s.resumeCommand.indexOf('{id}') < 0) {
+      s.resumeCommand = DEFAULTS.resumeCommand;
+      delete LS_KEYS.resumeCommand;
+    }
     return s;
   })();
   // Settings live in two places: localStorage (the instant, offline mirror — keeps
@@ -508,25 +517,100 @@
     if (S.confirmClose && open) confirmDialog(label, open + ' shell process' + (open === 1 ? '' : 'es') + ' will be ended.', 'Close', run);
     else run();
   }
-  // Arm/disarm auto-resume on a tab. Armed = this tab re-runs the resume command
-  // (default `claude --continue`) in its folder the next time WinMux opens. Only
-  // writes the flag + persists; it does NOT run anything now (arming a live Claude
-  // tab shouldn't launch a second one) — the run happens on the next fresh shell.
-  function armResume(t, on, cmd) {
-    t.resume = on ? (cmd || S.resumeCommand || 'claude --continue') : null;
-    if (t.tabEl) t.tabEl.classList.toggle('armed', !!t.resume);
+  // The Claude conversations that belong to a folder, newest first. The server
+  // reads the ids out of Claude's own store for that one cwd; an empty list means
+  // Claude has never run there, which is a real answer the UI must show.
+  function claudeSessions(cwd, cb) {
+    if (!cwd) return cb([]);
+    fetch('/api/claude-sessions?cwd=' + encodeURIComponent(cwd))
+      .then(function (r) { return r.json(); })
+      .then(function (j) { cb((j && j.sessions) || []); })
+      .catch(function () { cb([]); });
+  }
+  function resumeCmdFor(id) {
+    var tpl = S.resumeCommand || DEFAULTS.resumeCommand;
+    return tpl.indexOf('{id}') >= 0 ? tpl.split('{id}').join(id) : tpl + ' ' + id;
+  }
+  // Arm/disarm auto-resume on a tab. Armed = the next time WinMux opens, this tab
+  // resumes THE conversation pinned here — `claude --resume <id>` in the tab's own
+  // folder — not "whatever was last touched". The id is resolved from Claude's own
+  // store, so arming fails honestly when the folder has no conversation yet.
+  // Writes the flag + persists only; it never runs anything now (arming a live
+  // Claude tab must not launch a second one) — the run happens on the next fresh shell.
+  function armResume(t, on, id) {
+    if (!on) {
+      t.resume = null; t.resumeId = null;
+      applyArm(t);
+      return;
+    }
+    if (id) { pin(id); return; }
+    claudeSessions(t.cwd, function (list) {
+      if (!list.length) {
+        notify('Nothing to resume', 'No Claude conversation in ' + (t.cwd || 'this folder') + ' yet.', t.id);
+        return;
+      }
+      pin(list[0].id);                        // newest conversation in this tab's folder
+    });
+    function pin(cid) {
+      t.resumeId = cid;
+      t.resume = resumeCmdFor(cid);
+      applyArm(t);
+    }
+  }
+  function applyArm(t) {
+    if (t.tabEl) {
+      t.tabEl.classList.toggle('armed', !!t.resume);
+      var mk = t.tabEl.querySelector('.tres');
+      if (mk) mk.title = t.resume ? ('Auto-resumes conversation ' + (t.resumeId || '?') + ' on reopen — ' + t.resume) : '';
+    }
     persistLive();
     renderSidebar();
     var p = paneById(t.paneId); if (p) layoutTabs(p);
   }
-  window.__winmuxArm = armResume;   // harness hook (3rd arg overrides S.resumeCommand)
+  // Keep an armed tab pinned to the conversation actually being used in it. Starting
+  // a new chat in the tab makes a new id the live one, and a stale pin would reopen
+  // into yesterday's conversation — so re-resolve on a slow poll. Only ever moves the
+  // pin forward to a NEWER conversation in the same folder; a tab whose id was chosen
+  // by hand (pickResumeConversation) opts out.
+  function refreshArmedResumeIds() {
+    allTerms().forEach(function (t) {
+      if (!t.resume || t.resumePinnedByHand || !t.cwd) return;
+      claudeSessions(t.cwd, function (list) {
+        if (!list.length || list[0].id === t.resumeId) return;
+        t.resumeId = list[0].id;
+        t.resume = resumeCmdFor(list[0].id);
+        persistLive();
+        renderSidebar();
+      });
+    });
+  }
+  setInterval(refreshArmedResumeIds, 30000);
+  // Pin a specific conversation by hand, for a folder that holds several.
+  function pickResumeConversation(t, x, y) {
+    claudeSessions(t.cwd, function (list) {
+      var m = newMenu();
+      if (!list.length) addMenuItem(m, 'No Claude conversation in this folder', '', function () {});
+      list.slice(0, 12).forEach(function (s) {
+        var when = new Date(s.mtime);
+        var label = (s.id === t.resumeId ? '✓ ' : '') + s.id.slice(0, 8) + ' · ' + when.toLocaleString();
+        addMenuItem(m, label, '', function () {
+          t.resumePinnedByHand = true;
+          armResume(t, true, s.id);
+        });
+      });
+      placeMenu(m, x, y);
+    });
+  }
+  window.__winmuxArm = armResume;              // harness hook (3rd arg pins an explicit id)
+  window.__winmuxClaudeSessions = claudeSessions;
 
   function showTabMenu(t, x, y) {
     var p = paneById(t.paneId);
     var m = newMenu();
     addMenuItem(m, 'Change tab color…', '', function () { showTabColorMenu(t, x, y); });
     addMenuItem(m, 'Rename…', '', function () { focusTerm(t.id); startRename(t); });
-    addMenuItem(m, (t.resume ? '✓ Auto-resume on reopen' : 'Auto-resume on reopen'), '', function () { armResume(t, !t.resume); });
+    addMenuItem(m, (t.resume ? '✓ Auto-resume this conversation' : 'Auto-resume this conversation'), '', function () { armResume(t, !t.resume); });
+    addMenuItem(m, 'Auto-resume: choose conversation…', '', function () { pickResumeConversation(t, x, y); });
     addMenuItem(m, 'Duplicate', '', function () { if (p) { newTerm(p, t.shell, t.cwd); focusPane(p.id); } });
     addMenuItem(m, 'Split tab', 'Ctrl+D', function () { if (p) splitRight(p, t.shell, t.cwd); });
     addMenuItem(m, 'Move to group…', '', function () { showMoveToGroupMenu(t, x, y); });
@@ -744,7 +828,7 @@
       '<span class="dot ' + dotClass(t) + '"></span>' +
       '<div class="sinfo">' +
       '<div class="srtop"><span class="sname mono">' + esc(termName(t)) + '</span>' +
-      (t.resume ? '<span class="sresume" title="Auto-resumes on reopen: ' + esc(t.resume) + '" aria-label="Auto-resume armed">↻</span>' : '') +
+      (t.resume ? '<span class="sresume" title="Auto-resumes conversation ' + esc(t.resumeId || '?') + ' on reopen — ' + esc(t.resume) + '" aria-label="Auto-resume armed">↻</span>' : '') +
       '</div>' +
       '<div class="sstat ' + statusTone(t) + '">' + statusLine(t) +
       (t.cwd ? ' · <span class="m2">' + esc(tailPath(t.cwd)) + '</span>' : '') + '</div>' +
@@ -1397,6 +1481,7 @@
   function recordClosed(p, t) {
     closedStack.push({
       paneId: p.id, shell: t.shell, cwd: t.cwd, resume: t.resume || null,
+      resumeId: t.resumeId || null, resumePinnedByHand: !!t.resumePinnedByHand,
       name: t.renamed ? t.tabEl.querySelector('.tt').textContent : null,
     });
     if (closedStack.length > 20) closedStack.shift();
@@ -1406,7 +1491,7 @@
     if (!d) return;
     var p = paneById(d.paneId) || paneById(activePaneId) || panes[0];
     if (!p) return;
-    var t = newTerm(p, d.shell, d.cwd, null, d.resume || null);
+    var t = newTerm(p, d.shell, d.cwd, null, d.resume || null, d.resumeId || null, d.resumePinnedByHand);
     if (d.name) { t.tabEl.querySelector('.tt').textContent = d.name; t.renamed = true; renderSidebar(); }
     focusPane(p.id);
   }
@@ -1437,7 +1522,7 @@
     input.addEventListener('mousedown', function (e) { e.stopPropagation(); });
   }
 
-  function newTerm(p, shellKey, cwd, seedSid, resumeCmd) {
+  function newTerm(p, shellKey, cwd, seedSid, resumeCmd, resumeId, pinnedByHand) {
     shellKey = shellKey || startShell();
     var id = ++termSeq;
     var host = document.createElement('div');
@@ -1518,7 +1603,11 @@
     tabEl.className = 'ptab';
     tabEl.draggable = true;
     tabEl.innerHTML = favHTML(shellKey) +
-      '<span class="tt">' + esc(labelFor(shellKey)) + '</span><span class="x" title="Close tab (Alt+W)">×</span>' +
+      '<span class="tt">' + esc(labelFor(shellKey)) + '</span>' +
+      // Own element, not a ::after on .tt — the title truncates, and a marker inside
+      // it disappears the moment the tab shows a real (long) shell path.
+      '<span class="tres" aria-hidden="true">↻</span>' +
+      '<span class="x" title="Close tab (Alt+W)">×</span>' +
       '<i class="tprog" style="width:0"></i>';
     p.tabscroll.appendChild(tabEl);
     var ttEl = tabEl.querySelector('.tt');
@@ -1529,9 +1618,11 @@
       tabEl: tabEl, dotEl: tabEl.querySelector('.fdot'), progEl: tabEl.querySelector('.tprog'),
       state: 'idle', status: 'idle', sid: seedSid || null, ended: false,
       cwd: null, shell: shellKey, renamed: false, results: null, busyTimer: null, progTimer: null,
-      // Auto-resume: a command WinMux re-runs in this tab's folder when it reopens
-      // (e.g. `claude --continue`). Persisted with the layout; null = not armed.
-      resume: resumeCmd || null, autoResumePending: false, _openedOnce: false,
+      // Auto-resume: the pinned Claude conversation (resumeId) and the exact command
+      // WinMux re-runs in this tab's folder when it reopens — `claude --resume <id>`.
+      // Persisted with the layout; null = not armed.
+      resume: resumeCmd || null, resumeId: resumeId || null, resumePinnedByHand: !!pinnedByHand,
+      autoResumePending: false, _openedOnce: false,
     };
     if (t.resume) tabEl.classList.add('armed');   // restored/reopened armed tab shows the ↻ marker
     // A tab can be dragged into another pane, so never close over `p` — look the pane up live.
@@ -1541,7 +1632,7 @@
     // reopen where the old shell is gone, or a saved-project template with no live
     // session), type the resume command once — `cd` is unnecessary because the
     // shell already spawned in the tab's saved cwd, so this is just `claude
-    // --continue`. One-shot: a warm reattach clears `autoResumePending` without
+    // --resume <pinned id>`. One-shot: a warm reattach clears `autoResumePending` without
     // firing (see the meta handler), so a running agent is never re-typed into.
     function fireResume() {
       if (!t.autoResumePending || !t.resume) return;
@@ -1655,7 +1746,7 @@
             term.reset();
             if (told) { term.write('\x1b[90m[reconnected]\x1b[0m\r\n'); told = false; }
             // Reattached to the still-live shell — never re-run the resume command
-            // (that would type `claude --continue` into an agent already running).
+            // (that would type `claude --resume …` into an agent already running).
             t.autoResumePending = false;
           } else if (m.lost) {
             // We asked for a shell that is gone — say so plainly instead of
@@ -2526,7 +2617,10 @@
             // The group is saved by NAME, not id — ids are per-browser, names are the thing.
             // The session id rides along too, but only for the live-reload snapshot: a
             // saved *layout* is a template, so it drops the sid (see snapshot callers).
-            return { shell: t.shell, cwd: t.cwd || '', group: g ? g.name : '', title: t.renamed ? t.tabEl.querySelector('.tt').textContent : '', sid: t.sid || '', resume: t.resume || '' };
+            // resumeId is the Claude conversation this tab is pinned to; `resume` is
+            // the literal command built from it. Both ride along so a reopened tab
+            // returns to THAT conversation, in this folder.
+            return { shell: t.shell, cwd: t.cwd || '', group: g ? g.name : '', title: t.renamed ? t.tabEl.querySelector('.tt').textContent : '', sid: t.sid || '', resume: t.resume || '', resumeId: t.resumeId || '', resumePin: !!t.resumePinnedByHand };
           }),
         });
       });
@@ -2552,13 +2646,26 @@
   // changes, and add a step to migrateLayout() to bring old blobs forward. The
   // point (#212): an update that changes the format must never brick a returning
   // user — old state is upgraded, or safely discarded, never thrown on.
-  var SCHEMA_VERSION = 2;
+  var SCHEMA_VERSION = 3;
   function migrateLayout(desc) {
     if (!desc || typeof desc !== 'object') return null;
     var v = desc.v || 0;                      // pre-versioning blobs are v0 (== v1 shape)
     if (v > SCHEMA_VERSION) return null;       // written by a newer WinMux — don't guess, start clean
     // v2 added the per-tab `resume` command; an absent field is the correct
     // "not armed" state, so v0/v1 blobs need no transform to come forward.
+    // v3 pins the exact Claude conversation (resumeId) instead of resuming whatever
+    // the folder last touched. A v2 tab armed with the old `--continue` command has
+    // no id to pin, and silently resuming the wrong conversation is worse than not
+    // resuming — so drop the stale arm and let it be re-armed against a real id.
+    if (v < 3) {
+      (desc.cols || []).forEach(function (stack) {
+        (stack || []).forEach(function (pd) {
+          (pd.tabs || []).forEach(function (td) {
+            if (td.resume && !td.resumeId) { td.resume = ''; td.resumeId = ''; }
+          });
+        });
+      });
+    }
     return desc;
   }
   // Restores a layout, and is crash-safe on every path: a bad or future-format
@@ -2592,7 +2699,7 @@
         (pd.tabs || []).forEach(function (td) {
           // td.sid is set only by the live-reload snapshot; connect() will send it
           // and the server reattaches if the shell is still warm, else spawns fresh.
-          var t = newTerm(p, td.shell, td.cwd, td.sid, td.resume || null);
+          var t = newTerm(p, td.shell, td.cwd, td.sid, td.resume || null, td.resumeId || null, td.resumePin);
           // A restored+armed tab runs its resume command once, on the first FRESH
           // shell it gets — a warm reattach (server survived a reload) clears this
           // without firing, so a live agent is never re-typed into. See fireResume().
@@ -2736,7 +2843,7 @@
         frow('Sync clipboard across devices', 'Copy on this device makes the text available to paste on your phone (and back) over your tailnet. Held in memory only, never saved to disk. Off by default.', sw('clipSync', S.clipSync)) +
         frow('Default shell', 'Used by new tabs and splits', sel('defaultShell', [['', 'First available (' + labelFor(DEFAULT_SHELL) + ')']].concat(SHELLS.map(function (s) { return [s.key, s.label]; })), S.defaultShell)) +
         frow('Start folder', 'Blank = your home folder', '<input class="ctl" type="text" value="' + esc(S.startFolder) + '" data-set="startFolder" placeholder="' + esc(HOME) + '" style="width:230px" spellcheck="false">') +
-        frow('Resume command', 'Run in each armed tab when WinMux reopens (right-click a tab → “Auto-resume on reopen”). Resumes that folder’s last Claude conversation.', '<input class="ctl" type="text" value="' + esc(S.resumeCommand) + '" data-set="resumeCommand" placeholder="claude --continue" style="width:280px" spellcheck="false">') +
+        frow('Resume command', 'Run in each armed tab when WinMux reopens (right-click a tab → “Auto-resume this conversation”). {id} is replaced with that tab’s pinned Claude conversation.', '<input class="ctl" type="text" value="' + esc(S.resumeCommand) + '" data-set="resumeCommand" placeholder="claude --resume {id}" style="width:280px" spellcheck="false">') +
         (isEl ? frow('Closing the window', 'Your shells and agents keep running in the background — reopen WinMux to land right back on them. Use this only when you want to stop everything.', '<span class="btn" data-act="quit-server">Quit completely &amp; stop all sessions</span>') : '');
     }
     if (t === 'Phone') return phonePane();
