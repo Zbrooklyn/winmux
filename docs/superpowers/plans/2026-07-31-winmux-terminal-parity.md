@@ -90,3 +90,40 @@
 - Coverage: web-links (T1) = OSC-8 + clickable URLs; unicode11 (T2); shell integration OSC-7/133/0-2 (T3); ligatures (T4). All roadmap parity items covered.
 - Sequencing: cleanest/highest-visible-win first (links), then width, then shell integration, then the risky ligatures last behind a real investigation.
 - Each task ships a committed harness check + screenshot and keeps the phone path intact.
+
+---
+
+## Status — COMPLETE (2026-07-31)
+
+All four tasks shipped on `feature/phase8-electron-shell`; full harness **352/352**.
+
+**T1 — clickable links (`ea3e1e1`, `fda221a`).** Web-links addon vendored and wired.
+*Deviation from the plan as written:* the click handler opens in the **OS default browser**
+via `winmux.openExternal` (web mode: `window.open`), not the in-app browser panel — an
+address a user clicks is usually one they want in their real browser with their real
+session, and the panel stays a scripted surface. Also **the plan's assumption that the
+web-links addon covers OSC-8 was wrong**: OSC-8 is xterm *core*, gated on the
+`linkHandler` option, which WinMux left `null`. xterm's fallback fired its own
+`confirm("...could potentially be dangerous")` then `window.open`, bypassing WinMux's
+opener entirely — so an explicit hyperlink behaved differently from a bare URL inside the
+same feature. Fixed by routing both through one `openLink()`. The harness check now clicks
+a real OSC-8 link and asserts where it lands; proven fails-before (`{"opened":[],"confirms":1}`
+with the handler removed).
+
+**T2 — unicode11 (`ea3e1e1`).** Addon loaded, `activeVersion = '11'`, asserted live.
+
+**T3 — shell integration (`6900512`).** OSC-7 cwd (inherited by new splits), OSC-133 marks,
+OSC-0/2 auto-title — all emitted and asserted by the `parity` check.
+
+**T4 — ligatures (`3463192`), resolved on the plan's own fork, option (a).**
+`@xterm/addon-ligatures` is **Node-only** (`font-finder`/`font-ligatures` read fonts off
+disk) — unusable in the page WinMux serves. So: CSS `font-variant-ligatures: contextual`
+on the bundled Cascadia Code's `calt`, behind a Settings → Terminal switch, **default off**.
+Measured why the switch has to fork the renderer: the DOM renderer emits one text span per
+style run, which the browser can shape; **WebGL draws cell-by-cell from a glyph atlas and
+produces no DOM text at all** (`.xterm-rows` absent, 2 canvases) — CSS shaping is
+architecturally impossible under it. Turning ligatures on therefore disposes that terminal's
+WebGL addon and falls back to DOM, keeping scrollback; turning it off re-engages WebGL. That
+speed cost is why the default is off and the Settings copy says so. Harness `ligature` check
+(7 assertions) measures the flag, the renderer swap both ways, the computed
+`font-variant-ligatures` **on the arrow run itself** (not a wrapper), and scrollback survival.

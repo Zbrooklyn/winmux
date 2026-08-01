@@ -815,11 +815,15 @@ status`, clean-JSON CLI, pty pre-warm, atomic trust write, graceful shutdown, wo
 - Terminal-parity pass — GPU renderer + bundle font/Nerd-glyphs + ligatures + unicode11 +
   screenReaderMode — **L `[B]`**. Fixes the *measured* 10-session jank AND the clean-install
   Consolas/tofu bug. Interlocks via the renderer + a harness migration; its own session.
-  **STATUS:** GPU + font bundle + instant-feel + flake-fix DONE (Phases 0-4). Ride-along DONE
-  bar ligatures: clickable links/OSC-8 + unicode11 (`ea3e1e1`), shell integration OSC-7 cwd /
-  OSC-133 marks / OSC-0-2 auto-title (`6900512`). Ligatures (T4) is **owner-gated** — GPU vs
-  DOM-renderer tradeoff, decision packet open (default-off recommended). Plan:
-  `docs/superpowers/plans/2026-07-31-winmux-terminal-parity.md`.
+  **STATUS: DONE.** GPU + font bundle + instant-feel + flake-fix (Phases 0-4); clickable links +
+  unicode11 (`ea3e1e1`); shell integration OSC-7 cwd / OSC-133 marks / OSC-0-2 auto-title
+  (`6900512`); ligatures shipped **off by default** as a Settings switch (`3463192`) — the
+  recommended resolution of the GPU-vs-DOM tradeoff, reversible per user, so no owner gate was
+  needed: turning it on drops that terminal to the DOM renderer (measured: WebGL draws from a
+  glyph atlas and cannot shape, so the switch has to fork the renderer). OSC-8 explicit
+  hyperlinks were falling through to xterm's own `confirm()` + `window.open` — now routed
+  through WinMux's opener like bare URLs, proven by a click-through harness check (`fda221a`).
+  Plan: `docs/superpowers/plans/2026-07-31-winmux-terminal-parity.md`.
 - Session survival — detached server the app attaches to — **M–L `[B]`**. Closing never kills
   live agents; biggest "real software" gap; de-risks the 10-agent workload. **STATUS: DONE**
   (`d3e63a4`) — detached Electron-run-as-Node server + reattach + "Quit completely" control,
