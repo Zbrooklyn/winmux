@@ -97,6 +97,9 @@ const PORT_AGENTHOOKS = 9948; // agent: the Claude Code hooks preset drives live
 const PORT_WINGET = 9949;     // distribution: the winget manifest generator emits valid manifests
 const PORT_TUNOVR = 9950;     // #246: the WINMUX_TUNNELLED_PORTS override is honored (no fail-open under load)
 const PORT_RESUME = 9951;     // #240: an armed tab auto-runs its resume command on a cold reopen, not on a warm reattach
+// #246: three ports the port check holds itself, so it can prove the
+// every-candidate-taken refusal without starving the other auto-picking checks.
+const PORTS_EXHAUST = [9952, 9953, 9954];
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
@@ -404,6 +407,46 @@ check('port', PORT_FREE, async ({ t }) => {
   } else {
     t('SKIP tunnelled-PORT refusal — no serve rules on this machine', true);
   }
+
+  // The other end of the hunt: every candidate taken. This used to hand back
+  // the first candidate anyway — the very port it may have just refused for
+  // being tunnelled — and then die on a raw EADDRINUSE stack trace. A machine
+  // with a busy 88xx block is a normal machine, so the honest answer is a
+  // sentence and a non-zero exit, not a crash and not a keyless tailnet door.
+  // WINMUX_PORT_CANDIDATES pins the hunt to three ports this check holds
+  // itself, so proving exhaustion never starves the checks running beside it.
+  const holders = [];
+  for (const p of PORTS_EXHAUST) {
+    holders.push(await new Promise((res, rej) => {
+      const s = net.createServer();
+      s.once('error', rej);
+      s.listen(p, '127.0.0.1', () => res({ stop() { try { s.close(); } catch (e) {} } }));
+    }));
+    if (ip) holders.push(await holdTailnet(p));
+  }
+  try {
+    const res = await new Promise((resolve) => {
+      const proc = spawn(process.execPath, ['server.cjs'], {
+        cwd: ROOT,
+        env: Object.assign({}, process.env, {
+          PORT: '',
+          WINMUX_PORT_CANDIDATES: PORTS_EXHAUST.join(','),
+          WINMUX_TRUST_FILE: trustFile('exhaust'),
+        }),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let all = '';
+      proc.stdout.on('data', (d) => { all += d.toString(); });
+      proc.stderr.on('data', (d) => { all += d.toString(); });
+      proc.on('exit', (code) => resolve({ code, all }));
+      setTimeout(() => { try { proc.kill(); } catch (e) {} resolve({ code: null, all }); }, 20000);
+    });
+    t('refuses to start when every candidate port is taken', res.code === 2, 'exit ' + res.code);
+    t('the exhaustion refusal is a sentence, not a stack trace', !/\n\s+at /.test(res.all), res.all.split('\n')[0]);
+    t('the exhaustion refusal names the ports it tried', res.all.includes(PORTS_EXHAUST.join(', ')), res.all.split('\n')[1]);
+    t('the exhaustion refusal tells you how to pick a port yourself', /\$env:PORT/.test(res.all), res.all.split('\n').find((l) => /env:PORT/.test(l)));
+    t('exhaustion never falls back to serving on a candidate anyway', !/WinMux running at/.test(res.all), res.all.split('\n').find((l) => /running at/.test(l)) || 'never announced');
+  } finally { holders.forEach((h) => { if (h) h.stop(); }); }
 
   // An explicit port is never overridden — the busy-port fixture below depends
   // on actually getting the busy port.

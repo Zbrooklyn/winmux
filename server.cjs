@@ -77,7 +77,22 @@ async function checkUpdate() {
 // taken, because such a port can host the desk door and never the phone one.
 const PORT_REQUESTED = process.env.PORT ? parseInt(process.env.PORT, 10) : 8799;
 const PORT_FORCED = !!process.env.PORT;
-const PORT_CANDIDATES = [8799, 9912, 9911, 9913, 8800, 8801, 8802];
+// WINMUX_PORT_CANDIDATES pins the hunt to an exact list — for a locked-down box
+// where only certain ports are allowed out, and for the harness, which needs to
+// prove the every-port-taken refusal without holding a hundred ports hostage
+// from every other check running beside it. An explicit list means "these,
+// exactly", so it also turns off the neighbourhood scan below.
+const PORT_CANDIDATES = process.env.WINMUX_PORT_CANDIDATES
+  ? [...parsePortList(process.env.WINMUX_PORT_CANDIDATES)]
+  : [8799, 9912, 9911, 9913, 8800, 8801, 8802];
+const PORT_SCAN = !process.env.WINMUX_PORT_CANDIDATES;
+// A machine whose whole 88xx block is already spoken for is a normal machine,
+// not a broken one — a dev box with three other servers on it hits this on day
+// one. So when the curated list runs out we keep walking, in the same
+// neighbourhood, rather than giving up on a list of seven. Bounded on purpose:
+// a hunt that can end must never turn into a scan of every port on the box.
+const PORT_SCAN_FROM = 8803;
+const PORT_SCAN_TO = 8899;
 let PORT = PORT_REQUESTED;
 const PUBLIC = path.join(__dirname, 'public');
 const HOST = '127.0.0.1';
@@ -184,18 +199,30 @@ function tunnelledPorts() {
 async function pickPort() {
   const ip = tailscaleIP();
   const tunnelled = await tunnelledPorts();
+  const usable = async (p) => {
+    if (tunnelled.has(p)) return false;
+    if (!(await bindable(HOST, p))) return false;
+    if (ip && !(await bindable(ip, p))) return false;
+    return true;
+  };
   for (const p of PORT_CANDIDATES) {
     if (tunnelled.has(p)) {
       console.log('port ' + p + ' is already forwarded to this PC by a tailscale serve rule — skipping it, so the keyless door stays local');
       continue;
     }
-    if (!(await bindable(HOST, p))) continue;
-    if (ip && !(await bindable(ip, p))) continue;
-    return p;
+    if (await usable(p)) return p;
   }
-  // Nothing was clean. Fall back to the default and let the existing polite
-  // failure explain itself, rather than refusing to start at all.
-  return PORT_CANDIDATES[0];
+  if (PORT_SCAN) for (let p = PORT_SCAN_FROM; p <= PORT_SCAN_TO; p++) {
+    if (PORT_CANDIDATES.includes(p)) continue;
+    if (await usable(p)) return p;
+  }
+  // Nothing was clean anywhere. This used to `return PORT_CANDIDATES[0]` — the
+  // port we may have just refused for being tunnelled — on the theory that a
+  // later failure would explain itself. It doesn't: on the auto-pick path there
+  // is no later check, so that fallback either crashed on a raw EADDRINUSE or,
+  // on a box where the tunnelled port is free, quietly served the keyless desk
+  // door to the whole tailnet. Say so instead and let the caller refuse.
+  return null;
 }
 
 // --- The phone door --------------------------------------------------------
@@ -1326,6 +1353,15 @@ function announce() {
 async function start() {
   if (!PORT_FORCED) {
     PORT = await pickPort();
+    if (PORT == null) {
+      console.error('WinMux could not find a free port to start on.');
+      console.error('It tried ' + PORT_CANDIDATES.join(', ')
+        + (PORT_SCAN ? ' and every port from ' + PORT_SCAN_FROM + ' to ' + PORT_SCAN_TO : '') + '.');
+      console.error('Each one was either already in use or forwarded to this PC by a tailscale serve rule.');
+      console.error('Close whatever is holding those ports, or pick one yourself:');
+      console.error('  $env:PORT = 9200; node server.cjs');
+      throw new Error('refused: no free port available');
+    }
     if (PORT !== PORT_REQUESTED) {
       console.log('port ' + PORT_REQUESTED + ' was busy on your Tailscale address — using ' + PORT + ' instead');
     }
@@ -1340,7 +1376,15 @@ async function start() {
     console.error('to find the rule that points at 127.0.0.1:' + PORT + ' and turn that one off.');
     throw new Error('refused: port ' + PORT + ' is already tunnelled by tailscale serve');
   }
-  await new Promise((resolve) => server.listen(PORT, HOST, () => { announce(); resolve(); }));
+  // A bind failure here is a sentence, not a stack trace. Without this handler
+  // Node throws an unhandled 'error' event and the user's whole answer is
+  // "listen EADDRINUSE" over eleven lines of internal frames.
+  await new Promise((resolve, reject) => {
+    server.once('error', (e) => reject(new Error(e.code === 'EADDRINUSE'
+      ? 'WinMux could not start: something else is already using port ' + PORT + '. Close it, or set PORT to a free port.'
+      : 'WinMux could not start on port ' + PORT + ': ' + e.message)));
+    server.listen(PORT, HOST, () => { announce(); resolve(); });
+  });
   // Boot the first spare shell now, so the very first tab opens instantly too.
   ensureSpare();
   // On a graceful exit, take every real shell down with us — an unattached spare
