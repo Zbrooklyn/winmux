@@ -96,6 +96,7 @@ const PORT_AGENTSTATE = 9947; // agent: winmux agent <state> flips the session's
 const PORT_AGENTHOOKS = 9948; // agent: the Claude Code hooks preset drives live state
 const PORT_WINGET = 9949;     // distribution: the winget manifest generator emits valid manifests
 const PORT_TUNOVR = 9950;     // #246: the WINMUX_TUNNELLED_PORTS override is honored (no fail-open under load)
+const PORT_LIG = 9955;        // #238: the ligature switch really shapes glyphs, and pays for it in renderer
 const PORT_RESUME = 9951;     // #240: an armed tab auto-runs its resume command on a cold reopen, not on a warm reattach
 // #246: three ports the port check holds itself, so it can prove the
 // every-candidate-taken refusal without starving the other auto-picking checks.
@@ -2132,6 +2133,92 @@ check('gpu', PORT_GPU, async ({ browser, base, t }) => {
   await page2.close();
 });
 
+// --- ligature: the switch really shapes operators, and pays the renderer price ---
+// Shaping "=>" into one arrow needs a text run the browser can shape, and only the
+// DOM renderer emits one — WebGL draws cell by cell out of a glyph atlas, so under
+// it there is no DOM text to shape at all (measured: zero spans). That makes the
+// ligature switch a real fork, not a coat of CSS: turning it on has to drop that
+// terminal off WebGL. This check proves all three halves — the default is GPU with
+// no shaping, the switch flips both the renderer and the measured font feature, and
+// the live swap doesn't cost the user their scrollback. It needs the shipping
+// renderer default, so it gets its own port exempt from WINMUX_FORCE_DOM and a raw
+// page rather than desktop() (which pins gpuRenderer off).
+check('ligature', PORT_LIG, async ({ browser, base, t }) => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+
+  // Default: ligatures off -> WebGL, no body flag.
+  const before = await page.evaluate(() => ({
+    hasCanvas: !!document.querySelector('.xterm-screen canvas, .xterm canvas'),
+    flagged: document.body.hasAttribute('data-ligatures'),
+  }));
+  t('ligatures are off by default (GPU renderer, no ligature flag)',
+    before.hasCanvas && !before.flagged, before);
+
+  // Put a marker on screen BEFORE the flip so we can prove the renderer swap keeps
+  // the scrollback. It goes through the SHELL, not term.write(): flipping the switch
+  // refits the pane, and a resize makes PSReadLine repaint its prompt line over
+  // anything written behind the shell's back. Real command output sits above that
+  // line and survives, which is the thing a user would actually lose.
+  const MARK = 'WINMUX-LIG-MARK-7714';
+  await page.locator('.xterm-screen').first().click();
+  await page.keyboard.type("echo '" + MARK + " => != -> >= <='");
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(2500);
+
+  // Flip the real switch the way a human does: Settings -> Terminal -> the toggle.
+  await settings(page, 'Terminal');
+  await page.locator('[data-sw="ligatures"]').click();
+  await page.waitForTimeout(1200);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(800);
+
+  const on = await page.evaluate(() => {
+    const rows = document.querySelector('.xterm-rows');
+    // The run the browser actually shapes is the text node inside the row holding "=>",
+    // not the container — so read the style off that element, or the rule could compute
+    // on a wrapper the glyphs never inherit from.
+    const row = rows && [].slice.call(rows.children).find((r) => (r.textContent || '').indexOf('=>') >= 0);
+    const span = row && ([].slice.call(row.querySelectorAll('span')).find((s) => (s.textContent || '').indexOf('=>') >= 0) || row);
+    return {
+      hasCanvas: !!document.querySelector('.xterm-screen canvas, .xterm canvas'),
+      flagged: document.body.hasAttribute('data-ligatures'),
+      renderer: (window.__winmuxActiveTerm && window.__winmuxActiveTerm().term.__winmuxRenderer) || null,
+      lig: rows ? getComputedStyle(rows).fontVariantLigatures : null,
+      spanLig: span ? getComputedStyle(span).fontVariantLigatures : null,
+      spanText: span ? (span.textContent || '').slice(0, 80) : null,
+      screen: rows ? rows.textContent : '',
+    };
+  });
+  t('turning ligatures on drops that terminal off WebGL (DOM renderer, no canvas)',
+    !on.hasCanvas && on.renderer === 'dom', { hasCanvas: on.hasCanvas, renderer: on.renderer });
+  t('the ligature flag reaches the page', on.flagged, on.flagged);
+  // Cascadia carries its arrows as contextual alternates, so plain "normal" leaves
+  // => unshaped — the computed value has to actually say contextual.
+  t('the rendered rows compute font-variant-ligatures: contextual',
+    on.lig === 'contextual', on.lig);
+  t('the arrow run itself inherits contextual (the glyphs, not just the container)',
+    on.spanLig === 'contextual' && !!on.spanText, { lig: on.spanLig, text: on.spanText });
+  t('the renderer swap keeps the scrollback (pre-flip marker still on screen)',
+    on.screen.indexOf(MARK) >= 0, on.screen.slice(-160));
+
+  // And back: the swap is live in both directions, so nobody is stuck on the slow path.
+  await settings(page, 'Terminal');
+  await page.locator('[data-sw="ligatures"]').click();
+  await page.waitForTimeout(1200);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(800);
+  const off = await page.evaluate(() => ({
+    hasCanvas: !!document.querySelector('.xterm-screen canvas, .xterm canvas'),
+    flagged: document.body.hasAttribute('data-ligatures'),
+    renderer: (window.__winmuxActiveTerm && window.__winmuxActiveTerm().term.__winmuxRenderer) || null,
+  }));
+  t('turning it back off restores the GPU renderer', off.hasCanvas && off.renderer === 'webgl' && !off.flagged, off);
+  await page.close();
+});
+
 // --- font: the terminal font is BUNDLED, served, loaded, and actually applied ---
 // cockpit.css/app.js ask for 'Cascadia Code'; a clean machine with no Cascadia
 // installed fell back to Consolas and rendered prompt/powerline glyphs as tofu.
@@ -3036,11 +3123,12 @@ check('marks', PORT_MARKS, async ({ browser, base, t, shot }) => {
   // A check can carry a per-port server env override (e.g. the update check).
   const envByPort = {};
   for (const c of run) if (c.env) envByPort[c.port] = Object.assign({}, envByPort[c.port], c.env);
-  // Force the DOM renderer on every server EXCEPT the gpu check's — that one must
-  // run the shipping WebGL default so the gpu check actually tests it. Everything
-  // else reads .xterm-rows text, which only the DOM renderer fills.
+  // Force the DOM renderer on every server EXCEPT the gpu and ligature checks' —
+  // those two must run the shipping WebGL default, since what they prove is the
+  // renderer itself (it engages; the ligature switch forks it). Everything else
+  // reads .xterm-rows text, which only the DOM renderer fills.
   for (const port of ports) {
-    const env = Object.assign({}, envByPort[port], port === PORT_GPU ? {} : { WINMUX_FORCE_DOM: '1' });
+    const env = Object.assign({}, envByPort[port], (port === PORT_GPU || port === PORT_LIG) ? {} : { WINMUX_FORCE_DOM: '1' });
     servers[port] = await server(port, env);
   }
   for (const port of ports) {

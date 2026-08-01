@@ -23,6 +23,18 @@
     font-display: swap; src: url('/fonts/CaskaydiaCoveNerdFontMono-Italic.ttf') format('truetype'); }
   @font-face { font-family: 'Cascadia Code'; font-weight: 700; font-style: italic;
     font-display: swap; src: url('/fonts/CaskaydiaCoveNerdFontMono-BoldItalic.ttf') format('truetype'); }
+  /* Programming ligatures (Settings → Terminal → Programming ligatures). The
+     bundled Cascadia Code carries its arrows and operators as contextual
+     alternates, so plain "normal" ligatures leave them unshaped — measured: the
+     computed value is "normal" and => stays two glyphs. Asking for "contextual"
+     turns calt on and they shape. This only reaches glyphs the DOM renderer put
+     in the DOM, which is why app.js also drops the terminal off WebGL while the
+     switch is on. cockpit.css is frozen; this lives here. */
+  body[data-ligatures] .xterm-rows,
+  body[data-ligatures] .xterm-rows span {
+    font-variant-ligatures: contextual;
+    font-feature-settings: "calt" 1, "liga" 1;
+  }
   /* The pane body hosts the real terminals instead of the mockup's fake rows. */
   .pbody { background: var(--term-bg); }
   .term-area { position: absolute; inset: 0; }

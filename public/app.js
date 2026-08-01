@@ -75,7 +75,7 @@
     theme: 'system', palette: 'aurora', fontFamily: 'Cascadia Code', fontSize: 13, lineHeight: 1.2,
     cursorStyle: 'block', cursorBlink: true, scrollback: 5000,
     copyOnSelect: false, rightClickPaste: false, confirmClose: true,
-    defaultShell: '', startFolder: '', gpuRenderer: true, osNotify: true, clipSync: false,
+    defaultShell: '', startFolder: '', gpuRenderer: true, ligatures: false, osNotify: true, clipSync: false,
     // Auto-resume: the command template an armed tab re-runs in its folder when
     // WinMux reopens. {id} is replaced with the exact Claude conversation the tab
     // pinned, so a reopen lands back in THAT conversation — not merely whatever
@@ -209,7 +209,48 @@
     eachTerm(function (t) { try { t.term.options.theme = themeColors(); } catch (e) {} });
   }
   // Push every terminal option that Settings can change onto every live terminal.
+  // GPU renderer — the big win on fast output (10 streaming agents lag the DOM
+  // renderer badly, measured: 132ms/tick down to under 50). Load AFTER term.open();
+  // fall back to the DOM renderer if a WebGL context can't be created (headless/
+  // remote/GPU-less). The buffer API (read-screen, serializeTerm) is renderer-
+  // independent, so nothing else moves.
+  //
+  // Ligatures are the one thing that forces the other way. Shaping "=>" into an
+  // arrow needs a text run the browser can shape, and only the DOM renderer emits
+  // one — WebGL draws cell by cell out of a glyph atlas, so under it there is no
+  // DOM text at all (measured: hasDomText false, zero spans). So the ligature
+  // switch is a real fork, not a coat of CSS: turning it on drops that terminal
+  // back to the DOM renderer. Live-swappable in both directions, so flipping the
+  // switch never costs you your scrollback.
+  function wantsWebgl() {
+    return !!(window.WebglAddon && S.gpuRenderer && !S.ligatures && !window.__winmuxForceDom);
+  }
+  function applyRenderer(term) {
+    var want = wantsWebgl();
+    if (want && term.__winmuxRenderer === 'webgl') return;
+    if (!want && term.__winmuxRenderer !== 'webgl') { term.__winmuxRenderer = 'dom'; return; }
+    if (!want) {
+      try { term.__winmuxWebgl.dispose(); } catch (e) {}
+      term.__winmuxWebgl = null;
+      term.__winmuxRenderer = 'dom';
+      try { term.refresh(0, term.rows - 1); } catch (e) {}
+      return;
+    }
+    try {
+      var webgl = new WebglAddon.WebglAddon();
+      webgl.onContextLoss(function () { try { webgl.dispose(); } catch (e) {} term.__winmuxWebgl = null; term.__winmuxRenderer = 'dom'; });
+      term.loadAddon(webgl);
+      term.__winmuxWebgl = webgl;
+      term.__winmuxRenderer = 'webgl';   // measured 12x fewer event-loop stalls under load
+    } catch (e) { term.__winmuxRenderer = 'dom'; /* DOM renderer stays — perfectly fine, just slower */ }
+  }
+  function applyLigatures() {
+    if (S.ligatures) document.body.setAttribute('data-ligatures', '');
+    else document.body.removeAttribute('data-ligatures');
+  }
   function applySettings() {
+    applyLigatures();
+    eachTerm(function (t) { applyRenderer(t.term); });
     eachTerm(function (t) {
       try {
         var o = t.term.options;
@@ -1560,19 +1601,7 @@
       try { term.loadAddon(new Unicode11Addon.Unicode11Addon()); term.unicode.activeVersion = '11'; } catch (e) {}
     }
     term.open(host);
-    // GPU renderer — the big win on fast output (10 streaming agents lag the DOM
-    // renderer badly, measured). Load AFTER open(); fall back to the DOM renderer
-    // if a WebGL context can't be created (headless/remote/GPU-less). The buffer
-    // API (read-screen, serializeTerm) is renderer-independent, so nothing else moves.
-    term.__winmuxRenderer = 'dom';
-    try {
-      if (window.WebglAddon && S.gpuRenderer && !window.__winmuxForceDom) {
-        var webgl = new WebglAddon.WebglAddon();
-        webgl.onContextLoss(function () { try { webgl.dispose(); } catch (e) {} term.__winmuxRenderer = 'dom'; });
-        term.loadAddon(webgl);
-        term.__winmuxRenderer = 'webgl';   // measured 12x fewer event-loop stalls under load
-      }
-    } catch (e) { term.__winmuxRenderer = 'dom'; /* DOM renderer stays — perfectly fine, just slower */ }
+    applyRenderer(term);   // GPU vs DOM — see the function; must run AFTER open()
     // The bundled terminal font (Cascadia Code / CaskaydiaCove Nerd Font) can still
     // be loading when this terminal mounts on a clean machine. xterm measures its
     // cell size once at init; if it measured against the fallback, remeasure when the
@@ -2834,7 +2863,8 @@
         frow('Cursor blink', '', sw('cursorBlink', S.cursorBlink)) +
         frow('Scrollback lines', 'How much history each terminal keeps', '<input class="ctl" type="number" min="500" max="100000" step="500" value="' + S.scrollback + '" data-set="scrollback" style="width:92px">') +
         frow('Copy on select', 'Selecting text copies it straight away', sw('copyOnSelect', S.copyOnSelect)) +
-        frow('Right-click pastes', 'Otherwise right-click opens the menu', sw('rightClickPaste', S.rightClickPaste));
+        frow('Right-click pastes', 'Otherwise right-click opens the menu', sw('rightClickPaste', S.rightClickPaste)) +
+        frow('Programming ligatures', 'Draws => as a single arrow, != as ≠, and so on. Costs speed: ligatures need the software renderer, so heavy output from several agents at once redraws more slowly. Off by default.', sw('ligatures', S.ligatures));
     }
     if (t === 'Behaviour') {
       var isEl = !!(window.winmux && window.winmux.isElectron);
@@ -3522,6 +3552,10 @@
     var ver = document.getElementById('wc-ver');
     if (ver && d.version) ver.textContent = 'v' + d.version;
   }).catch(function () {});
+
+  // Ligatures are a body attribute the stylesheet keys off, so a saved "on" has
+  // to be re-applied on boot — the first terminal opens before any settings edit.
+  applyLigatures();
 
   // Seed from the on-disk config so a fresh install / hand-edit takes effect.
   loadDiskConfig();
