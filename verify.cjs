@@ -1159,7 +1159,7 @@ check('survive', PORT_SURVIVE, async ({ browser, base, t, shot }) => {
     // The "+" button now opens a type menu (Terminal / Browser / Markdown); pick
     // Terminal the way a person would, which also proves the menu wiring works.
     await page.locator('.pc-new').first().click();
-    await page.locator('.ofmenu .ofmi:has-text("Terminal")').first().click();
+    await page.locator('.tmenu .tmi:has-text("Terminal")').first().click();
     await page.waitForTimeout(2500);
     t('a second tab is a second shell', (await info()).sessions === 2);
     await page.locator('.ptab[data-active] .x').first().click();
