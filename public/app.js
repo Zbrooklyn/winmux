@@ -393,14 +393,38 @@
       if (path) openMarkdown(path.trim());
     }
   }
+  // The three surfaces a new tab can be, each with the icon + one-liner the menu
+  // renders. Icons are drawn in WinMux's own stroke style (viewBox 0 0 24 24), so
+  // the menu reads as part of the app, not a generic dropdown.
+  var TYPE_ITEMS = [
+    { type: 'terminal', label: 'Terminal', desc: 'A PowerShell session', kbd: 'Alt+T',
+      svg: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>',
+      run: function (p) { newTerm(p, startShell()); } },
+    { type: 'browser', label: 'Browser', desc: 'Open a web page', electron: true,
+      svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.7 2.6 15.3 0 18M12 3c-2.6 2.7-2.6 15.3 0 18"/></svg>',
+      run: function () { browserOpen('about:blank'); } },
+    { type: 'markdown', label: 'Markdown', desc: 'Open a .md file',
+      svg: '<svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4M8 13h8M8 16.5h5"/></svg>',
+      run: function () { openMarkdownPick(); } },
+  ];
   function showTypeMenu(p, anchor) {
     var m = newMenu();
+    m.classList.add('tmenu');
     var head = document.createElement('div');
     head.className = 'ctxlabel'; head.textContent = 'New tab';
     m.appendChild(head);
-    addMenuItem(m, 'Terminal', null, function () { newTerm(p, startShell()); });
-    if (isElectronApp()) addMenuItem(m, 'Browser', null, function () { browserOpen('about:blank'); });
-    addMenuItem(m, 'Markdown', null, function () { openMarkdownPick(); });
+    TYPE_ITEMS.forEach(function (it) {
+      if (it.electron && !isElectronApp()) return;
+      var row = document.createElement('div');
+      row.className = 'tmi';
+      row.innerHTML =
+        '<span class="ic">' + it.svg + '</span>' +
+        '<span class="txt"><span class="lab">' + esc(it.label) + '</span>' +
+        '<span class="desc">' + esc(it.desc) + '</span></span>' +
+        (it.kbd ? '<span class="kbd sm">' + esc(it.kbd) + '</span>' : '');
+      row.addEventListener('click', function (e) { e.stopPropagation(); closeMenu(); it.run(p); });
+      m.appendChild(row);
+    });
     var r = anchor.getBoundingClientRect();
     placeMenu(m, r.left, r.bottom + 4);
   }

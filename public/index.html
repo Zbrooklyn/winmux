@@ -178,6 +178,26 @@
      the shell-type caret) moves into the tab's right-click menu, so nothing is in
      your face until you ask that tab for it. cockpit.css frozen; hidden here. */
   .pc-find, .pc-pin, .pc-split, .pc-splitmenu, .pc-newmenu { display: none !important; }
+  /* New-tab launcher (Phase 1 surfaces-as-tabs): the "+" menu is a designed picker,
+     not a plain text dropdown — each surface gets a tinted icon tile and a name, so
+     it reads as part of WinMux. cockpit.css is frozen; this lives here.
+     Default = clean (icon + name). data-tmenu="b" adds a one-line description. */
+  .tmenu { min-width: 244px; padding: 6px; }
+  .tmenu .ctxlabel { padding: 5px 10px 5px; }
+  .tmi { display: flex; align-items: center; gap: 11px; padding: 8px 10px; border-radius: 8px;
+    cursor: pointer; color: var(--text); }
+  .tmi:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+  .tmi .ic { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 8px; display: flex;
+    align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent);
+    transition: background .12s, color .12s; }
+  .tmi:hover .ic { background: var(--accent); color: #fff; }
+  .tmi .ic svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7;
+    stroke-linecap: round; stroke-linejoin: round; }
+  .tmi .txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+  .tmi .lab { font-size: 13px; font-weight: 550; line-height: 1.25; }
+  .tmi .desc { display: none; font-size: 11px; color: var(--muted); line-height: 1.25; }
+  :root[data-tmenu="b"] .tmi .desc { display: block; }
+  .tmi .kbd.sm { margin-left: auto; align-self: center; }
   /* "connected" is the expected state, not news — the pill shows only when there is
      a problem (reconnecting / disconnected), reclaiming its width the rest of the time. */
   .connpill[data-state="open"] { display: none !important; }

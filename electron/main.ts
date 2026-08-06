@@ -206,22 +206,28 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
         const b = document.querySelector('.wmb'); if (b) b.removeAttribute('data-open');
       })()`);
       await new Promise((r) => setTimeout(r, 350));
-      result.menuTypes = await w.webContents.executeJavaScript(`(() => {
-        const btn = document.querySelector('.pc-new');
-        if (!btn) return [];
-        btn.click();
-        return [].slice.call(document.querySelectorAll('.ofmenu .ofmi .nm'))
-          .map((n) => (n.textContent || '').trim());
-      })()`);
       // A hidden window (show:false) coalesces paints, so the menu — a pure DOM
       // insertion with no other paint trigger — never reaches the capture buffer.
-      // Show it inactive for the shot so the overlay actually renders, then hide.
+      // Show it inactive for the shots so the overlay actually renders, then hide.
       w.showInactive();
+      // Capture both design variants: default (clean: icon + name) and data-tmenu="b"
+      // (launcher: adds a one-line description). Edward picks the look.
+      const openMenu = `(() => {
+        document.body.click();
+        const btn = document.querySelector('.pc-new'); if (!btn) return [];
+        btn.click();
+        return [].slice.call(document.querySelectorAll('.tmenu .tmi .lab'))
+          .map((n) => (n.textContent || '').trim());
+      })()`;
+      result.menuTypes = await w.webContents.executeJavaScript(openMenu);
       await new Promise((r) => setTimeout(r, 250));
-      const menuPng = await w.webContents.capturePage();
-      fs.writeFileSync(path.join(outDir, 'newtab-menu.png'), menuPng.toPNG());
-      // Close the menu and re-hide the window so the run stays headless.
-      await w.webContents.executeJavaScript("document.body.click()");
+      fs.writeFileSync(path.join(outDir, 'newtab-menu.png'), (await w.webContents.capturePage()).toPNG());
+      await w.webContents.executeJavaScript("document.documentElement.setAttribute('data-tmenu','b')");
+      await w.webContents.executeJavaScript(openMenu);
+      await new Promise((r) => setTimeout(r, 250));
+      fs.writeFileSync(path.join(outDir, 'newtab-menu-b.png'), (await w.webContents.capturePage()).toPNG());
+      // Reset to the shipped default and re-hide so the run stays headless.
+      await w.webContents.executeJavaScript("document.documentElement.removeAttribute('data-tmenu'); document.body.click();");
       w.hide();
     } catch (me) {
       result.menuError = String((me as Error).message || me);
