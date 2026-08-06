@@ -54,7 +54,7 @@
   .ptab .x { margin-left: 2px; }
   /* Find bar (Ctrl+F) — floats over the terminal body. */
   .findbar { position: absolute; top: 8px; right: 12px; z-index: 20; display: none; align-items: center; gap: 4px;
-    background: var(--bg1); border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+    background: var(--bg1); border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px; box-shadow: none; }
   .findbar.on { display: flex; }
   .findbar input { background: var(--bg0); border: 1px solid var(--border); border-radius: 6px; color: var(--text);
     font-size: 12px; padding: 4px 8px; width: 170px; outline: none; }
@@ -217,6 +217,13 @@
      squared, only the free (bottom-left) corner rounded. Reads as part of the app,
      not a floating card. Positioned by showTypeMenu (right:0, top = header bottom). */
   .ofmenu.tmenu-dock { border-radius: 0 0 0 11px; border-top: none; border-right: none; box-shadow: none; }
+  /* One flat language (Edward, approach B): every menu, panel and popover goes flat
+     with a hairline like the new-tab menu; only the big centered modals keep a whisper
+     of lift so they still detach from the screen behind them. cockpit.css is the frozen
+     contract — these override its drop shadows here. The focused-pane ring and status
+     glow are states, not decoration, so they are deliberately untouched. */
+  .ofmenu, .sessmenu, .palette, .npanel { box-shadow: none; }
+  .modal, .dlg, .cheat, .tut { box-shadow: 0 10px 30px rgba(0,0,0,.22); }
   :root[data-tmenu-style="grid"] .ofmenu.tmenu { min-width: 0; padding: 8px; }
   :root[data-tmenu-style="grid"] .tmenu .ctxlabel { display: none; }
   :root[data-tmenu-style="grid"] .tmenu { display: flex; gap: 5px; }
@@ -287,7 +294,7 @@
     position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: 100%;
     max-width: none; min-width: 0; max-height: 72vh;
     border: none; border-top: 1px solid var(--border); border-radius: 16px 16px 0 0;
-    box-shadow: 0 -12px 44px rgba(0,0,0,.5);
+    box-shadow: 0 -8px 24px rgba(0,0,0,.22);
     padding-bottom: env(safe-area-inset-bottom, 0px);
     transform: translateY(100%); transition: transform .24s cubic-bezier(.32,.72,0,1);
   }
@@ -346,7 +353,7 @@
     left: 0; right: 0; bottom: 0; top: auto; width: 100%;
     min-width: 0; max-width: none; max-height: 72vh;
     border: none; border-top: 1px solid var(--border); border-radius: 16px 16px 0 0;
-    box-shadow: 0 -12px 44px rgba(0,0,0,.5);
+    box-shadow: 0 -8px 24px rgba(0,0,0,.22);
     padding: 4px 8px calc(10px + env(safe-area-inset-bottom, 0px));
     transform: translateY(100%); transition: transform .24s cubic-bezier(.32,.72,0,1);
   }
@@ -384,7 +391,7 @@
     z-index: 6; padding: 13px 18px; min-height: 44px; box-sizing: border-box; border-radius: 24px;
     background: var(--accent); color: #fff; border: none;
     font-size: 13px; font-weight: 600; letter-spacing: .01em;
-    box-shadow: 0 6px 20px rgba(0,0,0,.35); cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,.22); cursor: pointer;
   }
   .cockpit[data-mode="narrow"][data-view="focus"][data-typing] .mkbd { display: none; }
   .mkbd svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
@@ -523,7 +530,7 @@
      it hosts a real <webview>; on the web it never appears. */
   .wmb { position: fixed; top: 40px; right: 0; bottom: 0; width: 46%; min-width: 360px;
     display: none; flex-direction: column; background: var(--bg0);
-    border-left: 1px solid var(--border); z-index: 40; box-shadow: -8px 0 24px rgba(0,0,0,.28); }
+    border-left: 1px solid var(--border); z-index: 40; box-shadow: none; }
   .wmb[data-open] { display: flex; }
   .wmb-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
     height: 38px; padding: 0 8px; background: var(--bg1); border-bottom: 1px solid var(--border); }
@@ -540,7 +547,7 @@
   /* Phase 10 — markdown viewer. Same right-dock treatment; works on web too. */
   .wmm { position: fixed; top: 40px; right: 0; bottom: 0; width: 46%; min-width: 360px;
     display: none; flex-direction: column; background: var(--bg0);
-    border-left: 1px solid var(--border); z-index: 41; box-shadow: -8px 0 24px rgba(0,0,0,.28); }
+    border-left: 1px solid var(--border); z-index: 41; box-shadow: none; }
   .wmm[data-open] { display: flex; }
   .wmm-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 12px;
     background: var(--bg1); border-bottom: 1px solid var(--border); }
@@ -697,7 +704,7 @@
   .welcome {
     width: min(460px, calc(100vw - 40px));
     background: var(--bg1); border: 1px solid var(--border); border-radius: 14px;
-    padding: 30px 30px 24px; box-shadow: 0 24px 70px rgba(0,0,0,.55);
+    padding: 30px 30px 24px; box-shadow: 0 10px 30px rgba(0,0,0,.22);
   }
   .wc-brand { font-size: 13px; font-weight: 650; letter-spacing: .01em; color: var(--text); }
   .wc-ver { font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums; }
