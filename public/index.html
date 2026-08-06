@@ -209,9 +209,14 @@
      "minimal" strips the icon tiles for a native context-menu; "grid" lays the
      surfaces out as a compact 3-tile launcher; "compact" is a dense power-user list. */
   :root[data-tmenu-style="minimal"] .tmi { padding: 6px 9px; gap: 10px; }
-  :root[data-tmenu-style="minimal"] .tmi .ic { width: 20px; height: 20px; background: transparent; color: var(--muted); }
+  :root[data-tmenu-style="minimal"] .tmi .ic { width: 20px; height: 20px; background: transparent; color: var(--accent); }
   :root[data-tmenu-style="minimal"] .tmi:hover .ic { background: transparent; color: var(--accent); }
   :root[data-tmenu-style="minimal"] .tmi .ic svg { width: 16px; height: 16px; }
+  /* Integrated dock: the menu drops out of the top-right of the app, flush to the
+     header seam and the window's right edge — top & right borders gone, those corners
+     squared, only the free (bottom-left) corner rounded. Reads as part of the app,
+     not a floating card. Positioned by showTypeMenu (right:0, top = header bottom). */
+  .ofmenu.tmenu-dock { border-radius: 0 0 0 11px; border-top: none; border-right: none; box-shadow: none; }
   :root[data-tmenu-style="grid"] .ofmenu.tmenu { min-width: 0; padding: 8px; }
   :root[data-tmenu-style="grid"] .tmenu .ctxlabel { display: none; }
   :root[data-tmenu-style="grid"] .tmenu { display: flex; gap: 5px; }

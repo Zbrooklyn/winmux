@@ -429,9 +429,16 @@
       row.addEventListener('click', function (e) { e.stopPropagation(); closeMenu(); it.run(p); });
       m.appendChild(row);
     });
-    var r = anchor.getBoundingClientRect();
-    // Sit a little below the button so the menu doesn't choke the header/titlebar.
-    placeMenu(m, r.left, r.bottom + 10);
+    // Integrated dock: pin the menu flush to the app's top-right — its right edge on
+    // the window edge, its top on the header seam — so it reads as coming out of the
+    // app, not floating over it. (See .tmenu-dock for the squared corners.)
+    m.classList.add('tmenu-dock');
+    var bar = anchor.closest('.ptabs');
+    var top = (bar || anchor).getBoundingClientRect().bottom;
+    placeMenu(m, 0, top);
+    m.style.left = 'auto';
+    m.style.right = '0';
+    m.style.top = top + 'px';
   }
   // Cross-device clipboard (opt-in, default off). When on, a copy also pushes the
   // text to the server's in-memory clip so another device on the tailnet can pull
