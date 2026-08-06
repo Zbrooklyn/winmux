@@ -115,6 +115,11 @@ be re-made after code changes — the installed `.exe` is a point-in-time build,
 built, the auto-install is deliberately not), winget listing, Android companion app (Phase 14),
 the v2 Rust core. See *Build order* and *Upcoming phases*.
 
+**Edward's directive 2026-08-06 — parked for now (do not raise or build until he reopens):** stay on
+**Electron** (no v2 Rust/Tauri rebuild), **no code signing** (accept the SmartScreen "unknown publisher"
+warning for now), **no Android companion app** yet. These are deferrals, not cancellations. Unaffected:
+the in-flight surfaces-as-tabs work and the v1 launch itself.
+
 ## Proving it still works — `npm run verify`
 
 One command, **no arguments**:
