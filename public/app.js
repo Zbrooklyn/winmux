@@ -402,7 +402,7 @@
       run: function (p) { newTerm(p, startShell()); } },
     { type: 'browser', label: 'Browser', desc: 'Open a web page', electron: true,
       svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.7 2.6 15.3 0 18M12 3c-2.6 2.7-2.6 15.3 0 18"/></svg>',
-      run: function () { browserOpen('about:blank'); } },
+      run: function (p) { newBrowserLeaf(p, 'about:blank'); } },
     { type: 'markdown', label: 'Markdown', desc: 'Open a .md file',
       svg: '<svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4M8 13h8M8 16.5h5"/></svg>',
       run: function () { openMarkdownPick(); } },
@@ -1355,7 +1355,7 @@
     try { if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'x' })); } catch (e) {}
     try { if (t.ws) t.ws.close(); } catch (e) {}
   }
-  function fitActive(p) { var t = activeTermOf(p); if (t) { try { t.fit.fit(); } catch (e) {} sendResize(t); } }
+  function fitActive(p) { var t = activeTermOf(p); if (t && t.fit) { try { t.fit.fit(); } catch (e) {} sendResize(t); } }
   function setFontSize(px) {
     px = Math.max(8, Math.min(28, px));
     if (px === S.fontSize) return;
@@ -1417,7 +1417,13 @@
       var on = t.id === termId;
       t.host.style.display = on ? 'block' : 'none';
       if (on) t.tabEl.setAttribute('data-active', ''); else t.tabEl.removeAttribute('data-active');
-      if (on) { try { t.fit.fit(); } catch (e) {} sendResize(t); t.term.focus(); if (t.status === 'needsyou') setStatus(t, 'idle'); }
+      if (on) {
+        // Terminal leaves fit + focus the xterm; a non-terminal leaf (browser,
+        // markdown) has no term — it shows its own body via onShow instead.
+        if (t.term) { try { t.fit.fit(); } catch (e) {} sendResize(t); t.term.focus(); }
+        else if (t.onShow) { try { t.onShow(); } catch (e) {} }
+        if (t.status === 'needsyou') setStatus(t, 'idle');
+      }
     });
     if (!cycling) touchMru(p, termId);
     reflect(p);
@@ -1431,7 +1437,9 @@
   function askCloseTerm(p, termId) {
     if (!p) return;
     var t = termById(termId);
-    if (S.confirmClose && t && t.state === 'open') {
+    // Only a terminal leaf warns before close — it has a live shell to end. A
+    // browser/markdown/diff leaf has no process, so it closes without a prompt.
+    if (S.confirmClose && t && t.state === 'open' && leafType(t) === 'terminal') {
       var name = t.tabEl.querySelector('.tt').textContent;
       confirmDialog('Close “' + name + '”?', 'The shell process running in this terminal will be ended.', 'Close terminal', function () { closeTerm(p, termId); });
       return;
@@ -1442,7 +1450,9 @@
     var idx = -1; for (var i = 0; i < p.terms.length; i++) if (p.terms[i].id === termId) { idx = i; break; }
     if (idx < 0) return;
     var t = p.terms[idx];
-    recordClosed(p, t);
+    // Only terminals go on the reopen stack for now — a reopened browser/markdown
+    // leaf is ST6's job; recording one here would reopen it as a blank shell.
+    if (leafType(t) === 'terminal') recordClosed(p, t);
     clearTimeout(t.busyTimer); stopProg(t);
     killShell(t);
     try { t.term.dispose(); } catch (e) {}
@@ -2013,6 +2023,118 @@
     updateChrome();
     activateTerm(p, id);
     return t;
+  }
+
+  // ── Browser leaf ────────────────────────────────────────────────────────
+  // A pane tab whose body is a live <webview> instead of an xterm. It carries
+  // the SAME leaf shape the tab machinery reads (id, host, tabEl, state,
+  // status, dotEl), so activate / close / drag / MRU / palette treat it like
+  // any tab — the terminal-only paths (fit/focus/shell) are guarded by t.term.
+  // Real external sites need Electron's <webview>; in a plain browser the leaf
+  // degrades to a "needs the desktop app" note instead of a broken frame.
+  function setLeafTitle(t, title) {
+    if (!t || !t.tabEl || t.renamed || !title) return;
+    var tt = t.tabEl.querySelector('.tt'); if (tt) tt.textContent = title;
+  }
+  function leafLoadUrl(t, url) {
+    if (!t || !t.view) return null;
+    var full = normalizeUrl(url); t.url = full;
+    if (t.addr) t.addr.value = full;
+    // A <webview> only accepts loadURL once it has attached (dom-ready); before
+    // that, queue the target and flush it when the view is ready.
+    if (t.viewReady) { try { t.view.loadURL(full); } catch (e) { t.viewPending = full; } }
+    else t.viewPending = full;
+    return full;
+  }
+  function newBrowserLeaf(p, url) {
+    var id = ++termSeq;
+    var host = document.createElement('div');
+    host.className = 'term-host leafbody browserleaf';
+    host.style.display = 'none';
+    p.termArea.appendChild(host);
+
+    var t = {
+      id: id, paneId: p.id, groupId: activeGroupId, type: 'browser',
+      term: null, fit: null, ws: null, host: host, tabEl: null, dotEl: null, progEl: null,
+      view: null, addr: null, viewReady: false, viewPending: null,
+      // state 'idle' (not 'open'): a browser leaf has no shell, so closing it must
+      // not trigger the "the shell process will be ended" confirm (askCloseTerm
+      // only confirms when state === 'open').
+      state: 'idle', status: 'idle', sid: null, ended: false,
+      cwd: null, shell: null, url: normalizeUrl(url || 'about:blank'),
+      results: null, renamed: false, resume: null, resumeId: null,
+    };
+    function pn() { return paneById(t.paneId) || p; }
+
+    if (isElectronApp()) {
+      host.innerHTML =
+        '<div class="bchrome">' +
+          '<span class="bnav bback" role="button" title="Back">‹</span>' +
+          '<span class="bnav bfwd" role="button" title="Forward">›</span>' +
+          '<span class="bnav brel" role="button" title="Reload">↻</span>' +
+          '<input class="baddr" type="text" spellcheck="false" placeholder="Enter a URL" />' +
+        '</div>' +
+        '<webview class="bframe" src="about:blank" allowpopups></webview>';
+      var view = host.querySelector('.bframe');
+      var addr = host.querySelector('.baddr');
+      t.view = view; t.addr = addr;
+      host.querySelector('.bback').addEventListener('click', function () { try { view.goBack(); } catch (e) {} });
+      host.querySelector('.bfwd').addEventListener('click', function () { try { view.goForward(); } catch (e) {} });
+      host.querySelector('.brel').addEventListener('click', function () { try { view.reload(); } catch (e) {} });
+      addr.addEventListener('keydown', function (e) { if (e.key === 'Enter') leafLoadUrl(t, addr.value); });
+      addr.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+      function synced() { try { addr.value = view.getURL(); t.url = addr.value; setLeafTitle(t, view.getTitle() || addr.value); } catch (e) {} }
+      view.addEventListener('did-navigate', synced);
+      view.addEventListener('did-navigate-in-page', synced);
+      view.addEventListener('page-title-updated', synced);
+      view.addEventListener('dom-ready', function () {
+        t.viewReady = true;
+        if (t.viewPending) { var u = t.viewPending; t.viewPending = null; try { view.loadURL(u); } catch (e) {} }
+      });
+    } else {
+      host.innerHTML = '<div class="bempty">The in-app browser needs the WinMux desktop app.</div>';
+    }
+
+    var tabEl = document.createElement('div');
+    tabEl.className = 'ptab';
+    tabEl.draggable = true;
+    // data-leaf marks a non-terminal tab so terminal-only paths can select
+    // `.ptab:not([data-leaf])` — the shell favicon classes (fav-b/-m/-d) are
+    // reused by shells (PowerShell is fav-b), so the favicon can't discriminate.
+    tabEl.setAttribute('data-leaf', 'browser');
+    tabEl.innerHTML =
+      '<span class="tfav"><span class="fav fav-b">◆</span><span class="fdot" style="display:none"></span></span>' +
+      '<span class="tt">Browser</span>' +
+      '<span class="x" title="Close tab (Alt+W)">×</span>';
+    p.tabscroll.appendChild(tabEl);
+    t.tabEl = tabEl; t.dotEl = tabEl.querySelector('.fdot');
+
+    tabEl.addEventListener('click', function (e) {
+      focusPane(t.paneId);
+      if (e.target && e.target.classList.contains('x')) { e.stopPropagation(); askCloseTerm(pn(), id); }
+      else activateTerm(pn(), id);
+    });
+    tabEl.addEventListener('mousedown', function (e) { if (e.button === 1) { e.preventDefault(); askCloseTerm(pn(), id); } });
+    tabEl.addEventListener('dblclick', function (e) {
+      if (e.target && e.target.classList.contains('x')) return;
+      e.preventDefault(); e.stopPropagation(); focusPane(t.paneId); activateTerm(pn(), id); startRename(t);
+    });
+    wireTabDrag(t);
+    t.onShow = function () { try { if (t.view) t.view.focus(); } catch (e) {} };
+
+    p.terms.push(t);
+    updateChrome();
+    activateTerm(p, id);
+    if (t.url && t.url !== 'about:blank') leafLoadUrl(t, t.url);
+    return t;
+  }
+  // Resolve "the browser" for the CLI / control layer: the active leaf if it is
+  // a browser, else the most-recently-created browser leaf anywhere.
+  function activeBrowserLeaf() {
+    var a = activeTerm();
+    if (a && leafType(a) === 'browser') return a;
+    var all = allTerms().filter(function (x) { return leafType(x) === 'browser'; });
+    return all.length ? all[all.length - 1] : null;
   }
 
   // A divider between two flex siblings.
@@ -2738,9 +2860,13 @@
       [].forEach.call(c.querySelectorAll('.pane'), function (pe) {
         var p = null; panes.forEach(function (x) { if (x.el === pe) p = x; });
         if (!p) return;
+        // Only terminal leaves are persisted for now — restore rebuilds terminals,
+        // not browser/markdown/diff leaves (that is ST6). Persisting a browser leaf
+        // here would bring it back as a broken "connecting…" terminal on reload.
+        var saveTabs = p.terms.filter(function (t) { return leafType(t) === 'terminal'; });
         stack.push({
-          active: Math.max(0, p.terms.map(function (t) { return t.id; }).indexOf(p.activeTermId)),
-          tabs: p.terms.map(function (t) {
+          active: Math.max(0, saveTabs.map(function (t) { return t.id; }).indexOf(p.activeTermId)),
+          tabs: saveTabs.map(function (t) {
             var g = groupById(t.groupId);
             // The group is saved by NAME, not id — ids are per-browser, names are the thing.
             // The session id rides along too, but only for the live-reload snapshot: a
@@ -3807,43 +3933,12 @@
     for (var i = 0; i < all.length; i++) if (String(all[i].sid) === String(sid)) return all[i];
     return null;
   }
-  // --- Browser panel (Phase 10) — Electron-only <webview> dock -------------
-  var _wmb = null;
+  // --- Browser (Phase 10 → surfaces-as-tabs) — the <webview> now lives in a
+  // pane tab (newBrowserLeaf), not a side dock. browserOpen/browserWebview are
+  // the seam the CLI + /control layer call; they resolve the active browser
+  // leaf (creating one in the active pane if none exists) so every existing
+  // `winmux browser *` verb keeps working, now targeting a tab.
   function isElectronApp() { return !!(window.winmux && window.winmux.isElectron); }
-  function ensureBrowserPanel() {
-    if (_wmb) return _wmb;
-    if (!isElectronApp()) return null;
-    var wrap = document.createElement('div');
-    wrap.className = 'wmb';
-    wrap.innerHTML =
-      '<div class="wmb-bar">' +
-        '<span class="wmb-nav wmb-back" title="Back" role="button">‹</span>' +
-        '<span class="wmb-nav wmb-fwd" title="Forward" role="button">›</span>' +
-        '<span class="wmb-nav wmb-reload" title="Reload" role="button">↻</span>' +
-        '<input class="wmb-addr" type="text" spellcheck="false" placeholder="Enter a URL" />' +
-        '<span class="wmb-nav wmb-close" title="Close panel" role="button">✕</span>' +
-      '</div>' +
-      '<webview class="wmb-view" src="about:blank" allowpopups></webview>';
-    document.body.appendChild(wrap);
-    var view = wrap.querySelector('.wmb-view');
-    var addr = wrap.querySelector('.wmb-addr');
-    wrap.querySelector('.wmb-back').addEventListener('click', function () { try { view.goBack(); } catch (e) {} });
-    wrap.querySelector('.wmb-fwd').addEventListener('click', function () { try { view.goForward(); } catch (e) {} });
-    wrap.querySelector('.wmb-reload').addEventListener('click', function () { try { view.reload(); } catch (e) {} });
-    wrap.querySelector('.wmb-close').addEventListener('click', function () { wrap.removeAttribute('data-open'); });
-    addr.addEventListener('keydown', function (e) { if (e.key === 'Enter') browserOpen(addr.value); });
-    view.addEventListener('did-navigate', function () { try { addr.value = view.getURL(); } catch (e) {} });
-    view.addEventListener('did-navigate-in-page', function () { try { addr.value = view.getURL(); } catch (e) {} });
-    _wmb = { wrap: wrap, view: view, addr: addr, ready: false, pending: null };
-    // A <webview> created inside a hidden panel attaches only once shown; a src
-    // change before that is dropped. Load through dom-ready, queueing until then.
-    view.addEventListener('dom-ready', function () {
-      _wmb.ready = true;
-      if (_wmb.pending) { var u = _wmb.pending; _wmb.pending = null; try { view.loadURL(u); } catch (e) {} }
-    });
-    return _wmb;
-  }
-  function browserWebview() { var b = ensureBrowserPanel(); return b ? b.view : null; }
   function normalizeUrl(u) {
     u = String(u || '').trim();
     if (!u) return 'about:blank';
@@ -3852,16 +3947,20 @@
     if (/^(localhost|127\.0\.0\.1|\d+\.\d+\.\d+\.\d+)/.test(u)) return 'http://' + u;
     return 'https://' + u;
   }
+  function browserWebview() { var t = activeBrowserLeaf(); return t ? t.view : null; }
   function browserOpen(url) {
-    var b = ensureBrowserPanel(); if (!b) return null;
-    b.wrap.setAttribute('data-open', '');
-    var full = normalizeUrl(url);
-    b.addr.value = full;
-    // Showing the panel attaches the webview; load now if it's ready, else queue
-    // for dom-ready. Either path reliably navigates.
-    if (b.ready) { try { b.view.loadURL(full); } catch (e) { b.pending = full; } }
-    else { b.pending = full; }
-    return full;
+    if (!isElectronApp()) return null;
+    var t = activeBrowserLeaf();
+    if (!t) {
+      var p = paneById(activePaneId) || panes[0];
+      if (!p) return null;
+      t = newBrowserLeaf(p, url);
+      return t ? t.url : null;
+    }
+    // An existing browser leaf: bring it forward, then navigate it.
+    var lp = paneById(t.paneId);
+    if (lp) { focusPane(lp.id); activateTerm(lp, t.id); }
+    return leafLoadUrl(t, url);
   }
   // Runs INSIDE the webview: tag interactive nodes with @e refs, return a tree.
   var SNAPSHOT_JS = '(function(){' +
@@ -4010,11 +4109,13 @@
     if (cmd === 'read-screen') {
       var tr = termByTarget(args.target);
       if (!tr) throw new Error('no such terminal');
+      if (leafType(tr) !== 'terminal') throw new Error('that tab is a ' + leafType(tr) + ', not a terminal');
       return { id: tr.id, title: termName(tr), screen: serializeTerm(tr, args.lines || 0) };
     }
     if (cmd === 'send') {
       var ts = termByTarget(args.target);
       if (!ts) throw new Error('no such terminal');
+      if (leafType(ts) !== 'terminal') throw new Error('that tab is a ' + leafType(ts) + ', not a terminal');
       var data = String(args.data == null ? '' : args.data);
       if (args.enter) data += '\r';
       if (ts.ws && ts.ws.readyState === WebSocket.OPEN) ts.ws.send(JSON.stringify({ t: 'i', d: data }));
@@ -4078,11 +4179,11 @@
       return { id: ag.id, sid: ag.sid, state: st };
     }
     if (cmd === 'browser') {
-      if (!isElectronApp()) throw new Error('the browser panel needs the WinMux desktop app');
+      if (!isElectronApp()) throw new Error('the browser tab needs the WinMux desktop app');
       var sub = args.sub || 'open';
       var view = browserWebview();
       if (sub === 'open') { return { url: browserOpen(args.url) }; }
-      if (!view) throw new Error('browser panel not ready');
+      if (!view) throw new Error('no browser tab open — run `browser open <url>` first');
       if (sub === 'url') return { url: view.getURL() };
       if (sub === 'back') { try { view.goBack(); } catch (e) {} return { ok: true }; }
       if (sub === 'forward') { try { view.goForward(); } catch (e) {} return { ok: true }; }

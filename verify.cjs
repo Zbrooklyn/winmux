@@ -1652,6 +1652,10 @@ check('electron', PORT_GROUPS, async ({ t }) => {
   t('get-text returns the page\'s visible text', !!json && json.browserGotText === true, json && json.browserError);
   t('eval computes an expression in the page', !!json && json.browserEval === true, json && json.browserError);
   t('scroll moves the viewport', !!json && json.browserScrolled === true, json && json.browserError);
+  // ST3: the browser is a pane TAB now, not a side dock — the leaf renders a
+  // .ptab with the browser favicon and the old .wmb dock element is gone.
+  t('the browser opened as a pane tab (leaf), not a side dock',
+    !!json && json.browserIsTab === true, json && json.browserError);
 
   // node-pty under Electron's ABI (#209): the smoke run drove the real terminal —
   // a live node-pty shell — to run `echo <token>` and read the marker back off the

@@ -126,46 +126,6 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
       };
     })()`);
 
-    // The Electron-only feature: a controllable <webview> browser panel, driven
-    // through the real /rpc → /control chain (the CLI's path). The app has been
-    // connected to /control since load; give it a beat, then open a data: page
-    // whose interactive nodes we can count and click.
-    try {
-      await new Promise((r) => setTimeout(r, 1500));
-      const page = 'data:text/html,' + encodeURIComponent(
-        '<input id=x><button>Go</button><a href="#x">Docs</a><p>SMOKE_MARKER</p><div style="height:3000px"></div>');
-      const opened = await rpc(port, 'browser', { sub: 'open', url: page });
-      result.browserOpened = !!(opened && opened.ok);
-      // The webview navigates on dom-ready; poll the snapshot until it has refs.
-      let snap: any = null;
-      for (let i = 0; i < 16; i++) {
-        await new Promise((r) => setTimeout(r, 500));
-        snap = await rpc(port, 'browser', { sub: 'snapshot' });
-        if (snap && snap.ok && snap.result && /@e1/.test(String(snap.result.tree || ''))) break;
-      }
-      const tree = String((snap && snap.result && snap.result.tree) || '');
-      result.browserRefs = (tree.match(/@e\d+/g) || []).length;
-      // @e1 is the input; clicking it is a valid interaction (ok:true).
-      const clicked = await rpc(port, 'browser', { sub: 'click', ref: '@e1' });
-      result.browserClicked = !!(clicked && clicked.ok);
-
-      // Item 7 T2 — the wmux automation verb set: fill replaces a field, type
-      // appends to it, eval computes in-page, get-text dumps the visible text,
-      // scroll moves the viewport. Prove each end-to-end over the CLI's /rpc path.
-      await rpc(port, 'browser', { sub: 'fill', ref: '@e1', value: 'ab' });
-      await rpc(port, 'browser', { sub: 'type', ref: '@e1', text: 'cd' });
-      const val = await rpc(port, 'browser', { sub: 'eval', js: "document.querySelector('input').value" });
-      result.browserTyped = !!(val && val.ok && val.result && val.result.result === 'abcd');
-      const gt = await rpc(port, 'browser', { sub: 'get-text' });
-      result.browserGotText = !!(gt && gt.ok && gt.result && /SMOKE_MARKER/.test(String(gt.result.text || '')));
-      const ev = await rpc(port, 'browser', { sub: 'eval', js: '6*7' });
-      result.browserEval = !!(ev && ev.ok && ev.result && ev.result.result === 42);
-      const sc = await rpc(port, 'browser', { sub: 'scroll', amount: 'bottom' });
-      result.browserScrolled = !!(sc && sc.ok && sc.result && sc.result.scrollY > 0);
-    } catch (be) {
-      result.browserError = String((be as Error).message || be);
-    }
-
     // node-pty under Electron's ABI (readiness #16 — the native-module trap, the
     // #1 way an Electron terminal fails to even start on someone else's machine).
     // node-pty 1.x ships N-API prebuilds (prebuilds/win32-x64/…) that are ABI-
@@ -198,12 +158,11 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
     // its item labels (Browser only shows under Electron, which this run is), and
     // photograph it for Edward's eye — the one new pixel this unit adds.
     try {
-      // Dismiss the first-run onboarding overlay and close the browser dock the
-      // earlier test left open — a native <webview> composites above the DOM and
-      // would paint over the menu in the capture.
+      // Dismiss the first-run onboarding overlay so it can't cover the menu. The
+      // browser test runs AFTER this section, so no <webview> leaf exists yet to
+      // composite over the capture — the layout here is the clean startup.
       await w.webContents.executeJavaScript(`(() => {
         const s = document.getElementById('wc-start'); if (s) s.click();
-        const b = document.querySelector('.wmb'); if (b) b.removeAttribute('data-open');
       })()`);
       await new Promise((r) => setTimeout(r, 350));
       // A hidden window (show:false) coalesces paints, so the menu — a pure DOM
@@ -241,6 +200,53 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
       w.hide();
     } catch (me) {
       result.menuError = String((me as Error).message || me);
+    }
+
+    // The Electron-only browser surface, driven through the real /rpc → /control
+    // chain (the CLI's path). Runs LAST: opening a browser leaf focuses it, so
+    // doing this after the terminal + menu tests keeps those on the clean startup
+    // layout. Proves the webview navigates AND that it lives in a pane tab (leaf),
+    // not the retired side dock.
+    try {
+      await new Promise((r) => setTimeout(r, 500));
+      const page = 'data:text/html,' + encodeURIComponent(
+        '<input id=x><button>Go</button><a href="#x">Docs</a><p>SMOKE_MARKER</p><div style="height:3000px"></div>');
+      const opened = await rpc(port, 'browser', { sub: 'open', url: page });
+      result.browserOpened = !!(opened && opened.ok);
+      let snap: any = null;
+      for (let i = 0; i < 16; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        snap = await rpc(port, 'browser', { sub: 'snapshot' });
+        if (snap && snap.ok && snap.result && /@e1/.test(String(snap.result.tree || ''))) break;
+      }
+      const tree = String((snap && snap.result && snap.result.tree) || '');
+      result.browserRefs = (tree.match(/@e\d+/g) || []).length;
+      const clicked = await rpc(port, 'browser', { sub: 'click', ref: '@e1' });
+      result.browserClicked = !!(clicked && clicked.ok);
+      await rpc(port, 'browser', { sub: 'fill', ref: '@e1', value: 'ab' });
+      await rpc(port, 'browser', { sub: 'type', ref: '@e1', text: 'cd' });
+      const val = await rpc(port, 'browser', { sub: 'eval', js: "document.querySelector('input').value" });
+      result.browserTyped = !!(val && val.ok && val.result && val.result.result === 'abcd');
+      const gt = await rpc(port, 'browser', { sub: 'get-text' });
+      result.browserGotText = !!(gt && gt.ok && gt.result && /SMOKE_MARKER/.test(String(gt.result.text || '')));
+      const ev = await rpc(port, 'browser', { sub: 'eval', js: '6*7' });
+      result.browserEval = !!(ev && ev.ok && ev.result && ev.result.result === 42);
+      const sc = await rpc(port, 'browser', { sub: 'scroll', amount: 'bottom' });
+      result.browserScrolled = !!(sc && sc.ok && sc.result && sc.result.scrollY > 0);
+      // ST3: the browser is a pane TAB, not a side dock — a .ptab carrying the
+      // browser favicon (data-leaf="browser") inside a pane, and .wmb is gone.
+      result.browserIsTab = await w.webContents.executeJavaScript(
+        "!!document.querySelector('.pane .ptab[data-leaf=\"browser\"]') && !document.querySelector('.wmb')");
+      // A photograph of the browser as a live tab, for Edward's eye (the new pixel).
+      // Remove any lingering menu (it closes on mousedown, which a synthetic click
+      // doesn't emit) + reset the style attrs so the shot is clean browser chrome.
+      await w.webContents.executeJavaScript("[].forEach.call(document.querySelectorAll('.tmenu, .ofmenu, .ctxmenu'), function(m){ m.remove(); }); document.documentElement.removeAttribute('data-tmenu-elev'); document.documentElement.removeAttribute('data-tmenu-style');");
+      w.showInactive();
+      await new Promise((r) => setTimeout(r, 500));
+      fs.writeFileSync(path.join(outDir, 'browser-tab.png'), (await w.webContents.capturePage()).toPNG());
+      w.hide();
+    } catch (be) {
+      result.browserError = String((be as Error).message || be);
     }
   } catch (e) {
     result.error = String((e as Error).message || e);
