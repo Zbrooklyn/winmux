@@ -205,6 +205,26 @@
   :root[data-tmenu-elev="soft"] .ofmenu.tmenu { box-shadow: 0 6px 16px rgba(0,0,0,.16); }  /* 2 whisper */
   :root[data-tmenu-elev="edge"] .ofmenu.tmenu { box-shadow: none; background: var(--bg2);
     border: 1px solid color-mix(in srgb, var(--text) 16%, transparent); }           /* 3 crisp edge */
+  /* Three further directions (Edward asked for more ideas). data-tmenu-style:
+     "minimal" strips the icon tiles for a native context-menu; "grid" lays the
+     surfaces out as a compact 3-tile launcher; "compact" is a dense power-user list. */
+  :root[data-tmenu-style="minimal"] .tmi { padding: 6px 9px; gap: 10px; }
+  :root[data-tmenu-style="minimal"] .tmi .ic { width: 20px; height: 20px; background: transparent; color: var(--muted); }
+  :root[data-tmenu-style="minimal"] .tmi:hover .ic { background: transparent; color: var(--accent); }
+  :root[data-tmenu-style="minimal"] .tmi .ic svg { width: 16px; height: 16px; }
+  :root[data-tmenu-style="grid"] .ofmenu.tmenu { min-width: 0; padding: 8px; }
+  :root[data-tmenu-style="grid"] .tmenu .ctxlabel { display: none; }
+  :root[data-tmenu-style="grid"] .tmenu { display: flex; gap: 5px; }
+  :root[data-tmenu-style="grid"] .tmi { flex-direction: column; align-items: center; text-align: center;
+    width: 84px; gap: 8px; padding: 13px 6px; }
+  :root[data-tmenu-style="grid"] .tmi .ic { width: 34px; height: 34px; }
+  :root[data-tmenu-style="grid"] .tmi .txt { align-items: center; flex: 0 0 auto; }
+  :root[data-tmenu-style="grid"] .tmi .kbd.sm { display: none; }
+  :root[data-tmenu-style="compact"] .ofmenu.tmenu { min-width: 208px; padding: 4px; }
+  :root[data-tmenu-style="compact"] .tmi { padding: 5px 8px; gap: 9px; }
+  :root[data-tmenu-style="compact"] .tmi .ic { width: 22px; height: 22px; border-radius: 6px; }
+  :root[data-tmenu-style="compact"] .tmi .ic svg { width: 14px; height: 14px; }
+  :root[data-tmenu-style="compact"] .tmi .lab { font-size: 12.5px; font-weight: 500; }
   /* "connected" is the expected state, not news — the pill shows only when there is
      a problem (reconnecting / disconnected), reclaiming its width the rest of the time. */
   .connpill[data-state="open"] { display: none !important; }

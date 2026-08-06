@@ -220,18 +220,24 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
         return [].slice.call(document.querySelectorAll('.tmenu .tmi .lab'))
           .map((n) => (n.textContent || '').trim());
       })()`;
-      const elevs = [['', 'newtab-flat.png'], ['soft', 'newtab-soft.png'], ['edge', 'newtab-edge.png']];
-      for (const [elev, file] of elevs) {
+      // Elevation set (flat = shipped default) + three structural directions
+      // (minimal / grid / compact) via data-tmenu-style. One capture each.
+      const variants = [
+        ['elev', '', 'newtab-flat.png'], ['elev', 'soft', 'newtab-soft.png'], ['elev', 'edge', 'newtab-edge.png'],
+        ['style', 'minimal', 'newtab-minimal.png'], ['style', 'grid', 'newtab-grid.png'], ['style', 'compact', 'newtab-compact.png'],
+      ];
+      for (const [axis, val, file] of variants) {
         await w.webContents.executeJavaScript(
-          elev ? `document.documentElement.setAttribute('data-tmenu-elev','${elev}')`
-               : "document.documentElement.removeAttribute('data-tmenu-elev')");
+          "document.documentElement.removeAttribute('data-tmenu-elev');" +
+          "document.documentElement.removeAttribute('data-tmenu-style');" +
+          (val ? `document.documentElement.setAttribute('data-tmenu-${axis}','${val}');` : ''));
         const labels = await w.webContents.executeJavaScript(openMenu);
-        if (!elev) result.menuTypes = labels;
+        if (!val) result.menuTypes = labels;
         await new Promise((r) => setTimeout(r, 250));
         fs.writeFileSync(path.join(outDir, file), (await w.webContents.capturePage()).toPNG());
       }
       // Reset to the shipped default (flat) and re-hide so the run stays headless.
-      await w.webContents.executeJavaScript("document.documentElement.removeAttribute('data-tmenu-elev'); document.body.click();");
+      await w.webContents.executeJavaScript("document.documentElement.removeAttribute('data-tmenu-elev'); document.documentElement.removeAttribute('data-tmenu-style'); document.body.click();");
       w.hide();
     } catch (me) {
       result.menuError = String((me as Error).message || me);
