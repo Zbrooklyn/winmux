@@ -426,7 +426,8 @@
       m.appendChild(row);
     });
     var r = anchor.getBoundingClientRect();
-    placeMenu(m, r.left, r.bottom + 4);
+    // Sit a little below the button so the menu doesn't choke the header/titlebar.
+    placeMenu(m, r.left, r.bottom + 10);
   }
   // Cross-device clipboard (opt-in, default off). When on, a copy also pushes the
   // text to the server's in-memory clip so another device on the tailnet can pull
