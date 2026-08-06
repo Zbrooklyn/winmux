@@ -1590,7 +1590,7 @@
     return '>_';
   }
 
-  function newTerm(p, shellKey, cwd, seedSid, resumeCmd, resumeId, pinnedByHand) {
+  function newTerm(p, shellKey, cwd, seedSid, resumeCmd, resumeId, pinnedByHand, opts) {
     shellKey = shellKey || startShell();
     var id = ++termSeq;
     var host = document.createElement('div');
@@ -1683,6 +1683,7 @@
       id: id, paneId: p.id, groupId: activeGroupId, term: term, fit: fit, search: search, ws: null, host: host,
       skel: skel,
       tabEl: tabEl, dotEl: tabEl.querySelector('.fdot'), progEl: tabEl.querySelector('.tprog'),
+      type: (opts && opts.type) || 'terminal',
       state: 'idle', status: 'idle', sid: seedSid || null, ended: false,
       cwd: null, shell: shellKey, renamed: false, results: null, busyTimer: null, progTimer: null,
       // Auto-resume: the pinned Claude conversation (resumeId) and the exact command
