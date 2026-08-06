@@ -21,13 +21,14 @@ at `http://127.0.0.1:8799`.
 - `public/cockpit.css` — lines 8–399 of the mockup, verbatim. **Never edited.** It is the design contract.
 - `public/index.html` + `public/app.js` — the real app: the mockup's markup, wired to live terminals.
 
-## Correction — the sidebar is groups, and always was (2026-07-26)
+## Correction — the sidebar is groups, and always was (2026-07-26) — **RESOLVED 2026-08-06**
 
 An earlier version of this file listed the sidebar as out of scope, calling it "a Claude session-fleet
-browser … never discussed for this project." **That was wrong**, and it is the reason WinMux shipped a
-flat terminal list where a group list belongs.
+browser … never discussed for this project." **That was wrong**, and it is why WinMux briefly shipped a
+flat terminal list where a group list belongs. **That gap is now closed** — the two-level group model is
+built and harness-proven (see *Already done*): the `groups` check passes **30/30** on the real app.
 
-The design contract says otherwise, in three places:
+The design contract says (three places), and the shipped sidebar now matches it:
 
 - The mockup's sidebar is titled **Projects**. Each `.prow` is a *container*, not a terminal: it carries
   `data-switch="<name>"`, a folder glyph with an aggregate status dot, a sub-line reading
@@ -54,8 +55,10 @@ If any of those is wanted later it is a new decision, not a leftover from this b
 Real PTY shells · tabs · 2D splits (right/down) with drag dividers · zoom · close pane/tab with confirm ·
 find in scrollback (Ctrl+F) · copy/paste · rename tab · context menus · broadcast input · command palette ·
 settings (theme/font/cursor/scrollback/behaviour) · keyboard cheat sheet (F1) · diagnostics · notifications
-with badge · changes dock (git diff) · save/load layout · sidebar list with live status deck (currently a
-**flat terminal list — not the group list the contract calls for**, see Correction above) ·
+with badge · changes dock (git diff) · save/load layout · **two-level group sidebar** (side = groups with
+folder glyph, aggregate status dot, "N sessions · M working/needs you" subline, expand-inline chevron;
+top strip = the open group's terminals) with live status deck — the design contract's model, in-app group
+naming/rename via dialog, reload-persistent, and phone drill-down; `groups` harness check passes 30/30 ·
 light/dark themes · session **peek** (eyeball → preview panel) · **inline Approve/Deny on a "needs you"
 session** (desktop sidebar + phone card + peek panel; sends Enter / Esc to the waiting terminal — U4).
 
