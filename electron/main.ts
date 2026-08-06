@@ -210,8 +210,9 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
       // insertion with no other paint trigger — never reaches the capture buffer.
       // Show it inactive for the shots so the overlay actually renders, then hide.
       w.showInactive();
-      // Capture both design variants: default (clean: icon + name) and data-tmenu="b"
-      // (launcher: adds a one-line description). Edward picks the look.
+      // Capture the three elevation treatments Edward is choosing between: flat
+      // (default, no shadow), soft (a whisper of shadow), edge (no shadow, crisp
+      // border on a lifted surface). Same clean layout; only the elevation differs.
       const openMenu = `(() => {
         document.body.click();
         const btn = document.querySelector('.pc-new'); if (!btn) return [];
@@ -219,15 +220,18 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
         return [].slice.call(document.querySelectorAll('.tmenu .tmi .lab'))
           .map((n) => (n.textContent || '').trim());
       })()`;
-      result.menuTypes = await w.webContents.executeJavaScript(openMenu);
-      await new Promise((r) => setTimeout(r, 250));
-      fs.writeFileSync(path.join(outDir, 'newtab-menu.png'), (await w.webContents.capturePage()).toPNG());
-      await w.webContents.executeJavaScript("document.documentElement.setAttribute('data-tmenu','b')");
-      await w.webContents.executeJavaScript(openMenu);
-      await new Promise((r) => setTimeout(r, 250));
-      fs.writeFileSync(path.join(outDir, 'newtab-menu-b.png'), (await w.webContents.capturePage()).toPNG());
-      // Reset to the shipped default and re-hide so the run stays headless.
-      await w.webContents.executeJavaScript("document.documentElement.removeAttribute('data-tmenu'); document.body.click();");
+      const elevs = [['', 'newtab-flat.png'], ['soft', 'newtab-soft.png'], ['edge', 'newtab-edge.png']];
+      for (const [elev, file] of elevs) {
+        await w.webContents.executeJavaScript(
+          elev ? `document.documentElement.setAttribute('data-tmenu-elev','${elev}')`
+               : "document.documentElement.removeAttribute('data-tmenu-elev')");
+        const labels = await w.webContents.executeJavaScript(openMenu);
+        if (!elev) result.menuTypes = labels;
+        await new Promise((r) => setTimeout(r, 250));
+        fs.writeFileSync(path.join(outDir, file), (await w.webContents.capturePage()).toPNG());
+      }
+      // Reset to the shipped default (flat) and re-hide so the run stays headless.
+      await w.webContents.executeJavaScript("document.documentElement.removeAttribute('data-tmenu-elev'); document.body.click();");
       w.hide();
     } catch (me) {
       result.menuError = String((me as Error).message || me);
