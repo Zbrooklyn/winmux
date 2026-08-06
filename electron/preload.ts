@@ -11,6 +11,9 @@ contextBridge.exposeInMainWorld('winmux', {
   close: () => ipcRenderer.send('win:close'),
   // Open the release/download page in the user's real browser (the update badge).
   openExternal: (url: string) => ipcRenderer.send('win:open-external', url),
+  // Native open-file dialog (the "Markdown" new-tab item). Resolves to a path or null.
+  pickFile: (opts?: { filters?: { name: string; extensions: string[] }[] }) =>
+    ipcRenderer.invoke('win:pick-file', opts),
 });
 
 // Tag the document so index.html CSS can enable Electron-only drag regions

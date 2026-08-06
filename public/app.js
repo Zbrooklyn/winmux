@@ -380,6 +380,30 @@
     var r = anchor.getBoundingClientRect();
     placeMenu(m, r.left, r.bottom + 4);
   }
+  // The "+" new-tab button opens this: pick what kind of tab to open. Terminal is the
+  // default (Enter/click). Browser and Markdown open the working surfaces; the in-pane
+  // tab versions land in a later unit. Browser is Electron-only (the <webview> dock),
+  // so it's hidden on the web/phone client where that surface doesn't exist.
+  function openMarkdownPick() {
+    if (window.winmux && window.winmux.pickFile) {
+      window.winmux.pickFile({ filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'mdx', 'txt'] }] })
+        .then(function (path) { if (path) openMarkdown(path); });
+    } else {
+      var path = window.prompt('Open markdown file (full path):', '');
+      if (path) openMarkdown(path.trim());
+    }
+  }
+  function showTypeMenu(p, anchor) {
+    var m = newMenu();
+    var head = document.createElement('div');
+    head.className = 'ctxlabel'; head.textContent = 'New tab';
+    m.appendChild(head);
+    addMenuItem(m, 'Terminal', null, function () { newTerm(p, startShell()); });
+    if (isElectronApp()) addMenuItem(m, 'Browser', null, function () { browserOpen('about:blank'); });
+    addMenuItem(m, 'Markdown', null, function () { openMarkdownPick(); });
+    var r = anchor.getBoundingClientRect();
+    placeMenu(m, r.left, r.bottom + 4);
+  }
   // Cross-device clipboard (opt-in, default off). When on, a copy also pushes the
   // text to the server's in-memory clip so another device on the tailnet can pull
   // it; "Paste from other device" pulls the latest. Same-origin fetch carries the
@@ -2133,7 +2157,7 @@
       terms: [], activeTermId: null, mru: [], pinned: false,
     };
     p.railBtn.addEventListener('click', function (e) { e.stopPropagation(); toggleSidebar(); });
-    p.newBtn.addEventListener('click', function () { focusPane(p.id); newTerm(p, startShell()); });
+    p.newBtn.addEventListener('click', function (e) { e.stopPropagation(); focusPane(p.id); showTypeMenu(p, p.newBtn); });
     p.newMenuBtn.addEventListener('click', function (e) {
       e.stopPropagation(); focusPane(p.id);
       showShellMenu(p.newMenuBtn, 'New tab', function (key) { newTerm(p, key); });

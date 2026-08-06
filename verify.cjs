@@ -1156,7 +1156,10 @@ check('survive', PORT_SURVIVE, async ({ browser, base, t, shot }) => {
     // The other half of the contract: a shell that outlives a dropped socket
     // must NOT outlive a tab its owner closed, or WinMux quietly leaves live
     // PowerShells on the machine every time someone tidies up.
+    // The "+" button now opens a type menu (Terminal / Browser / Markdown); pick
+    // Terminal the way a person would, which also proves the menu wiring works.
     await page.locator('.pc-new').first().click();
+    await page.locator('.ofmenu .ofmi:has-text("Terminal")').first().click();
     await page.waitForTimeout(2500);
     t('a second tab is a second shell', (await info()).sessions === 2);
     await page.locator('.ptab[data-active] .x').first().click();
@@ -1657,6 +1660,13 @@ check('electron', PORT_GROUPS, async ({ t }) => {
   // a working shell in the packaged desktop face, not just in plain Node.
   t('a real node-pty shell ran a command under Electron', !!json && json.ptyOk === true,
     json && (json.ptyError || 'ptyOk=' + (json && json.ptyOk)));
+
+  // Surfaces-as-tabs (Phase 1): the "+" button opens a type menu. Under Electron all
+  // three surfaces are available, so the menu offers Terminal, Browser and Markdown.
+  const menu = (json && json.menuTypes) || [];
+  t('the "+" button opens a New-tab type menu', Array.isArray(menu) && menu.length >= 3, menu);
+  t('the menu offers Terminal / Browser / Markdown',
+    ['Terminal', 'Browser', 'Markdown'].every((k) => menu.indexOf(k) >= 0), menu);
 });
 
 // --- cli: the `winmux` command-line drives the live app -------------------

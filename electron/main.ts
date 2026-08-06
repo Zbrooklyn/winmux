@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -105,6 +105,7 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
     hasCockpit: false, isElectron: false, dataElectron: false, ptabsRegion: null,
     browserOpened: false, browserRefs: 0, browserClicked: false, ptyOk: false, error: null,
     browserTyped: false, browserGotText: false, browserEval: false, browserScrolled: false,
+    menuTypes: [],
   };
   try {
     for (let i = 0; i < 40; i++) {
@@ -192,6 +193,39 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
 
     const png = await w.webContents.capturePage();
     fs.writeFileSync(path.join(outDir, 'electron-shell.png'), png.toPNG());
+
+    // Surfaces-as-tabs (Phase 1): the "+" button opens a type menu. Open it, record
+    // its item labels (Browser only shows under Electron, which this run is), and
+    // photograph it for Edward's eye — the one new pixel this unit adds.
+    try {
+      // Dismiss the first-run onboarding overlay and close the browser dock the
+      // earlier test left open — a native <webview> composites above the DOM and
+      // would paint over the menu in the capture.
+      await w.webContents.executeJavaScript(`(() => {
+        const s = document.getElementById('wc-start'); if (s) s.click();
+        const b = document.querySelector('.wmb'); if (b) b.removeAttribute('data-open');
+      })()`);
+      await new Promise((r) => setTimeout(r, 350));
+      result.menuTypes = await w.webContents.executeJavaScript(`(() => {
+        const btn = document.querySelector('.pc-new');
+        if (!btn) return [];
+        btn.click();
+        return [].slice.call(document.querySelectorAll('.ofmenu .ofmi .nm'))
+          .map((n) => (n.textContent || '').trim());
+      })()`);
+      // A hidden window (show:false) coalesces paints, so the menu — a pure DOM
+      // insertion with no other paint trigger — never reaches the capture buffer.
+      // Show it inactive for the shot so the overlay actually renders, then hide.
+      w.showInactive();
+      await new Promise((r) => setTimeout(r, 250));
+      const menuPng = await w.webContents.capturePage();
+      fs.writeFileSync(path.join(outDir, 'newtab-menu.png'), menuPng.toPNG());
+      // Close the menu and re-hide the window so the run stays headless.
+      await w.webContents.executeJavaScript("document.body.click()");
+      w.hide();
+    } catch (me) {
+      result.menuError = String((me as Error).message || me);
+    }
   } catch (e) {
     result.error = String((e as Error).message || e);
   }
@@ -216,6 +250,17 @@ ipcMain.on('win:close', () => win?.close());
 // launch arbitrary local programs.
 ipcMain.on('win:open-external', (_e, url: string) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
+});
+// Native open-file dialog for the "Markdown" new-tab item — the OS picker, so no
+// custom in-app UI. Returns the chosen absolute path, or null if cancelled.
+ipcMain.handle('win:pick-file', async (_e, opts?: { filters?: { name: string; extensions: string[] }[] }) => {
+  if (!win) return null;
+  const r = await dialog.showOpenDialog(win, {
+    properties: ['openFile'],
+    filters: opts?.filters || [{ name: 'All files', extensions: ['*'] }],
+  });
+  if (r.canceled || !r.filePaths.length) return null;
+  return r.filePaths[0];
 });
 
 app.whenReady().then(createWindow);
