@@ -1563,6 +1563,33 @@
     input.addEventListener('mousedown', function (e) { e.stopPropagation(); });
   }
 
+  // ── Typed leaves (surfaces-as-tabs foundation) ──────────────────────────
+  // A tab is a "leaf". Today every leaf is a terminal; these helpers let a leaf
+  // also become a browser / markdown / diff surface in later units. Terminals
+  // leave t.type undefined, so leafType() reports 'terminal' and every existing
+  // path stays unchanged. Dormant until the tab render + newTerm are wired.
+  function leafType(t) { return (t && t.type) || 'terminal'; }
+  function leafTitle(t) {
+    var k = leafType(t);
+    if (k === 'browser') return t.url || 'Browser';
+    if (k === 'markdown') return t.mdTitle || t.mdPath || 'Markdown';
+    if (k === 'diff') return 'Diff';
+    return termName(t);
+  }
+  function leafDot(t) {
+    var k = leafType(t);
+    if (k === 'browser') return 'browser';
+    if (k === 'markdown' || k === 'diff') return 'idle';
+    return (t && t.status) || 'idle';
+  }
+  function leafGlyph(t) {
+    var k = leafType(t);
+    if (k === 'browser') return '◆';   // ◆
+    if (k === 'markdown') return '¶';   // ¶
+    if (k === 'diff') return '±';       // ±
+    return '>_';
+  }
+
   function newTerm(p, shellKey, cwd, seedSid, resumeCmd, resumeId, pinnedByHand) {
     shellKey = shellKey || startShell();
     var id = ++termSeq;
