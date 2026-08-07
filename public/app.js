@@ -77,6 +77,7 @@
     copyOnSelect: false, rightClickPaste: false, confirmClose: true,
     defaultShell: '', startFolder: '', gpuRenderer: true, ligatures: false, osNotify: true, clipSync: false,
     commandBlocks: false,   // Phase 4 prototype — status gutter beside each command; OFF until the look is approved
+    quakeEnabled: false, quakeHotkey: 'Control+`',   // Phase 7 — global hotkey drop; OFF so no system key is grabbed by default (Electron only)
     // Auto-resume: the command template an armed tab re-runs in its folder when
     // WinMux reopens. {id} is replaced with the exact Claude conversation the tab
     // pinned, so a reopen lands back in THAT conversation — not merely whatever
@@ -266,6 +267,12 @@
     });
     panes.forEach(fitActive);
     saveSettings();
+    pushQuake();
+  }
+  // Phase 7 — tell the Electron main process whether to hold the quake hotkey, and
+  // which key. A no-op in a plain browser (no bridge), so the setting just persists.
+  function pushQuake() {
+    try { if (window.winmux && window.winmux.setQuake) window.winmux.setQuake({ enabled: !!S.quakeEnabled, hotkey: S.quakeHotkey || 'Control+`' }); } catch (e) {}
   }
   function eachTerm(fn) { panes.forEach(function (p) { p.terms.forEach(fn); }); }
   function allTerms() { var a = []; eachTerm(function (t) { a.push(t); }); return a; }
@@ -3405,7 +3412,11 @@
         frow('Start folder', 'Blank = your home folder', '<input class="ctl" type="text" value="' + esc(S.startFolder) + '" data-set="startFolder" placeholder="' + esc(HOME) + '" style="width:230px" spellcheck="false">') +
         frow('Resume command', 'Run in each armed tab when WinMux reopens (right-click a tab → “Auto-resume this conversation”). {id} is replaced with that tab’s pinned Claude conversation.', '<input class="ctl" type="text" value="' + esc(S.resumeCommand) + '" data-set="resumeCommand" placeholder="claude --resume {id}" style="width:280px" spellcheck="false">') +
         frow('Start WinMux when I log in', 'Reopens WinMux automatically after a restart so your tabs and their history come right back — no relaunching by hand. Adds a small launcher to your Windows Startup folder; turning this off removes it. Off by default.', '<span class="sw ' + (autostartS && autostartS.on ? 'on' : '') + '" data-autostart-toggle role="button" aria-label="Start WinMux when I log in"></span>') +
-        (isEl ? frow('Closing the window', 'Your shells and agents keep running in the background — reopen WinMux to land right back on them. Use this only when you want to stop everything.', '<span class="btn" data-act="quit-server">Quit completely &amp; stop all sessions</span>') : '');
+        (isEl ? (
+          frow('Drop down on a hotkey', 'A global shortcut slides WinMux over whatever you’re in; press it again to hide, sessions untouched. It grabs that key across every app, so it stays off until you switch it on.', sw('quakeEnabled', S.quakeEnabled)) +
+          frow('Hotkey', 'The key that shows and hides WinMux. Electron accelerator names, e.g. Control+` or F12.', '<input class="ctl" type="text" value="' + esc(S.quakeHotkey) + '" data-set="quakeHotkey" placeholder="Control+`" style="width:150px" spellcheck="false">') +
+          frow('Closing the window', 'Your shells and agents keep running in the background — reopen WinMux to land right back on them. Use this only when you want to stop everything.', '<span class="btn" data-act="quit-server">Quit completely &amp; stop all sessions</span>')
+        ) : '');
     }
     if (t === 'Phone') return phonePane();
     if (t === 'Shortcuts') {

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, dialog, globalShortcut, screen } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -106,6 +106,7 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
     browserOpened: false, browserRefs: 0, browserClicked: false, ptyOk: false, error: null,
     browserTyped: false, browserGotText: false, browserEval: false, browserScrolled: false,
     menuTypes: [], diffIsTab: false, diffRendered: false,
+    quakeRegistered: false, quakeDrops: false,
   };
   try {
     for (let i = 0; i < 40; i++) {
@@ -269,6 +270,22 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
     } catch (de) {
       result.diffError = String((de as Error).message || de);
     }
+    // Phase 7 quake drop: prove the OS accepts the binding and the toggle reveals a
+    // hidden window. A real keypress needs a human at a real display, but registering
+    // the accelerator and driving dropQuake() proves everything main.js owns.
+    try {
+      w.hide();
+      const reg = applyQuake(true, 'Control+`');
+      result.quakeRegistered = reg && globalShortcut.isRegistered('Control+`');
+      const before = w.isVisible();     // false — just hid it
+      dropQuake();
+      result.quakeDrops = !before && w.isVisible();   // hidden -> revealed
+      applyQuake(false, '');            // release the key; the run stays headless
+      w.hide();
+    } catch (qe) {
+      result.quakeError = String((qe as Error).message || qe);
+    }
+
     // (ST6 persists the browser + diff leaf this smoke opens; the harness wipes the
     // dev profile's Local Storage before each run so the startup layout stays clean.)
   } catch (e) {
@@ -282,6 +299,35 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
   try { fs.writeFileSync(outFile, JSON.stringify(result, null, 2)); } catch (e) { /* ignore */ }
   app.quit();
 }
+
+// Phase 7 — quake drop. A global hotkey slides WinMux over whatever app you're in;
+// press it again to hide, sessions untouched. OFF until the renderer asks for it
+// (Settings → Behaviour), so nothing grabs a system-wide key by default. The
+// renderer owns on/off + which key; main owns the OS binding and the show/hide.
+let quakeKey: string | null = null;
+function dropQuake(): void {
+  if (!win) return;
+  if (win.isVisible() && win.isFocused()) { win.hide(); return; }
+  // Land at the top-centre of whichever monitor the cursor is on — the classic
+  // drop-down-terminal spot — then reveal and focus so you can type immediately.
+  try {
+    const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const wa = disp.workArea;
+    const b = win.getBounds();
+    win.setBounds({ x: wa.x + Math.round((wa.width - b.width) / 2), y: wa.y, width: b.width, height: Math.min(b.height, wa.height) });
+  } catch (e) { /* keep the window where it is if the display query fails */ }
+  win.show();
+  win.focus();
+}
+function applyQuake(enabled: boolean, hotkey: string): boolean {
+  if (quakeKey) { try { globalShortcut.unregister(quakeKey); } catch (e) { /* already gone */ } quakeKey = null; }
+  if (!enabled || !hotkey) return true;
+  try { const ok = globalShortcut.register(hotkey, dropQuake); if (ok) quakeKey = hotkey; return ok; }
+  catch (e) { return false; }
+}
+ipcMain.on('win:quake', (_e, opts: { enabled?: boolean; hotkey?: string }) => {
+  applyQuake(!!(opts && opts.enabled), (opts && String(opts.hotkey || '')) || '');
+});
 
 ipcMain.on('win:minimize', () => win?.minimize());
 ipcMain.on('win:maximize', () => {
@@ -313,6 +359,9 @@ app.whenReady().then(createWindow);
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
+
+// Never leave a system-wide key grabbed after WinMux is gone.
+app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch (e) { /* nothing to release */ } });
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();

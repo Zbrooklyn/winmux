@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('winmux', {
   // Native open-file dialog (the "Markdown" new-tab item). Resolves to a path or null.
   pickFile: (opts?: { filters?: { name: string; extensions: string[] }[] }) =>
     ipcRenderer.invoke('win:pick-file', opts),
+  // Quake drop (Phase 7): tell main to register/release the global hotkey. Off until
+  // the Settings toggle calls this, so nothing grabs a system key by default.
+  setQuake: (opts: { enabled: boolean; hotkey: string }) => ipcRenderer.send('win:quake', opts),
 });
 
 // Tag the document so index.html CSS can enable Electron-only drag regions

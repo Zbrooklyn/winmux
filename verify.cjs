@@ -1755,6 +1755,10 @@ check('electron', PORT_GROUPS, async ({ t }) => {
   t('the cockpit rendered inside the native window', !!json && json.hasCockpit === true, json);
   t('the window.winmux bridge is injected', !!json && json.isElectron === true, json);
   t('the document is tagged data-electron', !!json && json.dataElectron === true, json);
+  // Phase 7 quake drop: the OS accepted the global-hotkey binding, and driving the
+  // toggle reveals a hidden window. (A real keypress needs a human at a real display.)
+  t('the global quake hotkey registers with the OS', !!json && json.quakeRegistered === true, json && { quakeRegistered: json.quakeRegistered, quakeError: json.quakeError });
+  t('the quake toggle drops a hidden window into view', !!json && json.quakeDrops === true, json && { quakeDrops: json.quakeDrops });
   t('the frameless tab bar resolves to a real drag handle',
     !!json && json.ptabsRegion === 'drag', json && json.ptabsRegion);
   t('the smoke run hit no error', !!json && !json.error, json && json.error);
