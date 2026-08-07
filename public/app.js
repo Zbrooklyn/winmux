@@ -1708,6 +1708,31 @@
     return '>_';
   }
 
+  // Paint a dead session's kept scrollback back into a fresh terminal after a
+  // restart, bracketed so it reads as history, not live output. Async (the server
+  // holds it on disk); calls done() whether or not anything was found so the
+  // caller's follow-up notice always prints. The saved bytes keep their own colours
+  // — this is the real screen you left, boxed by dim rules above and below.
+  function replayBacklog(sid, term, done) {
+    if (!sid) { done(false); return; }
+    fetch('/api/backlog?sid=' + encodeURIComponent(sid))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (o) {
+        var did = !!(o && o.found && o.buf);
+        if (did) {
+          // Start clean, then replay the saved screen. The buf carries its own
+          // leading clear/home, so a header written ABOVE it gets wiped — the
+          // divider goes BELOW the restored content instead, where it survives and
+          // marks the boundary to the fresh shell that lands under it.
+          term.reset();
+          term.write(o.buf);
+          term.write('\r\n\x1b[90m──── restored from before the restart · fresh shell below ────\x1b[0m\r\n');
+        }
+        done(did);
+      })
+      .catch(function () { done(false); });
+  }
+
   function newTerm(p, shellKey, cwd, seedSid, resumeCmd, resumeId, pinnedByHand, opts) {
     shellKey = shellKey || startShell();
     var id = ++termSeq;
@@ -1921,6 +1946,10 @@
     var retries = 0, retryTimer = null, told = false;
     function connect() {
       clearTimeout(retryTimer);
+      // The id we're asking the server to hand back. If the server rebooted it's
+      // gone there, but its scrollback may still be on disk under this id — so we
+      // hold it before the meta reply overwrites t.sid with the fresh shell's id.
+      var requestedSid = t.sid || '';
       var q = '/pty?shell=' + encodeURIComponent(shellKey);
       var startIn = cwd || S.startFolder;
       if (startIn) q += '&cwd=' + encodeURIComponent(startIn);
@@ -1965,9 +1994,20 @@
             // (that would type `claude --resume …` into an agent already running).
             t.autoResumePending = false;
           } else if (m.lost) {
-            // We asked for a shell that is gone — say so plainly instead of
-            // passing this fresh one off as the old one.
-            term.write('\r\n\x1b[90m[that session ended — this is a new shell]\x1b[0m\r\n');
+            // We asked for a shell that is gone.
+            if (t.autoResumePending) {
+              // An armed tab recovers via its resume command (typed on first output);
+              // leave that path exactly as it was — just say the old shell is gone.
+              term.write('\r\n\x1b[90m[that session ended — this is a new shell]\x1b[0m\r\n');
+            } else if (requestedSid) {
+              // Plain tab: if the server kept this session's scrollback across the
+              // restart, replay it. A cold shell clears its own screen on first
+              // render, so arm the replay and let the output handler fire it once
+              // the shell is quiet (an immediate paint would be wiped).
+              t._replaySid = requestedSid;
+            } else {
+              term.write('\r\n\x1b[90m[that session ended — this is a new shell]\x1b[0m\r\n');
+            }
             told = false;
           }
           // The armed resume command fires on the shell's first real OUTPUT (below),
@@ -1984,6 +2024,21 @@
         // flag in the meta handler, so scheduleResume is a no-op there.
         scheduleResume();
         term.write(new Uint8Array(ev.data));
+        // A lost session with kept scrollback: once the fresh shell has printed and
+        // gone quiet (so its startup clear is already done), reset and paint the
+        // history on top, then nudge an empty Enter so the live prompt lands below it.
+        if (t._replaySid) {
+          clearTimeout(t._replayTimer);
+          var replaySid = t._replaySid;
+          t._replayTimer = setTimeout(function () {
+            if (t._replaySid !== replaySid) return;
+            t._replaySid = null;
+            replayBacklog(replaySid, term, function (did) {
+              if (did) { try { if (t.ws && t.ws.readyState === 1) t.ws.send(JSON.stringify({ t: 'i', d: '\r' })); } catch (e) {} }
+              else term.write('\r\n\x1b[90m[that session ended — this is a new shell]\x1b[0m\r\n');
+            });
+          }, 600);
+        }
         markWorking(t);
         scheduleDoing(t);
       };
