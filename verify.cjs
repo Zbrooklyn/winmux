@@ -102,6 +102,7 @@ const PORT_RESUME = 9951;     // #240: an armed tab auto-runs its resume command
 // every-candidate-taken refusal without starving the other auto-picking checks.
 const PORTS_EXHAUST = [9952, 9953, 9954];
 const PORT_DIFF = 9956;       // ST5: git diff opens as a pane tab (leaf), not a side dock
+const PORT_LEAFPERSIST = 9957; // ST6: non-terminal leaves survive a page reload
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
@@ -1219,6 +1220,42 @@ check('reload', PORT_RELOAD, async ({ browser, base, t, shot }) => {
       /RELOAD_KEEP/.test(after.split('echo $mywork')[1] || ''));
     t('and it never claimed the session ended', !/session ended/i.test(after));
     await shot(page, 'reload-reattach');
+  } finally {
+    await page.close();
+  }
+});
+
+// ST6: non-terminal leaves survive a page reload. A diff leaf opened as a pane
+// tab must be persisted in the live snapshot and rebuilt on reload — before ST6,
+// snapshot() filtered leaves out, so they vanished. This proves a mixed pane
+// (terminal + diff leaf) comes back whole.
+check('leaf-persist', PORT_LEAFPERSIST, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  try {
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3500);
+    await page.locator('.pc-new').first().click();
+    await page.waitForTimeout(200);
+    await page.locator('.tmenu .tmi:has-text("Changes")').first().click();
+    await page.waitForTimeout(1500);
+    const before = await page.evaluate(() => ({
+      diff: !!document.querySelector('.ptab[data-leaf="diff"]'),
+      term: !!document.querySelector('.ptab:not([data-leaf])'),
+    }));
+    t('a diff leaf and a terminal are open before the reload', before.diff && before.term, before);
+
+    // The whole page torn down and rebuilt — the live snapshot must carry the leaf.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(6000);
+    const after = await page.evaluate(() => ({
+      diff: !!document.querySelector('.ptab[data-leaf="diff"]'),
+      term: !!document.querySelector('.ptab:not([data-leaf])'),
+      body: !!document.querySelector('.term-host.diffleaf'),
+    }));
+    t('the diff leaf came back after the reload (not dropped)', after.diff === true, after);
+    t('the terminal is still there alongside it', after.term === true, after);
+    t('the restored diff leaf rebuilt its body', after.body === true, after);
+    await shot(page, 'leaf-persist');
   } finally {
     await page.close();
   }

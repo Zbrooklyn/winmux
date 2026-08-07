@@ -2731,7 +2731,7 @@
     document.getElementById('bcast-text').textContent =
       'Broadcasting input to all ' + allTerms().length + ' terminals';
     panes.forEach(fitActive);
-    var t = activeTerm(); if (t) t.term.focus();
+    var t = activeTerm(); if (t && t.term) t.term.focus();
   }
   document.getElementById('bcast-stop').addEventListener('click', function () { setBroadcast(false); });
 
@@ -3009,21 +3009,28 @@
       [].forEach.call(c.querySelectorAll('.pane'), function (pe) {
         var p = null; panes.forEach(function (x) { if (x.el === pe) p = x; });
         if (!p) return;
-        // Only terminal leaves are persisted for now — restore rebuilds terminals,
-        // not browser/markdown/diff leaves (that is ST6). Persisting a browser leaf
-        // here would bring it back as a broken "connecting…" terminal on reload.
-        var saveTabs = p.terms.filter(function (t) { return leafType(t) === 'terminal'; });
+        // All leaves persist now (ST6): terminals plus browser / markdown / diff.
+        // Each tab saves only what its reopen needs; restore branches on `type`.
+        var saveTabs = p.terms;
         stack.push({
           active: Math.max(0, saveTabs.map(function (t) { return t.id; }).indexOf(p.activeTermId)),
           tabs: saveTabs.map(function (t) {
             var g = groupById(t.groupId);
+            var lt = leafType(t);
             // The group is saved by NAME, not id — ids are per-browser, names are the thing.
-            // The session id rides along too, but only for the live-reload snapshot: a
-            // saved *layout* is a template, so it drops the sid (see snapshot callers).
-            // resumeId is the Claude conversation this tab is pinned to; `resume` is
-            // the literal command built from it. Both ride along so a reopened tab
-            // returns to THAT conversation, in this folder.
-            return { shell: t.shell, cwd: t.cwd || '', group: g ? g.name : '', title: t.renamed ? t.tabEl.querySelector('.tt').textContent : '', sid: t.sid || '', resume: t.resume || '', resumeId: t.resumeId || '', resumePin: !!t.resumePinnedByHand };
+            var base = { type: lt, group: g ? g.name : '', title: t.renamed ? t.tabEl.querySelector('.tt').textContent : '' };
+            if (lt === 'browser') { base.url = t.url || ''; return base; }
+            if (lt === 'markdown') { base.mdPath = t.mdPath || ''; return base; }
+            if (lt === 'diff') { base.diffCwd = t.diffCwd || ''; return base; }
+            // terminal: the session id rides along only for the live-reload snapshot;
+            // a saved *layout* is a template, so it drops the sid (see snapshot callers).
+            // resumeId is the Claude conversation this tab is pinned to; `resume` is the
+            // literal command built from it — both ride along so a reopened tab returns
+            // to THAT conversation, in this folder.
+            base.shell = t.shell; base.cwd = t.cwd || '';
+            base.sid = t.sid || ''; base.resume = t.resume || '';
+            base.resumeId = t.resumeId || ''; base.resumePin = !!t.resumePinnedByHand;
+            return base;
           }),
         });
       });
@@ -3049,7 +3056,7 @@
   // changes, and add a step to migrateLayout() to bring old blobs forward. The
   // point (#212): an update that changes the format must never brick a returning
   // user — old state is upgraded, or safely discarded, never thrown on.
-  var SCHEMA_VERSION = 3;
+  var SCHEMA_VERSION = 4;
   function migrateLayout(desc) {
     if (!desc || typeof desc !== 'object') return null;
     var v = desc.v || 0;                      // pre-versioning blobs are v0 (== v1 shape)
@@ -3069,6 +3076,9 @@
         });
       });
     }
+    // v4 persists browser/markdown/diff leaves via a per-tab `type`. A v3 blob's
+    // tabs have no `type`, which restore reads as 'terminal' — exactly right, since
+    // v3 only ever saved terminals. No transform needed.
     return desc;
   }
   // Restores a layout, and is crash-safe on every path: a bad or future-format
@@ -3100,13 +3110,23 @@
         var p = makePane(col, prev);
         prev = p;
         (pd.tabs || []).forEach(function (td) {
-          // td.sid is set only by the live-reload snapshot; connect() will send it
-          // and the server reattaches if the shell is still warm, else spawns fresh.
-          var t = newTerm(p, td.shell, td.cwd, td.sid, td.resume || null, td.resumeId || null, td.resumePin);
-          // A restored+armed tab runs its resume command once, on the first FRESH
-          // shell it gets — a warm reattach (server survived a reload) clears this
-          // without firing, so a live agent is never re-typed into. See fireResume().
-          if (td.resume) t.autoResumePending = true;
+          var t;
+          var lt = td.type || 'terminal';       // v3-and-earlier tabs have no type → terminal
+          if (lt === 'browser') {
+            t = newBrowserLeaf(p, td.url || 'about:blank');
+          } else if (lt === 'markdown') {
+            t = newMarkdownLeaf(p, td.mdPath || '');
+          } else if (lt === 'diff') {
+            t = newDiffLeaf(p, td.diffCwd || '');
+          } else {
+            // td.sid is set only by the live-reload snapshot; connect() will send it
+            // and the server reattaches if the shell is still warm, else spawns fresh.
+            t = newTerm(p, td.shell, td.cwd, td.sid, td.resume || null, td.resumeId || null, td.resumePin);
+            // A restored+armed tab runs its resume command once, on the first FRESH
+            // shell it gets — a warm reattach (server survived a reload) clears this
+            // without firing, so a live agent is never re-typed into. See fireResume().
+            if (td.resume) t.autoResumePending = true;
+          }
           var g = groupByName(td.group);
           if (g) t.groupId = g.id;
           if (td.title) { t.tabEl.querySelector('.tt').textContent = td.title; t.renamed = true; }
@@ -3604,8 +3624,8 @@
     var list = [
       { cat: 'Terminal', name: 'New tab', kbd: 'Alt+T', run: function () { var p = paneById(activePaneId); if (p) newTerm(p, startShell()); } },
       { cat: 'Terminal', name: 'Close tab', kbd: 'Alt+W', run: function () { var p = paneById(activePaneId); if (p && p.activeTermId) askCloseTerm(p, p.activeTermId); } },
-      { cat: 'Terminal', name: 'Clear terminal', run: function () { var t = activeTerm(); if (t) { t.term.clear(); t.term.focus(); } } },
-      { cat: 'Terminal', name: 'Copy selection', kbd: 'Ctrl+Shift+C', run: function () { var t = activeTerm(); if (t) copySel(t); } },
+      { cat: 'Terminal', name: 'Clear terminal', run: function () { var t = activeTerm(); if (t && t.term) { t.term.clear(); t.term.focus(); } } },
+      { cat: 'Terminal', name: 'Copy selection', kbd: 'Ctrl+Shift+C', run: function () { var t = activeTerm(); if (t && t.term) copySel(t); } },
       { cat: 'Terminal', name: 'Paste', kbd: 'Ctrl+Shift+V', run: function () { var t = activeTerm(); if (t) pasteInto(t); } },
       { cat: 'Terminal', name: 'Paste from other device (clipboard sync)', run: function () { var t = activeTerm(); if (t) pasteFromOtherDevice(t); } },
       { cat: 'Terminal', name: 'Rename tab', run: function () { var t = activeTerm(); if (t) startRename(t); } },
@@ -3663,7 +3683,7 @@
     if (c) c.run();
   }
   function openPalette() { plInput.value = ''; renderPalette(); plWrap.setAttribute('data-open', ''); plInput.focus(); }
-  function closePalette() { plWrap.removeAttribute('data-open'); var t = activeTerm(); if (t) t.term.focus(); }
+  function closePalette() { plWrap.removeAttribute('data-open'); var t = activeTerm(); if (t && t.term) t.term.focus(); }
   plInput.addEventListener('input', renderPalette);
   plInput.addEventListener('keydown', function (e) {
     e.stopPropagation();
