@@ -295,6 +295,22 @@
   .ptabs .tabscroll { scrollbar-width: none; -ms-overflow-style: none; }
   .ptabs .tabscroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
+  /* Terminal scroll indicator. Chromium hands the terminal a zero-width auto-hiding
+     overlay scrollbar it won't style, so there was no cue for how far up the
+     scrollback you are. We draw our own minimal thumb on the right edge instead,
+     positioned by scroll fraction from app.js (updateScrollbar) — always visible
+     while there's scrollback, independent of the browser's scrollbar mode and the
+     WebGL renderer. Hide the native bar so there's no double. */
+  .term-host { position: relative; }
+  .xterm-viewport::-webkit-scrollbar { width: 0; height: 0; }
+  .termsb-thumb {
+    position: absolute; top: 0; right: 2px; width: 6px; border-radius: 6px;
+    background: color-mix(in srgb, var(--text) 28%, transparent);
+    opacity: 0; transition: opacity .18s ease; pointer-events: none; z-index: 6;
+    will-change: transform, height;
+  }
+  .term-host:hover .termsb-thumb { background: color-mix(in srgb, var(--text) 46%, transparent); }
+
   /* Session cards drill into the terminal on tap — give them the same "tap to open"
      chevron the group rows carry, so the affordance reads the same at both levels. */
   .ncard .nchev { display: flex; align-items: center; align-self: center; flex: 0 0 auto; color: var(--faint); }

@@ -1833,6 +1833,32 @@
         try { term.refresh(0, term.rows - 1); } catch (e) {}
       });
     });
+    // Minimal scroll-position indicator. The native scrollbar is a zero-width
+    // auto-hiding overlay Chromium won't size, so there was no cue for how far up the
+    // scrollback you are. Draw our own thin thumb on the right edge, sized and placed
+    // by scroll fraction — always visible while there's scrollback, renderer- and
+    // overlay-independent, pointer-through (an indicator, not a drag handle).
+    var sbThumb = document.createElement('div');
+    sbThumb.className = 'termsb-thumb';
+    host.appendChild(sbThumb);
+    function updateScrollbar() {
+      try {
+        var buf = term.buffer.active, total = buf.length, view = term.rows;
+        var screen = host.querySelector('.xterm-screen');
+        var trackH = screen ? screen.clientHeight : host.clientHeight;
+        if (total <= view || trackH <= 0) { sbThumb.style.opacity = '0'; return; }
+        var thumbH = Math.max(24, Math.round(trackH * view / total));
+        var frac = Math.min(1, Math.max(0, buf.viewportY / (total - view)));
+        sbThumb.style.height = thumbH + 'px';
+        sbThumb.style.transform = 'translateY(' + Math.round((trackH - thumbH) * frac) + 'px)';
+        sbThumb.style.opacity = '1';
+      } catch (e) {}
+    }
+    var sbRaf = 0;
+    function scheduleScrollbar() { if (sbRaf) return; sbRaf = requestAnimationFrame(function () { sbRaf = 0; updateScrollbar(); }); }
+    term.onScroll(scheduleScrollbar);
+    term.onRender(scheduleScrollbar);
+    term.onResize(scheduleScrollbar);
     // The bundled terminal font (Cascadia Code / CaskaydiaCove Nerd Font) can still
     // be loading when this terminal mounts on a clean machine. xterm measures its
     // cell size once at init; if it measured against the fallback, remeasure when the

@@ -1359,7 +1359,15 @@ function spawnSession(shell, cwd) {
   // The session id exists before the pty so an agent's Claude Code hook running
   // inside this terminal can address exactly this session (winmux agent … --sid).
   const id = crypto.randomBytes(16).toString('hex');
-  const env = Object.assign({}, process.env, { WINMUX_SID: id, WINMUX_PORT: String(PORT) });
+  // node-pty's `name` option does NOT reliably export TERM into the child env on
+  // Windows/ConPTY, so a fresh shell sees TERM=undefined and colour-aware programs
+  // (Claude Code, git, vim, ls --color) fall back to flat, uncoloured output. Set
+  // TERM + COLORTERM explicitly so the shell advertises 256-colour + truecolour,
+  // which xterm here fully renders.
+  const env = Object.assign({}, process.env, {
+    WINMUX_SID: id, WINMUX_PORT: String(PORT),
+    TERM: 'xterm-256color', COLORTERM: 'truecolor',
+  });
   const term = pty.spawn(shell.exec, shell.args, { name: 'xterm-256color', cols: 80, rows: 24, cwd, env });
   // Inline command prediction (grey history completion, RightArrow to accept) is a
   // shell feature, not ours to inject: PowerShell 7 (pwsh) renders it by default via
