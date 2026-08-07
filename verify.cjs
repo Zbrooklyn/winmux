@@ -1225,36 +1225,57 @@ check('reload', PORT_RELOAD, async ({ browser, base, t, shot }) => {
   }
 });
 
-// ST6: non-terminal leaves survive a page reload. A diff leaf opened as a pane
-// tab must be persisted in the live snapshot and rebuilt on reload — before ST6,
-// snapshot() filtered leaves out, so they vanished. This proves a mixed pane
-// (terminal + diff leaf) comes back whole.
+// ST6: non-terminal leaves survive a page reload. Both a diff leaf AND a markdown
+// leaf, opened as pane tabs, must be persisted in the live snapshot and rebuilt on
+// reload — before ST6, snapshot() filtered leaves out, so they vanished. This proves
+// a mixed pane (terminal + two distinct leaf types) comes back whole. (Browser leaves
+// are Electron-only and are exercised by the `electron` smoke, not here.)
 check('leaf-persist', PORT_LEAFPERSIST, async ({ browser, base, t, shot }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_LEAFPERSIST), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => o += d);
+    proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+  const mdFile = path.join(OUT, 'leafpersist-' + PORT_LEAFPERSIST + '.md');
+  fs.writeFileSync(mdFile, '# Persisted Doc\n\nsurvives a reload.\n');
   const page = await desktop(browser);
   try {
     await page.goto(base, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(3500);
+    await page.waitForTimeout(4000);          // connect to /control so the CLI can reach it
+    // A diff leaf (via the menu) and a markdown leaf (via the CLI) in the same pane.
     await page.locator('.pc-new').first().click();
     await page.waitForTimeout(200);
     await page.locator('.tmenu .tmi:has-text("Changes")').first().click();
+    await page.waitForTimeout(1200);
+    const md = await winmux(['markdown', mdFile]);
+    t('winmux markdown opened a leaf to persist', md.code === 0, md.err);
     await page.waitForTimeout(1500);
     const before = await page.evaluate(() => ({
       diff: !!document.querySelector('.ptab[data-leaf="diff"]'),
+      md: !!document.querySelector('.ptab[data-leaf="markdown"]'),
       term: !!document.querySelector('.ptab:not([data-leaf])'),
     }));
-    t('a diff leaf and a terminal are open before the reload', before.diff && before.term, before);
+    t('a diff leaf, a markdown leaf and a terminal are open before the reload',
+      before.diff && before.md && before.term, before);
 
-    // The whole page torn down and rebuilt — the live snapshot must carry the leaf.
+    // The whole page torn down and rebuilt — the live snapshot must carry both leaves.
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(6000);
     const after = await page.evaluate(() => ({
       diff: !!document.querySelector('.ptab[data-leaf="diff"]'),
+      md: !!document.querySelector('.ptab[data-leaf="markdown"]'),
       term: !!document.querySelector('.ptab:not([data-leaf])'),
-      body: !!document.querySelector('.term-host.diffleaf'),
+      diffBody: !!document.querySelector('.term-host.diffleaf'),
+      mdBody: !!(document.querySelector('.mdleaf .mdbody') && /Persisted Doc/.test((document.querySelector('.mdleaf .mdbody') || {}).textContent || '')),
     }));
     t('the diff leaf came back after the reload (not dropped)', after.diff === true, after);
-    t('the terminal is still there alongside it', after.term === true, after);
-    t('the restored diff leaf rebuilt its body', after.body === true, after);
+    t('the markdown leaf came back after the reload too', after.md === true, after);
+    t('the terminal is still there alongside them', after.term === true, after);
+    t('the restored diff leaf rebuilt its body', after.diffBody === true, after);
+    t('the restored markdown leaf re-rendered its file', after.mdBody === true, after);
     await shot(page, 'leaf-persist');
   } finally {
     await page.close();
