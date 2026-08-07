@@ -1711,6 +1711,16 @@
     if (window.Unicode11Addon) {
       try { term.loadAddon(new Unicode11Addon.Unicode11Addon()); term.unicode.activeVersion = '11'; } catch (e) {}
     }
+    // Inline images: the image addon decodes iTerm2 IIP + sixel escape sequences into
+    // real pictures in the grid — so `winmux image foo.png` (or any imgcat-style tool,
+    // including Claude Code) shows the image right where it ran, no popup. storageLimit
+    // caps decoded-image memory kept in scrollback so an image flood can't grow unbounded.
+    if (window.ImageAddon) {
+      try {
+        term.loadAddon(new ImageAddon.ImageAddon({ sixelSupport: true, iipSupport: true, storageLimit: 128 }));
+        term.__winmuxImages = true;   // observability hook for the harness
+      } catch (e) {}
+    }
     term.open(host);
     applyRenderer(term);   // GPU vs DOM — see the function; must run AFTER open()
     // The bundled terminal font (Cascadia Code / CaskaydiaCove Nerd Font) can still

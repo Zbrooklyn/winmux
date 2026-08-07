@@ -104,6 +104,7 @@ const PORTS_EXHAUST = [9952, 9953, 9954];
 const PORT_DIFF = 9956;       // ST5: git diff opens as a pane tab (leaf), not a side dock
 const PORT_LEAFPERSIST = 9957; // ST6: non-terminal leaves survive a page reload
 const PORT_PREDICT = 9958;    // Phase 2: pwsh PSReadLine inline history prediction + RightArrow accept
+const PORT_IMAGES = 9959;     // Phase 3: inline images (addon-image) + `winmux image` verb
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
@@ -2988,6 +2989,43 @@ check('prediction', PORT_PREDICT, async ({ browser, base, t, shot }) => {
   const after = (await screen()).match(new RegExp(marker, 'g')) || [];
   t('RightArrow accepts the prediction and runs the full command', after.length >= 2, { after: after.length });
   await shot(page, 'prediction');
+  await page.close();
+});
+
+// Phase 3 — inline images. The `@xterm/addon-image` addon decodes the iTerm2 IIP
+// escape into a real picture in the terminal grid, and `winmux image <path>` emits
+// that escape. Proof is the RENDERED artifact, not the byte path: after running the
+// verb on a committed fixture, the addon must have created its dedicated image-layer
+// canvas AND painted non-transparent pixels into it. (The layer is created lazily,
+// only when an image actually decodes — so its presence with real pixels is the tell.)
+check('images', PORT_IMAGES, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+  const CLI = path.join(ROOT, 'bin', 'winmux.cjs');
+  const FIX = path.join(ROOT, 'test', 'fixtures', 'winmux-logo.png');
+
+  await page.click('.xterm').catch(() => {});
+  await page.keyboard.type('node "' + CLI + '" image "' + FIX + '"');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(3500);
+
+  const img = await page.evaluate(() => {
+    const layer = document.querySelector('.xterm-screen canvas.xterm-image-layer');
+    if (!layer) return { layer: false };
+    // Sample the layer for any non-transparent pixel — proves a picture was painted,
+    // not merely that an empty canvas was allocated.
+    let painted = false;
+    try {
+      const ctx = layer.getContext('2d');
+      const d = ctx.getImageData(0, 0, layer.width, layer.height).data;
+      for (let i = 3; i < d.length; i += 4) { if (d[i] !== 0) { painted = true; break; } }
+    } catch (e) { painted = 'unreadable:' + e.message; }
+    return { layer: true, w: layer.width, h: layer.height, painted };
+  });
+  t('the image addon created its image layer', img.layer === true, img);
+  t('a real picture was painted into the layer', img.painted === true, { painted: img.painted });
+  await shot(page, 'images');
   await page.close();
 });
 

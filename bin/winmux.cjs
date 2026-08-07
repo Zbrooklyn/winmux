@@ -88,6 +88,8 @@ const HELP = [
   '',
   '  markdown <file>                  open a markdown file in the viewer (live-updates)',
   '',
+  '  image <file>                     show an image inline in the current terminal',
+  '',
   '  open <file.json>                 open a saved workspace — a set of terminals,',
   '                                   each with its own cwd, shell, and start command',
   '',
@@ -104,6 +106,24 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
   if (devFlagIdx !== -1) argv.splice(devFlagIdx, 1);
   const cmd = argv[0];
   if (!cmd || cmd === '-h' || cmd === '--help' || cmd === 'help') { out(HELP); return; }
+
+  // `winmux image <path>` — show a picture inline, imgcat-style. It writes the iTerm2
+  // inline-image (IIP) escape to THIS process's stdout; when run inside a WinMux
+  // terminal, that terminal's image addon renders it right where the command ran — no
+  // /rpc, no server round-trip, so it works for anything in the shell (incl. Claude
+  // Code). Local and self-contained on purpose.
+  if (cmd === 'image') {
+    const file = argv[1];
+    if (!file) die('image needs a file path, e.g. winmux image logo.png');
+    let data;
+    try { data = fs.readFileSync(file); } catch (e) { die('cannot read ' + file + ': ' + e.message); }
+    const MAX = 20 * 1024 * 1024;   // 20 MB guard — matches the addon's storage budget headroom
+    if (data.length > MAX) die(file + ' is ' + Math.round(data.length / 1048576) + ' MB; over the 20 MB inline limit');
+    const name = Buffer.from(path.basename(file)).toString('base64');
+    process.stdout.write('\x1b]1337;File=name=' + name + ';size=' + data.length + ';inline=1:' + data.toString('base64') + '\x07');
+    return;
+  }
+
   // Human-friendly by default; raw JSON with --json, uniformly across verbs.
   const emit = (human, data) => (has(argv, '--json') ? out(data) : out(human));
   try {
