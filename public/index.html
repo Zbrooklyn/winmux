@@ -40,6 +40,20 @@
   .term-area { position: absolute; inset: 0; }
   .term-host { position: absolute; inset: 0; padding: 10px 6px 10px 12px; }
   .xterm { height: 100%; }
+  /* Command blocks (Phase 4 prototype): a thin status bar in the left gutter beside each
+     finished command — green succeeded, red failed, purple still running. Anchored to the
+     command's first row via an xterm decoration, so it scrolls with the output. Sits in the
+     host's 12px left padding (translateX) so it never covers the command text. */
+  .cmdblk { width: 3px !important; border-radius: 2px; transform: translateX(-6px); opacity: .95; pointer-events: none; z-index: 5; }
+  .cmdblk.ok  { background: #2ea043; }
+  .cmdblk.bad { background: #e5534b; }
+  .cmdblk.run { background: hsl(258 88% 66%); }
+  .cmdtime { left: auto !important; right: 10px; width: auto !important; background: none !important;
+    font: 500 11px/1 'Cascadia Code', Consolas, monospace; letter-spacing: .02em; pointer-events: none;
+    display: flex; align-items: center; justify-content: flex-end; opacity: .8; z-index: 5; }
+  .cmdtime.ok  { color: #6a6a6a; }
+  .cmdtime.bad { color: #c76b64; opacity: .95; }
+  .cmdtime.run { color: hsl(258 60% 68%); }
   /* Instant skeleton — a cursor block shown the moment a tab opens, before the
      shell's first byte, so the sub-second gap never reads as a blank "loading"
      pane. Removed by app.js on first real output. cockpit.css is frozen; lives here. */

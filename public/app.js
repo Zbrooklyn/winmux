@@ -76,6 +76,7 @@
     cursorStyle: 'block', cursorBlink: true, scrollback: 5000,
     copyOnSelect: false, rightClickPaste: false, confirmClose: true,
     defaultShell: '', startFolder: '', gpuRenderer: true, ligatures: false, osNotify: true, clipSync: false,
+    commandBlocks: false,   // Phase 4 prototype — status gutter beside each command; OFF until the look is approved
     // Auto-resume: the command template an armed tab re-runs in its folder when
     // WinMux reopens. {id} is replaced with the exact Claude conversation the tab
     // pinned, so a reopen lands back in THAT conversation — not merely whatever
@@ -477,6 +478,49 @@
     if (target == null) return false;
     try { term.scrollToLine(target); } catch (e) { return false; }
     return true;
+  }
+  // Command blocks (Phase 4, prototype — gated by S.commandBlocks, default OFF until
+  // the look is approved). A thin gutter bar beside each finished command, coloured by
+  // exit status: green = succeeded, red = failed. Built on the OSC-133 D-mark exit code
+  // pwsh 7 emits. xterm decorations anchor the bar to a buffer line so it scrolls with
+  // the output. No boxes, no headers — the minimal, Obsidian-clean direction.
+  function fmtDur(ms) {
+    if (ms == null || ms < 0) return '';
+    if (ms < 1000) return ms + 'ms';
+    var s = ms / 1000;
+    return (s < 10 ? s.toFixed(1) : Math.round(s)) + 's';
+  }
+  function decorateBlock(t, marker, rows, exit, ms) {
+    if (!S.commandBlocks) return;
+    var term = t.term;
+    if (!term || typeof term.registerDecoration !== 'function') return;
+    if (!marker || marker.isDisposed) return;
+    var cls = exit === 0 ? 'ok' : (exit == null ? 'run' : 'bad');
+    try {
+      // Left gutter stripe, coloured by exit status, spanning the command's rows.
+      var dec = term.registerDecoration({ marker: marker, x: 0, width: 1, height: Math.max(1, rows), layer: 'top' });
+      if (dec) {
+        dec.onRender(function (el) {
+          if (el._blk) return; el._blk = true;
+          el.className = 'cmdblk ' + cls;
+        });
+        (t.blockDecs || (t.blockDecs = [])).push(dec);
+      }
+      // Right-edge timing on the command row: WinMux owns the margin, so this annotates
+      // without touching the shell's own text. Grey when it succeeded, red when it failed.
+      var dur = fmtDur(ms);
+      if (dur) {
+        var td = term.registerDecoration({ marker: marker, x: 0, width: 1, height: 1, layer: 'top' });
+        if (td) {
+          td.onRender(function (el) {
+            if (el._blkt) return; el._blkt = true;
+            el.className = 'cmdtime ' + cls;
+            el.textContent = dur;
+          });
+          (t.blockDecs || (t.blockDecs = [])).push(td);
+        }
+      }
+    } catch (e) {}
   }
   // Reset terminal: clear the screen AND scrollback and reset modes/colours to a
   // clean slate. Purely visual — the shell and socket underneath are untouched.
@@ -1822,11 +1866,31 @@
     });
     term.parser.registerOscHandler(133, function (data) {
       // OSC 133 ; A|B|C|D — FinalTerm/iTerm2 prompt & command boundary marks.
-      var kind = (data || '').charAt(0);
+      // A = prompt start, B = command start (user input begins), C = output start,
+      // D[;exit] = command end. pwsh 7 emits these by default.
+      var parts = (data || '').split(';');
+      var kind = parts[0].charAt(0);
       if ('ABCD'.indexOf(kind) >= 0) {
         if (!t.marks) t.marks = [];
         if (t.marks.length > 500) t.marks.shift();
-        try { t.marks.push({ k: kind, y: term.buffer.active.baseY + term.buffer.active.cursorY }); } catch (e) { t.marks.push({ k: kind }); }
+        var y;
+        try { y = term.buffer.active.baseY + term.buffer.active.cursorY; } catch (e) { y = null; }
+        t.marks.push({ k: kind, y: y });
+        // Command-block tracking: a block runs from the command-start row (B, or A as
+        // fallback) to the command-end row (D). Anchor an xterm MARKER at the start row
+        // now, while the cursor is actually on it — computing an offset later (at D) is
+        // fragile. The exit code rides on the D mark.
+        if ((kind === 'B' || kind === 'A') && y != null && S.commandBlocks) {
+          try { if (t._blkMarker && t._blkMarker.dispose) t._blkMarker.dispose(); } catch (e) {}
+          try { t._blkMarker = term.registerMarker(0); } catch (e) { t._blkMarker = null; }
+          t._blkStart = y; t._blkStartTime = Date.now();
+        }
+        if (kind === 'D' && y != null && t._blkStart != null) {
+          var exit = parts.length > 1 ? parseInt(parts[1], 10) : null;
+          var ms = t._blkStartTime ? (Date.now() - t._blkStartTime) : null;
+          decorateBlock(t, t._blkMarker, Math.max(1, y - t._blkStart), isNaN(exit) ? null : exit, ms);
+          t._blkStart = null; t._blkMarker = null; t._blkStartTime = null;
+        }
       }
       return true;
     });
