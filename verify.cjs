@@ -3025,6 +3025,19 @@ check('images', PORT_IMAGES, async ({ browser, base, t, shot }) => {
   });
   t('the image addon created its image layer', img.layer === true, img);
   t('a real picture was painted into the layer', img.painted === true, { painted: img.painted });
+
+  // The verb ends with a newline so the shell's next prompt lands on a FRESH row
+  // below the image, never overwriting its last row. Proof: the last non-empty text
+  // row is a bare returned prompt (ends in "> "), and it sits below the image's
+  // reserved rows — i.e. the image did not eat the prompt line.
+  const tail = await page.evaluate(() => {
+    const r = document.querySelector('.xterm-rows');
+    const lines = (r ? r.innerText : '').split('\n').map((s) => s.replace(/\s+$/, ''));
+    const nonEmpty = lines.filter((s) => s.length);
+    return nonEmpty[nonEmpty.length - 1] || '';
+  });
+  t('the shell returns to a clean prompt below the image (no overlap)', /> ?$/.test(tail.trim()) && /PS /.test(tail), tail);
+
   await shot(page, 'images');
   await page.close();
 });

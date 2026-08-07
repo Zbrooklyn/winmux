@@ -120,7 +120,10 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
     const MAX = 20 * 1024 * 1024;   // 20 MB guard — matches the addon's storage budget headroom
     if (data.length > MAX) die(file + ' is ' + Math.round(data.length / 1048576) + ' MB; over the 20 MB inline limit');
     const name = Buffer.from(path.basename(file)).toString('base64');
-    process.stdout.write('\x1b]1337;File=name=' + name + ';size=' + data.length + ';inline=1:' + data.toString('base64') + '\x07');
+    // Trailing newline so the shell's next prompt lands on a fresh line BELOW the image
+    // instead of overwriting its last row (imgcat does the same). The leading newline
+    // gives the picture a little breathing room under the command that produced it.
+    process.stdout.write('\n\x1b]1337;File=name=' + name + ';size=' + data.length + ';inline=1:' + data.toString('base64') + '\x07\n');
     return;
   }
 
