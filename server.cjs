@@ -861,6 +861,23 @@ function handle(req, res, viaPhone) {
     return;
   }
 
+  // Scrollback that outlived a reboot. When WinMux restarts and the layout restore
+  // reopens a tab whose live session the server no longer holds, the client asks
+  // here for that session's saved output and replays it as dimmed history above the
+  // fresh prompt. Only the device that owned the session may read it — the same
+  // guest-list rule as picking a live shell back up.
+  if (urlPath === '/api/backlog') {
+    let sid = '';
+    try { sid = new URL(req.url, 'http://x').searchParams.get('sid') || ''; } catch (e) {}
+    const bl = sid ? readBacklog(sid) : null;
+    if (!bl || (bl.dev || '') !== deviceIdFrom(req)) {
+      res.writeHead(404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ found: false }));
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({ found: true, buf: bl.buf || '', shell: bl.shell || '', cwd: bl.cwd || '', savedAt: bl.savedAt || 0 }));
+  }
+
   // Is a newer WinMux out? Tells the UI's update badge; never installs anything.
   if (urlPath === '/api/update') {
     checkUpdate().then(function (u) {
@@ -1156,6 +1173,49 @@ const GRACE_MS = 10 * 60 * 1000;
 // What it can show you when you get back. Roughly a few screens of output.
 const SCROLLBACK = 256 * 1024;
 
+// Phase 5 — scrollback that outlives the server. The in-memory buf (above) covers
+// a detach/reattach, but a full Windows reboot kills this whole process, so the
+// buf must also live on disk. We write each session's recent output to a small
+// file keyed by its session id; after a reboot the client fetches it (GET
+// /api/backlog) and replays it as dimmed history above the fresh prompt. Files
+// are device-scoped by the meta they carry and pruned by age on start.
+const BACKLOG_DIR = path.join(path.dirname(CONFIG_FILE), 'backlog');
+const BACKLOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;   // a week of "come back to it"
+const BACKLOG_THROTTLE_MS = 2000;                     // at most one write per session per 2s
+function backlogPath(sid) {
+  // sid is our own generated id (hex); keep the path from ever escaping the dir.
+  if (!/^[a-zA-Z0-9_-]+$/.test(sid)) return null;
+  return path.join(BACKLOG_DIR, sid + '.json');
+}
+function saveBacklog(s) {
+  const p = backlogPath(s.id); if (!p) return;
+  try {
+    fs.mkdirSync(BACKLOG_DIR, { recursive: true });
+    const tmp = p + '.' + process.pid + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({ id: s.id, dev: s.dev || '', shell: s.shell, cwd: s.cwd, buf: s.buf, savedAt: Date.now() }));
+    fs.renameSync(tmp, p);
+  } catch (e) {}
+}
+function scheduleBacklogSave(s) {
+  if (s._blTimer) return;                              // one pending write is enough
+  s._blTimer = setTimeout(() => { s._blTimer = null; saveBacklog(s); }, BACKLOG_THROTTLE_MS);
+}
+function readBacklog(sid) {
+  const p = backlogPath(sid); if (!p) return null;
+  try { const o = JSON.parse(fs.readFileSync(p, 'utf8')); return (o && typeof o === 'object') ? o : null; }
+  catch (e) { return null; }
+}
+function pruneBacklog() {
+  try {
+    for (const f of fs.readdirSync(BACKLOG_DIR)) {
+      if (!f.endsWith('.json')) continue;
+      const fp = path.join(BACKLOG_DIR, f);
+      try { if (Date.now() - fs.statSync(fp).mtimeMs > BACKLOG_MAX_AGE_MS) fs.unlinkSync(fp); } catch (e) {}
+    }
+  } catch (e) {}   // no dir yet is fine
+}
+pruneBacklog();
+
 function endSession(s, why) {
   if (!s || !SESSIONS.has(s.id)) return;
   SESSIONS.delete(s.id);
@@ -1261,6 +1321,7 @@ function spawnSession(shell, cwd) {
     s.buf += d;
     if (s.buf.length > SCROLLBACK) s.buf = s.buf.slice(-SCROLLBACK);
     if (s.ws && s.ws.readyState === s.ws.OPEN) s.ws.send(Buffer.from(d, 'utf8'));
+    if (SESSIONS.has(s.id)) scheduleBacklogSave(s);   // real sessions only; a spare isn't in SESSIONS yet
   });
   term.onExit(() => {
     const si = spares.indexOf(s);
@@ -1291,7 +1352,9 @@ function ensureSpare() {
 function killAllShells() {
   for (const sp of spares) { try { sp.term.kill(); } catch (e) {} }
   spares = [];
-  for (const s of SESSIONS.values()) { try { s.term.kill(); } catch (e) {} }
+  // Flush each live session's scrollback before we kill it, so a graceful stop
+  // (or /api/shutdown) leaves the same come-back-to-it history a crash would.
+  for (const s of SESSIONS.values()) { try { saveBacklog(s); } catch (e) {} try { s.term.kill(); } catch (e) {} }
 }
 
 function onShellConnection(ws, req) {
