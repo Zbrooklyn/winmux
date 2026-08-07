@@ -160,6 +160,20 @@ Issues and pull requests are welcome. Before opening a PR, run `npm run verify` 
 the harness is the contract. Please don't edit `public/cockpit.css` directly; it's the frozen design
 contract, and new styling belongs in the `index.html` override layer.
 
+## Repository layout
+
+This repo is a monorepo holding both WinMux implementations:
+
+```
+apps/electron/   The shipping app (this README's product) — Node server.cjs + Electron + xterm.
+core/rust/       The v2 native Rust core — scaffold only; build-out is Stages 0-5 (see its README).
+docs/            Design specs, plans, screenshots.
+```
+
+All app commands run from `apps/electron/` (e.g. `cd apps/electron && npm run verify`). The two
+stacks are self-contained: `apps/electron/` is its own npm project, `core/rust/` its own Cargo
+workspace — there is no shared package manager across the language boundary.
+
 ## License
 
 [MIT](LICENSE) © Zbrooklyn

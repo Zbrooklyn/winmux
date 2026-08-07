@@ -1,0 +1,5 @@
+# WinMux v2 native core — Cargo workspace.
+# Scaffold only; the real build-out is Stages 0-5 (see README.md).
+[workspace]
+resolver = "2"
+members = ["crates/*"]

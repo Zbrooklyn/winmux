@@ -1351,10 +1351,15 @@ check('drop', PORT_DROP, async ({ browser, base, t }) => {
     '&kids=' + encodeURIComponent((kids || []).join('|')) +
     '&near=' + encodeURIComponent(near || ''))).body).hits;
 
-  const here = __dirname;
-  const mine = await find(path.basename(here), fs.readdirSync(here).slice(0, 40));
+  // Use a uniquely-named fixture folder, not __dirname: in the monorepo the dir
+  // holding this harness is named "electron", which collides with node_modules/
+  // electron and the electron/ source dir, so a name-based find is ambiguous.
+  const self = path.join(OUT, 'drop-self-' + PORT_DROP);
+  fs.mkdirSync(self, { recursive: true });
+  fs.writeFileSync(path.join(self, 'marker-' + PORT_DROP + '.txt'), 'x');
+  const mine = await find(path.basename(self), fs.readdirSync(self), OUT);
   t('the folder you dropped is the folder it finds',
-    mine.length && mine[0].path.toLowerCase() === here.toLowerCase(), mine[0]);
+    mine.length && mine[0].path.toLowerCase() === self.toLowerCase(), mine[0]);
 
   // Two folders, same name, different contents — the only thing that can tell
   // them apart is what is inside, which is exactly what the browser hands over.

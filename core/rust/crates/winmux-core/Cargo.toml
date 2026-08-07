@@ -1,0 +1,10 @@
+[package]
+name = "winmux-core"
+version = "0.0.0"
+edition = "2021"
+description = "WinMux v2 native core (Rust) — scaffold. See core/rust/README.md for the staged plan."
+license = "MIT"
+
+[[bin]]
+name = "winmux-core"
+path = "src/main.rs"
