@@ -3333,7 +3333,8 @@
         frow('Scrollback lines', 'How much history each terminal keeps', '<input class="ctl" type="number" min="500" max="100000" step="500" value="' + S.scrollback + '" data-set="scrollback" style="width:92px">') +
         frow('Copy on select', 'Selecting text copies it straight away', sw('copyOnSelect', S.copyOnSelect)) +
         frow('Right-click pastes', 'Otherwise right-click opens the menu', sw('rightClickPaste', S.rightClickPaste)) +
-        frow('Programming ligatures', 'Draws => as a single arrow, != as ≠, and so on. Costs speed: ligatures need the software renderer, so heavy output from several agents at once redraws more slowly. Off by default.', sw('ligatures', S.ligatures));
+        frow('Programming ligatures', 'Draws => as a single arrow, != as ≠, and so on. Costs speed: ligatures need the software renderer, so heavy output from several agents at once redraws more slowly. Off by default.', sw('ligatures', S.ligatures)) +
+        frow('Mark command results', 'After each command, show a small ✓ or ✗ with the time — green when it worked, red when it failed — right after the command. Off by default.', sw('commandBlocks', S.commandBlocks));
     }
     if (t === 'Behaviour') {
       var isEl = !!(window.winmux && window.winmux.isElectron);
