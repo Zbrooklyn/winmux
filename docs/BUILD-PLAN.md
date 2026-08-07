@@ -44,9 +44,9 @@ DONE: on-screen scrollback now persists to disk and replays after a full server/
 One shortcut searches every action: open a workspace, start an agent, run tests, switch project, connect remotely, and more.
 Size: Small to Medium.
 
-## Phase 7 — Terminal on a hotkey
+## Phase 7 — Terminal on a hotkey ✅ done
 A global shortcut slides WinMux down over whatever app you're in. Press it again to hide, session kept.
-Size: Medium.
+Size: Medium. Status: **done** (2026-08-07, gated OFF) — global accelerator (default Control+`, changeable) shows/hides the Electron window over the focused app, positioned top-center of the cursor's display; press again to hide, sessions untouched. "Drop down on a hotkey" toggle in Settings → Behaviour, OFF by default (nothing grabs a system key until flipped on). Committed c5c899c. Harness electron 22/22 incl. quakeRegistered:true, quakeDrops:true. Only a physical keypress on the real machine is unverifiable in the headless harness — that's Edward's real-machine test.
 
 ## Phase 8 — Full control from your phone
 A proper review screen on your phone: what an agent is doing, the commands it ran, the changes it wants to make, test results, with Approve, Reject, Pause, and Stop.
