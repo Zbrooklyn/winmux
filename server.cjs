@@ -311,6 +311,36 @@ function writeConfigAtomic(obj) {
   } catch (e) { return false; }
 }
 
+// Start WinMux at logon. A copy of a tiny launcher in the user's Startup folder
+// makes the app simply present after a reboot instead of "not running until
+// someone remembers", which is what makes the scrollback-restore above actually
+// pay off. OFF by default: the file only exists once the Settings toggle writes
+// it, and turning the toggle off deletes it — nothing else to undo. Under the
+// packaged app the launcher reopens the app exe (server + window + layout +
+// history); run bare from source it relaunches the detached server via winmux.ps1.
+const STARTUP_DIR = process.env.WINMUX_STARTUP_DIR
+  || path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
+    'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+const AUTOSTART_FILE = path.join(STARTUP_DIR, 'WinMux.vbs');
+function autostartVbs() {
+  // The pause lets Tailscale finish coming up before WinMux binds its phone door.
+  let run;
+  if (process.versions && process.versions.electron) run = '"' + process.execPath + '"';
+  else run = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + path.join(__dirname, 'winmux.ps1') + '" start';
+  const vbsArg = run.replace(/"/g, '""');   // double every quote for the VBS string literal
+  return 'Dim shell : Set shell = CreateObject("WScript.Shell")\r\n'
+    + 'WScript.Sleep 20000\r\n'
+    + 'shell.Run "' + vbsArg + '", 0, False\r\n';
+}
+function autostartOn() { try { return fs.existsSync(AUTOSTART_FILE); } catch (e) { return false; } }
+function setAutostart(on) {
+  try {
+    if (on) { fs.mkdirSync(STARTUP_DIR, { recursive: true }); fs.writeFileSync(AUTOSTART_FILE, autostartVbs()); }
+    else if (fs.existsSync(AUTOSTART_FILE)) fs.unlinkSync(AUTOSTART_FILE);
+    return true;
+  } catch (e) { return false; }
+}
+
 function deviceIdFrom(req) {
   const m = (req.headers.cookie || '').match(/(?:^|;\s*)ct_dev=([a-f0-9]{32})/);
   return m ? m[1] : '';
@@ -771,6 +801,28 @@ function handle(req, res, viaPhone) {
     }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({ ok: true, config: readConfig() }));
+    return;
+  }
+
+  // Start WinMux at logon. GET reports whether the Startup launcher exists; POST
+  // { on } writes or removes it. Desk-door only — it changes THIS machine's
+  // startup, which is nothing a networked phone should ever reach in to touch.
+  if (urlPath === '/api/autostart') {
+    if (viaPhone) { res.writeHead(403, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ on: false, error: 'available only at the PC' })); }
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (d) => { body += d; if (body.length > 1000) req.destroy(); });
+      req.on('end', () => {
+        let want = false;
+        try { want = !!(JSON.parse(body || '{}') || {}).on; } catch (e) {}
+        const ok = setAutostart(want);
+        res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok, on: autostartOn() }));
+      });
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ on: autostartOn() }));
     return;
   }
 
