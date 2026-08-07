@@ -11,9 +11,9 @@ Sizes are rough effort, not time: Small, Medium, Large.
 
 ---
 
-## Phase 1 — Tabs for everything
+## Phase 1 — Tabs for everything ✅ done
 Open a browser, a markdown file, or a git diff as a tab across the top, next to your terminals. The old side panels go away.
-Size: Large. Status: in progress.
+Size: Large. Status: **done** (2026-08-06) — browser / markdown / diff all open as pane tabs from the New-tab menu, docks retired, tabs survive reload. Harness 363/363. See PLAN.md → Phase 15.
 
 ## Phase 2 — Smarter typing
 As you type, faint text finishes your command. Press right-arrow to accept. No popup.
