@@ -93,6 +93,7 @@ const PORT_THEME = 9941;      // theme import: a Windows Terminal scheme recolou
 const PORT_KEYS = 9942;       // custom keybindings: a remapped chord runs the action, the old one doesn't
 const PORT_MDRICH = 9943;     // markdown richness: tables, task-list checkboxes, images render in the viewer
 const PORT_MARKS = 9945;      // terminal command-marks jump + reset (browser verbs ride the electron smoke)
+const PORT_CMDTAG = 9975;     // Phase 4: command-blocks status tag (✓/✗ + time) renders on OSC-133 D-marks
 const PORT_AGENTENV = 9946;   // agent: every shell exports WINMUX_SID/WINMUX_PORT
 const PORT_AGENTSTATE = 9947; // agent: winmux agent <state> flips the session's cockpit status
 const PORT_AGENTHOOKS = 9948; // agent: the Claude Code hooks preset drives live state
@@ -3427,6 +3428,42 @@ check('marks', PORT_MARKS, async ({ browser, base, t, shot }) => {
   t('reset clears the terminal buffer back to a clean screen',
     !!res && res.reset === true && res.lenAfterReset <= res.rows, res);
   await shot(page, 'marks');
+  await page.close();
+});
+
+// Phase 4 — the command-blocks status tag. With commandBlocks ON, an OSC-133 C
+// (command start) then D;<exit> (command end) must paint an inline ✓/✗ + time tag,
+// green on exit 0 and red on a non-zero exit. Drive the marks synthetically so the
+// assertion is deterministic — no shell-timing flake — the same way the `marks`
+// check writes OSC-133 A sequences.
+check('cmdtag', PORT_CMDTAG, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  // Turn the gated feature on for this context before the app loads its settings.
+  await page.addInitScript(() => { try { localStorage.setItem('ct-settings', JSON.stringify({ commandBlocks: true })); } catch (e) {} });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);
+
+  const res = await page.evaluate(async () => {
+    function write(term, s) { return new Promise((r) => term.write(s, r)); }
+    const t0 = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
+    if (!t0 || !t0.term) return { error: 'no active term' };
+    const term = t0.term;
+    const A = '\x1b]133;A\x07', C = '\x1b]133;C\x07';
+    const D = (code) => '\x1b]133;D;' + code + '\x07';
+    // A passing command, then a failing one — each: prompt, command echo, command
+    // start, output, command end with its exit code.
+    await write(term, A + 'echo ok\r\n' + C + 'ok\r\n' + D(0));
+    await write(term, A + 'badcmd\r\n' + C + 'not recognized\r\n' + D(1));
+    await new Promise((r) => setTimeout(r, 400));
+    const tags = Array.from(document.querySelectorAll('.cmdtag')).map((e) => ({ cls: e.className, txt: (e.textContent || '').trim() }));
+    return { tags };
+  });
+  const tags = (res && res.tags) || [];
+  const ok = tags.find((x) => /\bok\b/.test(x.cls));
+  const bad = tags.find((x) => /\bbad\b/.test(x.cls));
+  t('a succeeded command paints a green ✓ tag', !!ok && ok.txt.indexOf('✓') === 0, { tags, ok });
+  t('a failed command paints a red ✗ tag', !!bad && bad.txt.indexOf('✗') === 0, { tags, bad });
+  await shot(page, 'cmdtag');
   await page.close();
 });
 
