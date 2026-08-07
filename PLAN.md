@@ -1365,6 +1365,22 @@ Harness: the `prediction` check opens a pwsh tab, proves inline prediction + Rig
 accept, and skips cleanly where pwsh isn't installed. Full suite 373/373 (one pre-existing
 `detach` shutdown-timing flake passes on isolated re-run).
 
+### Phase 17 — Images in the terminal (shipped)
+Pictures render inline in the terminal grid; `winmux image <path>` drops one in — imgcat-style,
+usable by anything in the shell including Claude Code. No popup, no separate viewer.
+
+- **Render:** vendored `@xterm/addon-image` (`public/vendor/addon-image.js`), loaded on every
+  terminal in `newTerm` with `{sixelSupport, iipSupport, storageLimit:128}`. It decodes iTerm2
+  IIP + sixel escapes onto its own image-layer canvas — works on both the WebGL default and the
+  DOM fallback. On by default (Edward-approved). Kitty graphics is NOT supported by the official
+  addon; sixel+IIP meets the goal.
+- **Emit:** `winmux image <path>` (`bin/winmux.cjs`) reads the file, base64s it, and writes the
+  IIP escape (`ESC ]1337;File=...;inline=1:<b64> BEL`) to its OWN stdout, wrapped in `\n…\n` so the
+  next prompt lands cleanly below the image instead of overwriting its last row. Pure local, no /rpc.
+- **Harness:** the `images` check runs the verb on a committed 240×120 PNG fixture and proves the
+  RENDERED artifact — image-layer created, non-transparent pixels painted, AND the shell returns to
+  a clean prompt below the image (guards the overlap regression). Full suite 375/375.
+
 ## Risks
 
 - Scope drift back into the agent-cockpit demo (medium) — containment: this file is the scope; anything not listed above is a new decision.

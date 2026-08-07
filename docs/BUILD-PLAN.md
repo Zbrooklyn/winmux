@@ -23,8 +23,12 @@ Windows PowerShell 5.1 (the old default) can't do it, so WinMux now opens PowerS
 default when it's installed (falls back to 5.1). Approved by Edward. Harness-verified on a
 pwsh tab; first-launch screenshot confirmed PowerShell 7 with prediction on.
 
-## Phase 3 — Images in the terminal
+## Phase 3 — Images in the terminal ✅ done
 Pictures show right inside the terminal. A `winmux image` command lets anything, including Claude Code, drop one in.
+Shipped: @xterm/addon-image renders sixel + iTerm2 IIP images inline (on by default, Edward-approved);
+`winmux image <path>` emits the escape imgcat-style. Kitty protocol isn't supported by the addon —
+covered via sixel+IIP. Prompt-overlap glitch fixed (newline-wrapped escape). Harness-verified (images 3/3),
+real-window screenshot confirmed clean render.
 Size: Medium.
 
 ## Phase 4 — Command blocks
