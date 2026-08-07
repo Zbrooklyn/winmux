@@ -2,6 +2,24 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **STATUS — SHIPPED (2026-08-06).** All tasks done on `feature/phase8-electron-shell`;
+> full harness **363/363**. Commits: ST1–ST4 (`9f18acb` typed leaves, `516e104` type
+> menu, `39c3cb7` browser leaf, `30c9d5c` markdown leaf), `05165fe` (ST5 diff leaf), and
+> `e597b3c` (ST6 persistence). Implementation notes vs this plan:
+> - Leaves were built as **dedicated constructors** — `newBrowserLeaf` / `newMarkdownLeaf`
+>   / `newDiffLeaf` — rather than one `newLeaf`+`mountLeafBody` dispatcher. Same outcome,
+>   less shared branching; each leaf owns its body/lifecycle (e.g. the markdown poll timer
+>   is cleared in that leaf's `onClose`).
+> - Harness check names landed as `browser-tab`, `markdown`/`md-rich` (repointed to the
+>   leaf host), `diff-tab`, and `leaf-persist` — not the tentative `surface-menu`/
+>   `markdown-tab` names in the task steps.
+> - Non-terminal tabs are tagged `data-leaf` so terminal-only DOM selectors use
+>   `.ptab:not([data-leaf])` (the shell favicon classes are reused, so the favicon alone
+>   can't discriminate a leaf from a PowerShell tab).
+> - Diff leaf default cwd: the shell parks at `$HOME` (never a repo), so a fresh diff
+>   leaf reads the server's launch dir; `/api/git`'s empty-cwd default was flipped from
+>   `os.homedir()` to `process.cwd()` to match.
+
 **Goal:** Teach WinMux that a pane's tab can be a non-terminal surface — Browser, Markdown, or Diff — opened from a Terminal/Browser/Markdown new-tab menu, matching the cockpit design contract, and retire the browser/markdown side panels.
 
 **Architecture:** Today a pane holds `p.terms` — an array of terminal objects only; the browser (`ensureBrowserPanel`) and markdown (`ensureMarkdownPanel`) are separate Electron/side docks. We generalize the tab entry into a **typed leaf** (`leaf.type` ∈ `terminal | browser | markdown | diff`) carried in the SAME `p.terms` array, so every existing terminal path keeps working with `type` defaulting to `'terminal'`. Non-terminal leaves render their body into the pane's content area instead of an xterm. We reuse the existing `browserOpen`/`runControl`/`/api/md` plumbing verbatim — only its *host* moves from a dock to a pane leaf. The design-spec mockup (`../wmux-amirlehmam/design-spec/cockpit.html`) is the reference implementation: `state.leaves[id]={id,type,...}`, `leafTitle`, `leafDot`, tab favicons (`fav-b ◆` / `fav-m ¶` / `fav-d ±` / `fav-t >_`), `browserHTML`, the new-tab type menu, and `enforceLimit`.

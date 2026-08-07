@@ -1317,6 +1317,35 @@ reconnects on its own. This is a separate product surface beyond the v1.0 launch
 a blocker for it; it reuses the existing phone server and trusted-device model, so no
 new backend is required — the app is a native client over the same door.
 
+### Phase 15 — Surfaces as tabs (shipped)
+Every auxiliary surface — the browser, the markdown viewer, the git-diff "changes"
+panel — used to live in a side dock. They are now **pane tabs (leaves)**, opened from
+the New-tab menu (Terminal / Browser / Markdown / Changes) and treated by the tab
+machinery exactly like a terminal: activate, close, drag-to-split, Ctrl+Tab MRU, and
+rename all work unchanged because a leaf carries the same tab shape. The side docks are
+gone. Detailed plan: `docs/superpowers/plans/2026-08-06-surfaces-as-tabs.md`.
+
+- **Typed leaves (ST1–ST2).** `leafType`/`leafTitle`/`leafDot`/`leafGlyph` helpers; a
+  `type` field distinguishes terminal / browser / markdown / diff. New-tab menu offers
+  all four (Browser is Electron-only).
+- **Browser leaf (ST3).** `newBrowserLeaf` mounts an Electron `<webview>` (or a
+  "needs the desktop app" note in a plain browser); `browserOpen`/`runControl`/the CLI
+  browser verbs resolve the active browser leaf. The old `.wmb` dock is retired.
+- **Markdown leaf (ST4).** `newMarkdownLeaf` renders `/api/md` into the pane with a
+  live-update poll; the `.wmm` dock is retired.
+- **Diff leaf (ST5).** `newDiffLeaf` renders `git` status (branch, per-file ±, hunks)
+  via `/api/git`. A fresh leaf defaults to the server's launch directory (the shell
+  parks at `$HOME`, which is never a repo), and `/api/git`'s empty-cwd default was
+  flipped from `os.homedir()` to `process.cwd()` to match. The `<aside class=dock>` DOM
+  + `data-dock` root attribute are gone.
+- **Persistence (ST6).** `snapshot()` saves every leaf with its type + reopen data;
+  `restoreLayout` rebuilds the right leaf on reload/restart. Schema v3→v4 (a v3 blob's
+  typeless tabs read as terminals — no transform). Terminal-only paths reachable when a
+  leaf is the active tab are guarded.
+
+Harness: `browser-tab`, `markdown`/`md-rich` (repointed to the leaf), `diff-tab`, and
+`leaf-persist` checks. Full suite 363/363.
+
 ## Risks
 
 - Scope drift back into the agent-cockpit demo (medium) — containment: this file is the scope; anything not listed above is a new decision.
