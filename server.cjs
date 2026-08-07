@@ -1368,6 +1368,16 @@ function spawnSession(shell, cwd) {
     WINMUX_SID: id, WINMUX_PORT: String(PORT),
     TERM: 'xterm-256color', COLORTERM: 'truecolor',
   });
+  // Scrub the launching process's own agent/session pollution before handing the
+  // shell to the user. If WinMux was started from inside a Claude Code session it
+  // inherited NO_COLOR=1 — the universal "disable all colour" switch, which forces
+  // Claude Code, git, ls, etc. to flat uncoloured output no matter what TERM says —
+  // and the CLAUDE_CODE_* / CLAUDECODE markers, which make a `claude` run in this
+  // terminal think it's a child session (no transcript, degraded mode). A WinMux
+  // terminal must be a clean top-level shell regardless of what launched the app.
+  for (const k of Object.keys(env)) {
+    if (k === 'NO_COLOR' || k === 'CLAUDECODE' || k === 'CLAUDE_PID' || k.startsWith('CLAUDE_CODE_')) delete env[k];
+  }
   const term = pty.spawn(shell.exec, shell.args, { name: 'xterm-256color', cols: 80, rows: 24, cwd, env });
   // Inline command prediction (grey history completion, RightArrow to accept) is a
   // shell feature, not ours to inject: PowerShell 7 (pwsh) renders it by default via
