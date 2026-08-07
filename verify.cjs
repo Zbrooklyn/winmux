@@ -94,6 +94,7 @@ const PORT_KEYS = 9942;       // custom keybindings: a remapped chord runs the a
 const PORT_MDRICH = 9943;     // markdown richness: tables, task-list checkboxes, images render in the viewer
 const PORT_MARKS = 9945;      // terminal command-marks jump + reset (browser verbs ride the electron smoke)
 const PORT_CMDTAG = 9975;     // Phase 4: command-blocks status tag (✓/✗ + time) renders on OSC-133 D-marks
+const PORT_APPROVECARD = 9976;// Phase 8: the phone approval card's Approve button actually sends Enter to the shell
 const PORT_AGENTENV = 9946;   // agent: every shell exports WINMUX_SID/WINMUX_PORT
 const PORT_AGENTSTATE = 9947; // agent: winmux agent <state> flips the session's cockpit status
 const PORT_AGENTHOOKS = 9948; // agent: the Claude Code hooks preset drives live state
@@ -3464,6 +3465,54 @@ check('cmdtag', PORT_CMDTAG, async ({ browser, base, t, shot }) => {
   t('a succeeded command paints a green ✓ tag', !!ok && ok.txt.indexOf('✓') === 0, { tags, ok });
   t('a failed command paints a red ✗ tag', !!bad && bad.txt.indexOf('✗') === 0, { tags, bad });
   await shot(page, 'cmdtag');
+  await page.close();
+});
+
+// Phase 8 — the phone approval card is wired, not just drawn. Flip a session to
+// needs-you, open its preview card, click Approve, and assert the shell actually
+// received Enter ({t:'i',d:'\r'}) over its socket — the real click→keystroke path,
+// not the machinery behind it.
+check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_APPROVECARD), WINMUX_HOST: '127.0.0.1' }) });
+    let e = '';
+    proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, err: e.trim() }));
+  });
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);
+  const sid = await page.evaluate(() => { const at = window.__winmuxActiveTerm(); return at ? at.sid : null; });
+  t('a session sid is available to target', !!sid, sid);
+
+  const nu = await winmux(['agent', 'needs-you', '--sid', sid, 'waiting on your approval']);
+  t('winmux agent needs-you exits clean', nu.code === 0, nu.err);
+  await page.waitForTimeout(700);
+
+  const res = await page.evaluate(async () => {
+    // Record what the active session sends to its shell.
+    const at = window.__winmuxActiveTerm();
+    if (!at || !at.ws) return { error: 'no active ws' };
+    window.__sent = [];
+    const orig = at.ws.send.bind(at.ws);
+    at.ws.send = function (d) { try { window.__sent.push(d); } catch (e) {} return orig(d); };
+    // Open the preview card via the real eye button, then click Approve.
+    const eye = document.querySelector('[data-eye]');
+    if (eye) eye.click();
+    await new Promise((r) => setTimeout(r, 350));
+    const card = document.querySelector('.sxpv.on');
+    const approve = document.querySelector('.pv-approve');
+    const lbl = (document.querySelector('.pv-lbl') || {}).textContent || null;
+    if (approve) approve.click();
+    await new Promise((r) => setTimeout(r, 250));
+    return { cardOpen: !!card, hadApprove: !!approve, lbl, sent: window.__sent };
+  });
+  const sentEnter = !!res && (res.sent || []).some((d) => { try { return JSON.parse(d).d === '\r'; } catch (e) { return false; } });
+  t('the approval card opens with an Approve button labelled "Needs your OK"',
+    !!res && res.cardOpen === true && res.hadApprove === true && res.lbl === 'Needs your OK', res);
+  t('clicking Approve sends Enter to the shell over its socket', sentEnter, { sent: res && res.sent });
+  await shot(page, 'approvecard');
   await page.close();
 });
 
