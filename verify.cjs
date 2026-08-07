@@ -57,6 +57,8 @@ const PORT_COLOUR = 9918;
 const PORT_GROUPS = 9919;
 // Reopening the page must reattach to the running shell, not orphan it.
 const PORT_RELOAD = 9920;
+// A full reboot kills the server; its scrollback must survive on disk and replay.
+const PORT_RESTART = 9960;
 // The CLI check needs its own server + a connected app, on a port nobody else
 // is driving, so `winmux new-tab` counts don't race another group's terminals.
 const PORT_CLI = 9921;
@@ -1283,6 +1285,56 @@ check('leaf-persist', PORT_LEAFPERSIST, async ({ browser, base, t, shot }) => {
   } finally {
     await page.close();
   }
+});
+
+// --- restart: scrollback outlives the whole server, not just a dropped socket ---
+// A dropped socket detaches; a full reboot kills the server process itself, taking
+// the in-memory scrollback with it. WinMux now writes each session's output to disk
+// (throttled) so a restarted server can hand it back, and the client replays it as
+// history on reconnect. This proves the durable seam without xterm timing: run a
+// command, kill the server dead, start a fresh one on the SAME config, and ask for
+// that session's kept output.
+check('restart', PORT_RESTART, async ({ browser, base, t, skip }) => {
+  if (SERVERS[PORT_RESTART] && SERVERS[PORT_RESTART].borrowed)
+    return skip('borrowed a server already on ' + PORT_RESTART + ', and killing it is the premise');
+  const MARK = 'RESTART_SURVIVES_' + PORT_RESTART;
+  const page = await desktop(browser);
+  let sid = '';
+  try {
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3500);
+    await page.click('.xterm').catch(() => {});
+    await page.keyboard.type('echo ' + MARK);
+    await page.keyboard.press('Enter');
+    // Wait until the output is really on screen BEFORE trusting the throttle — under
+    // full-run load the echo can land late, and a save that fires first would capture
+    // the pre-marker buffer. Confirm it rendered, then let the ~2s throttle write it.
+    let onScreen = false;
+    for (let i = 0; i < 30; i++) {
+      const s = await page.evaluate(() => { const r = document.querySelector('.xterm-rows'); return r ? r.innerText : ''; });
+      if (s.includes(MARK)) { onScreen = true; break; }
+      await page.waitForTimeout(400);
+    }
+    t('the shell captured the work before the restart', onScreen);
+    await page.waitForTimeout(2600);   // guarantee the post-marker throttled save lands on disk
+    sid = await page.evaluate(() => {
+      try { return (JSON.stringify(JSON.parse(localStorage.getItem('ct-live') || '{}')).match(/"sid":"([a-f0-9]{32})"/) || [])[1] || ''; } catch (e) { return ''; }
+    });
+    t('the tab has a session id to recover by', /^[a-f0-9]{32}$/.test(sid), sid);
+  } finally {
+    await page.close();
+  }
+
+  // The reboot: kill the server dead, then start a fresh one on the SAME config so
+  // its backlog dir is the one the first server wrote — nothing in memory carries over.
+  SERVERS[PORT_RESTART].stop();
+  for (let i = 0; i < 40 && (await inUse('127.0.0.1', PORT_RESTART)); i++)
+    await new Promise((r) => setTimeout(r, 250));
+  SERVERS[PORT_RESTART] = await server(PORT_RESTART, { WINMUX_FORCE_DOM: '1' });
+
+  const bl = JSON.parse((await get(base + '/api/backlog?sid=' + sid)).body);
+  t('the restarted server still has that session’s scrollback', bl.found === true, { found: bl.found });
+  t('and hands back the exact work that was on screen', typeof bl.buf === 'string' && bl.buf.includes(MARK));
 });
 
 // --- drop: a folder dragged in from Explorer becomes a path ---------------

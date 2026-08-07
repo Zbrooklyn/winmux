@@ -35,9 +35,10 @@ Size: Medium.
 Fold a command and its output into one block you can collapse and re-run. On by default, with a switch to turn it off.
 Size: Medium.
 
-## Phase 5 — Never lose your work
+## Phase 5 — Never lose your work — DONE
 Your sessions come back after a full Windows restart, not just after reopening the app. As far as is technically possible.
 Size: Large. The hardest one.
+DONE: on-screen scrollback now persists to disk and replays after a full server/reboot kill (backend + client, committed 9623b12/6809428). Optional "Start WinMux when I log in" toggle (Behaviour, OFF by default) reopens the app at logon (65c4eca/2d9f60a). Committed `restart` harness check proves the seam. Honest scope: layout + scrollback + one-tap resume return; live processes cannot survive a reboot.
 
 ## Phase 6 — Do anything from one search
 One shortcut searches every action: open a workspace, start an agent, run tests, switch project, connect remotely, and more.
