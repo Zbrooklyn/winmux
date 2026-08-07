@@ -3974,8 +3974,17 @@
       badge.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
     }).catch(function () {});
   })();
-  fetch('/shells').then(function (r) { return r.json(); }).then(function (list) {
-    if (Array.isArray(list) && list.length) { SHELLS = list; DEFAULT_SHELL = list[0].key; }
+  // Resolves once the machine's real shell list is known. The first-ever tab waits on
+  // this so it opens the true default (PowerShell 7 when present) instead of the
+  // build-time 'powershell' placeholder — otherwise a fresh install always opened 5.1,
+  // where inline prediction can't run.
+  var shellsReady = fetch('/shells').then(function (r) { return r.json(); }).then(function (list) {
+    if (Array.isArray(list) && list.length) {
+      SHELLS = list;
+      // Prefer PowerShell 7 when present — it does inline history prediction natively,
+      // where Windows PowerShell 5.1 can't. Falls back to the first shell otherwise.
+      DEFAULT_SHELL = list.some(function (s) { return s.key === 'pwsh'; }) ? 'pwsh' : list[0].key;
+    }
   }).catch(function () {});
 
   // The two moments worth retrying on immediately, instead of waiting out
@@ -4047,9 +4056,13 @@
     if (liveState) restored = restoreLayout(liveState);
   } catch (e) {}
   if (!restored) {
+    // Wait for the real shell list before opening the first-ever tab, so it lands on the
+    // true default (PowerShell 7 when installed) instead of the 'powershell' placeholder.
+    // The pane frame is created now (instant), the shell attached once shellsReady settles
+    // — a localhost round-trip, imperceptible. shellsReady always resolves (it .catch-es).
     var first = makePane(makeCol());
-    newTerm(first, startShell());
     focusPane(first.id);
+    shellsReady.then(function () { newTerm(first, startShell()); });
   }
   applyMode();
   setTimeout(layoutAllTabs, 100);

@@ -15,9 +15,13 @@ Sizes are rough effort, not time: Small, Medium, Large.
 Open a browser, a markdown file, or a git diff as a tab across the top, next to your terminals. The old side panels go away.
 Size: Large. Status: **done** (2026-08-06) — browser / markdown / diff all open as pane tabs from the New-tab menu, docks retired, tabs survive reload. Harness 363/363. See PLAN.md → Phase 15.
 
-## Phase 2 — Smarter typing
+## Phase 2 — Smarter typing ✅ done
 As you type, faint text finishes your command. Press right-arrow to accept. No popup.
 Size: Small.
+Shipped: this is PowerShell 7's native inline prediction, not something WinMux injects —
+Windows PowerShell 5.1 (the old default) can't do it, so WinMux now opens PowerShell 7 by
+default when it's installed (falls back to 5.1). Approved by Edward. Harness-verified on a
+pwsh tab; first-launch screenshot confirmed PowerShell 7 with prediction on.
 
 ## Phase 3 — Images in the terminal
 Pictures show right inside the terminal. A `winmux image` command lets anything, including Claude Code, drop one in.

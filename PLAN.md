@@ -1346,6 +1346,25 @@ gone. Detailed plan: `docs/superpowers/plans/2026-08-06-surfaces-as-tabs.md`.
 Harness: `browser-tab`, `markdown`/`md-rich` (repointed to the leaf), `diff-tab`, and
 `leaf-persist` checks. Full suite 363/363.
 
+### Phase 16 — Smarter typing (shipped)
+Inline command prediction — faint grey text completes your command from history,
+RightArrow accepts, no popup. This is **not** a WinMux overlay or injection: it's
+PowerShell 7's native PSReadLine 2.4 prediction (`PredictionSource`/`InlineView`),
+rendered by the shell straight into the terminal. Windows PowerShell 5.1 ships
+PSReadLine 2.0, which predates prediction entirely, so it's impossible there — no
+injection can fix it (an earlier attempt was removed as dead code).
+
+The only lever was the default shell. WinMux now **defaults to PowerShell 7 when it's
+installed** (`DEFAULT_SHELL_KEY` in `server.cjs`, `DEFAULT_SHELL` in `public/app.js`),
+falling back to 5.1 when absent — Edward-approved, since it changes the first-launch
+prompt. The first-ever tab waits on a `shellsReady` promise so it opens the true default
+instead of the `'powershell'` placeholder (a boot race that otherwise always opened 5.1).
+The spare pool pre-warms the same default, so instant-open still matches.
+
+Harness: the `prediction` check opens a pwsh tab, proves inline prediction + RightArrow
+accept, and skips cleanly where pwsh isn't installed. Full suite 373/373 (one pre-existing
+`detach` shutdown-timing flake passes on isolated re-run).
+
 ## Risks
 
 - Scope drift back into the agent-cockpit demo (medium) — containment: this file is the scope; anything not listed above is a new decision.

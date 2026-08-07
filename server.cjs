@@ -1235,7 +1235,12 @@ server.on('upgrade', (req, socket, head) => {
 // first — the "predicted" feel. Sized by WINMUX_SPARE_POOL (default 2).
 let spares = [];
 const SPARE_POOL = Math.max(1, Number(process.env.WINMUX_SPARE_POOL) || 2);
-const DEFAULT_SHELL_KEY = 'powershell';
+// Prefer PowerShell 7 when it's installed: it renders inline history prediction
+// ("smarter typing") natively, where Windows PowerShell 5.1 (PSReadLine 2.0) cannot.
+// Falls back to 5.1 when pwsh is absent. This also warms the spare pool on the shell
+// new tabs will actually request (the frontend's startShell() prefers pwsh the same
+// way), so the instant-open handoff still matches.
+const DEFAULT_SHELL_KEY = SHELLS.some((s) => s.key === 'pwsh') ? 'pwsh' : 'powershell';
 
 function spawnSession(shell, cwd) {
   // Every shell learns its own WinMux identity, the way tmux exports $TMUX_PANE.
