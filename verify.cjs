@@ -3456,7 +3456,16 @@ check('cmdtag', PORT_CMDTAG, async ({ browser, base, t, shot }) => {
     await write(term, A + 'echo ok\r\n' + C + 'ok\r\n' + D(0));
     await write(term, A + 'badcmd\r\n' + C + 'not recognized\r\n' + D(1));
     await new Promise((r) => setTimeout(r, 400));
-    const tags = Array.from(document.querySelectorAll('.cmdtag')).map((e) => ({ cls: e.className, txt: (e.textContent || '').trim() }));
+    // Capture geometry, not just DOM presence — a tag can exist yet paint
+    // off-screen (the className-overwrite bug clobbered xterm's decoration
+    // positioning, collapsing the tag to a full-width block below the terminal).
+    // onScreen asserts the tag is a real box sitting inside the terminal screen.
+    const scr = document.querySelector('.xterm-screen').getBoundingClientRect();
+    const tags = Array.from(document.querySelectorAll('.cmdtag')).map((e) => {
+      const r = e.getBoundingClientRect();
+      return { cls: e.className, txt: (e.textContent || '').trim(),
+        onScreen: r.width > 0 && r.height > 0 && r.top >= scr.top - 2 && r.bottom <= scr.bottom + 2 && r.left >= scr.left - 2 && r.right <= scr.right + 2 };
+    });
     return { tags };
   });
   const tags = (res && res.tags) || [];
@@ -3464,6 +3473,7 @@ check('cmdtag', PORT_CMDTAG, async ({ browser, base, t, shot }) => {
   const bad = tags.find((x) => /\bbad\b/.test(x.cls));
   t('a succeeded command paints a green ✓ tag', !!ok && ok.txt.indexOf('✓') === 0, { tags, ok });
   t('a failed command paints a red ✗ tag', !!bad && bad.txt.indexOf('✗') === 0, { tags, bad });
+  t('every status tag renders on-screen inside the terminal', tags.length > 0 && tags.every((x) => x.onScreen), { tags });
   await shot(page, 'cmdtag');
   await page.close();
 });

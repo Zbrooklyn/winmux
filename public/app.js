@@ -523,7 +523,11 @@
       if (dec) {
         dec.onRender(function (el) {
           if (el._blk) return; el._blk = true;
-          el.className = 'cmdtag ' + cls;
+          // ADD our classes — never overwrite: el.className carries xterm's own
+          // .xterm-decoration positioning classes, and replacing them drops the
+          // absolute position so the tag collapses to a full-width block below the
+          // terminal (invisible). classList.add keeps xterm's layout intact.
+          el.classList.add('cmdtag', cls);
           el.textContent = label;
         });
         (t.blockDecs || (t.blockDecs = [])).push(dec);
