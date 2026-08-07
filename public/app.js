@@ -406,6 +406,9 @@
     { type: 'markdown', label: 'Markdown', desc: 'Open a .md file',
       svg: '<svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4M8 13h8M8 16.5h5"/></svg>',
       run: function (p) { openMarkdownPick(p); } },
+    { type: 'diff', label: 'Changes', desc: 'Git diff for this repo',
+      svg: '<svg viewBox="0 0 24 24"><path d="M12 4v6M9 7h6"/><path d="M9 17h6"/><path d="M5 4h4M15 20h4"/><path d="M7 10v7a3 3 0 0 0 3 3h1M17 14V7a3 3 0 0 0-3-3h-1"/></svg>',
+      run: function (p) { newDiffLeaf(p, diffDefaultCwd()); } },
   ];
   // Shipped New-tab menu look: minimal (native context-menu, no icon tiles) — the
   // flattest, least "designed card" direction. Other looks stay reachable by changing
@@ -1320,15 +1323,12 @@
     renderSidebar();
   }
   // The window frame's min/max/close sit at the extreme top-right of the title row —
-  // that's the dock's controls when the dock is open, else the last pane's controls.
-  // Relocating the one .wc element keeps it there without a fixed overlay covering
-  // anything (the #127 inline-on-rightmost-pane pattern).
+  // the last pane's control cluster (the #127 inline-on-rightmost-pane pattern).
   function placeWinctl() {
     var wc = document.getElementById('winctl');
     if (!wc || !panes.length) return;
-    var host = dockOpen()
-      ? document.querySelector('#dock .pctrls')
-      : (panes[panes.length - 1].dockBtn ? panes[panes.length - 1].dockBtn.parentNode : null);
+    var last = panes[panes.length - 1];
+    var host = last.dockBtn ? last.dockBtn.parentNode : null;
     if (host && wc.parentNode !== host) host.appendChild(wc);
   }
   function clearZoom() {
@@ -1880,7 +1880,7 @@
           if (m.exited) { t.ended = true; return; }
           if (m.sid) { t.sid = m.sid; persistLive(); }
           if (m.shell && ttEl && !t.renamed) ttEl.textContent = m.shell;
-          if (m.cwd) { t.cwd = m.cwd; if (!dockPath.value) dockPath.value = m.cwd; }
+          if (m.cwd) { t.cwd = m.cwd; }
           if (m.resumed) {
             // Redraw from the shell's own record rather than trusting whatever
             // half-written screen we were left holding.
@@ -2741,21 +2741,9 @@
   // One control does both directions: the tab-bar rail (.pc-rail), present whether the
   // sidebar is open or collapsed. The old header chevron and edge strip are gone.
 
-  var dockPath = document.getElementById('dock-path');
-  var dockDiff = document.getElementById('dock-diff');
-  function dockOpen() { return root.getAttribute('data-dock') === 'open'; }
-  function toggleDock() {
-    if (dockOpen()) { root.setAttribute('data-dock', 'closed'); }
-    else {
-      root.setAttribute('data-dock', 'open');
-      var t = activeTerm();
-      if (!dockPath.value) dockPath.value = (t && t.cwd) || HOME || '';
-      refreshChanges();
-    }
-    placeWinctl();
-    setTimeout(function () { panes.forEach(fitActive); }, 40);
-  }
-  document.getElementById('dock-close').addEventListener('click', function () { root.setAttribute('data-dock', 'closed'); placeWinctl(); setTimeout(function () { panes.forEach(fitActive); }, 40); });
+  // The changes surface is a pane tab now (newDiffLeaf); the .pc-dock button and
+  // Ctrl+Alt+D open/focus it instead of a side dock.
+  function toggleDock() { openDiffLeaf(); }
   // Window frame controls. Forward-wired to a window.winmux bridge (present under Electron/
   // app-mode); in a plain browser, Maximize toggles fullscreen and Close calls window.close().
   // Minimize activates once WinMux runs as a real desktop window.
@@ -2766,55 +2754,44 @@
     try { if (!document.fullscreenElement) document.documentElement.requestFullscreen(); else document.exitFullscreen(); } catch (e) {}
   });
   document.getElementById('wc-close').addEventListener('click', function () { var b = winBridge(); if (b && b.close) { b.close(); return; } window.close(); });
-  // The dock's single toggle is the pane-header panel icon (.pc-dock), which reopens it
-  // when closed — same one-button pattern as the sidebar. The floating edge reopen-strip
-  // was the same stray chrome we dropped from the sidebar, so it's gone.
-  document.getElementById('dock-refresh').addEventListener('click', refreshChanges);
-  dockPath.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Enter') refreshChanges(); });
-
-  var diffFiles = [];
-  var diffActive = 0;
-  function refreshChanges() {
-    dockDiff.innerHTML = '<div class="diff-empty">Reading git status…</div>';
-    fetch('/api/git?cwd=' + encodeURIComponent(dockPath.value || ''))
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (!d.ok) { dockDiff.innerHTML = '<div class="diff-empty">' + esc(d.error || 'No changes available') + '<div style="font-size:11.5px">' + esc(d.cwd || '') + '</div></div>'; return; }
-        diffFiles = d.files || []; diffActive = 0;
-        if (!diffFiles.length) { dockDiff.innerHTML = '<div class="diff-empty">Working tree clean<div style="font-size:11.5px">' + esc(d.branch) + ' · ' + esc(d.root) + '</div></div>'; return; }
-        renderDiff(d);
-      })
-      .catch(function () { dockDiff.innerHTML = '<div class="diff-empty">Could not read changes</div>'; });
+  // ── Diff leaf (git changes as a pane tab) ───────────────────────────────
+  // The git-diff surface is a pane tab, not a side dock. renderDiff/renderHunks
+  // paint a git status into a given box using per-leaf state {files,active,refresh},
+  // so each diff leaf owns its own file list, selection, and refresh handler.
+  function refreshIcon() {
+    return '<span class="drefresh" role="button" title="Refresh"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M20 9a8 8 0 0 0-14-3M4 15a8 8 0 0 0 14 3"/></svg></span>';
   }
-  function renderDiff(d) {
+  function renderDiff(d, box, state) {
     var add = 0, del = 0;
-    diffFiles.forEach(function (f) { add += f.add || 0; del += f.del || 0; });
-    var files = diffFiles.map(function (f, i) {
-      return '<div class="dfile"' + (i === diffActive ? ' data-active' : '') + ' data-i="' + i + '">' +
+    state.files.forEach(function (f) { add += f.add || 0; del += f.del || 0; });
+    var files = state.files.map(function (f, i) {
+      return '<div class="dfile"' + (i === state.active ? ' data-active' : '') + ' data-i="' + i + '">' +
         '<span class="db ' + (f.st || 'M') + '">' + (f.st || 'M') + '</span>' +
         '<span class="dp">' + esc(f.path) + '</span>' +
         '<span class="dnums"><span class="a">+' + (f.add || 0) + '</span> <span class="d">-' + (f.del || 0) + '</span></span></div>';
     }).join('');
-    dockDiff.innerHTML =
+    box.innerHTML =
       '<div class="diff"><div class="diff-head"><span class="dt">' + esc(d.branch || 'HEAD') + '</span>' +
-      '<span class="dstat"><span class="a">+' + add + '</span><span class="d">-' + del + '</span></span></div>' +
+      '<span class="dstat"><span class="a">+' + add + '</span><span class="d">-' + del + '</span></span>' + refreshIcon() + '</div>' +
       '<div class="diff-body"><div class="diff-files">' + files + '</div><div class="diff-hunks"></div></div></div>';
-    dockDiff.querySelector('.diff-files').addEventListener('click', function (e) {
+    box.querySelector('.diff-files').addEventListener('click', function (e) {
       var row = e.target.closest ? e.target.closest('[data-i]') : null;
       if (!row) return;
-      diffActive = parseInt(row.getAttribute('data-i'), 10);
-      [].forEach.call(dockDiff.querySelectorAll('.dfile'), function (x, i) {
-        if (i === diffActive) x.setAttribute('data-active', ''); else x.removeAttribute('data-active');
+      state.active = parseInt(row.getAttribute('data-i'), 10);
+      [].forEach.call(box.querySelectorAll('.dfile'), function (x, i) {
+        if (i === state.active) x.setAttribute('data-active', ''); else x.removeAttribute('data-active');
       });
-      renderHunks();
+      renderHunks(box, state);
     });
-    renderHunks();
+    var rf = box.querySelector('.drefresh');
+    if (rf && state.refresh) rf.addEventListener('click', state.refresh);
+    renderHunks(box, state);
   }
-  function renderHunks() {
-    var f = diffFiles[diffActive];
-    var box = dockDiff.querySelector('.diff-hunks');
-    if (!box) return;
-    if (!f || !f.hunks || !f.hunks.length) { box.innerHTML = '<div style="padding:12px 14px;color:var(--faint)">' + (f && f.binary ? 'Binary file' : 'No preview') + '</div>'; return; }
+  function renderHunks(box, state) {
+    var f = state.files[state.active];
+    var hb = box.querySelector('.diff-hunks');
+    if (!hb) return;
+    if (!f || !f.hunks || !f.hunks.length) { hb.innerHTML = '<div style="padding:12px 14px;color:var(--faint)">' + (f && f.binary ? 'Binary file' : 'No preview') + '</div>'; return; }
     var html = '';
     f.hunks.forEach(function (h) {
       html += '<div class="hhdr">' + esc(h.h) + '</div>';
@@ -2825,7 +2802,99 @@
         html += '<div class="hln ' + kind + '"><span class="hg">' + num + '</span><span class="hx">' + esc(l[1]) + '</span></div>';
       });
     });
-    box.innerHTML = html;
+    hb.innerHTML = html;
+  }
+  function fetchDiffInto(t) {
+    var box = t.bodyEl;
+    if (!box || !document.body.contains(box)) return;
+    box.innerHTML = '<div class="diff-empty">Reading git status…</div>';
+    fetch('/api/git?cwd=' + encodeURIComponent(t.diffCwd || ''))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!document.body.contains(box)) return;
+        if (!d.ok) { box.innerHTML = '<div class="diff-empty">' + esc(d.error || 'No changes available') + '<div style="font-size:11.5px">' + esc(d.cwd || '') + '</div></div>'; return; }
+        t.diffState.files = d.files || []; t.diffState.active = 0;
+        setLeafTitle(t, (d.branch ? d.branch + ' ' : '') + 'Δ');
+        if (!t.diffState.files.length) { box.innerHTML = '<div class="diff-empty">Working tree clean<div style="font-size:11.5px">' + esc(d.branch) + ' · ' + esc(d.root) + '</div></div>'; return; }
+        renderDiff(d, box, t.diffState);
+      })
+      .catch(function () { if (document.body.contains(box)) box.innerHTML = '<div class="diff-empty">Could not read changes</div>'; });
+  }
+  function newDiffLeaf(p, cwd) {
+    var id = ++termSeq;
+    var host = document.createElement('div');
+    host.className = 'term-host leafbody diffleaf';
+    host.style.display = 'none';
+    p.termArea.appendChild(host);
+
+    var t = {
+      id: id, paneId: p.id, groupId: activeGroupId, type: 'diff',
+      term: null, fit: null, ws: null, host: host, tabEl: null, dotEl: null, progEl: null,
+      bodyEl: host, diffCwd: cwd || '', diffState: { files: [], active: 0 },
+      state: 'idle', status: 'idle', sid: null, ended: false,
+      cwd: null, shell: null, results: null, renamed: false, resume: null, resumeId: null,
+    };
+    t.diffState.refresh = function () { fetchDiffInto(t); };
+    function pn() { return paneById(t.paneId) || p; }
+
+    var tabEl = document.createElement('div');
+    tabEl.className = 'ptab';
+    tabEl.draggable = true;
+    tabEl.setAttribute('data-leaf', 'diff');
+    tabEl.innerHTML =
+      '<span class="tfav"><span class="fav fav-d">±</span><span class="fdot" style="display:none"></span></span>' +
+      '<span class="tt">Changes</span>' +
+      '<span class="x" title="Close tab (Alt+W)">×</span>';
+    p.tabscroll.appendChild(tabEl);
+    t.tabEl = tabEl; t.dotEl = tabEl.querySelector('.fdot');
+
+    tabEl.addEventListener('click', function (e) {
+      focusPane(t.paneId);
+      if (e.target && e.target.classList.contains('x')) { e.stopPropagation(); askCloseTerm(pn(), id); }
+      else activateTerm(pn(), id);
+    });
+    tabEl.addEventListener('mousedown', function (e) { if (e.button === 1) { e.preventDefault(); askCloseTerm(pn(), id); } });
+    tabEl.addEventListener('dblclick', function (e) {
+      if (e.target && e.target.classList.contains('x')) return;
+      e.preventDefault(); e.stopPropagation(); focusPane(t.paneId); activateTerm(pn(), id); startRename(t);
+    });
+    wireTabDrag(t);
+    // Re-read git each time the tab is shown, so it reflects the working tree now.
+    t.onShow = function () { fetchDiffInto(t); };
+
+    p.terms.push(t);
+    updateChrome();
+    activateTerm(p, id);   // activateTerm → onShow → fetchDiffInto (first read)
+    return t;
+  }
+  function activeDiffLeaf() {
+    var a = activeTerm();
+    if (a && leafType(a) === 'diff') return a;
+    var all = allTerms().filter(function (x) { return leafType(x) === 'diff'; });
+    return all.length ? all[all.length - 1] : null;
+  }
+  // The repo a fresh diff leaf reads. The shell's cwd if it has moved somewhere
+  // real; otherwise '' so /api/git falls back to the server's launch directory —
+  // the repo WinMux was started from. (A shell parked at $HOME is not a "choice".)
+  function diffDefaultCwd() {
+    var at = activeTerm();
+    var c = at && at.cwd;
+    var norm = function (s) { return String(s || '').replace(/[\\/]+$/, '').toLowerCase(); };
+    if (!c || norm(c) === norm(HOME)) return '';
+    return c;
+  }
+  // The .pc-dock button + Ctrl+Alt+D: focus the existing diff leaf or make one
+  // scoped to the active terminal's repo.
+  function openDiffLeaf() {
+    var t = activeDiffLeaf();
+    if (t) {
+      var lp = paneById(t.paneId);
+      if (lp) { focusPane(lp.id); activateTerm(lp, t.id); }
+      return t;
+    }
+    var p = paneById(activePaneId) || panes[0];
+    if (!p) return null;
+    return newDiffLeaf(p, diffDefaultCwd());
   }
 
   // ------------------------------------------------------- overlays / modals
@@ -3853,7 +3922,7 @@
   paintNotifBadge();
 
   fetch('/api/info').then(function (r) { return r.json(); }).then(function (d) {
-    HOME = d.home || ''; if (!dockPath.value) dockPath.value = HOME;
+    HOME = d.home || '';
     var ver = document.getElementById('wc-ver');
     if (ver && d.version) ver.textContent = 'v' + d.version;
   }).catch(function () {});

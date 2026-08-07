@@ -735,7 +735,9 @@ function handle(req, res, viaPhone) {
   if (urlPath === '/api/git') {
     let q = {};
     try { q = Object.fromEntries(new URL(req.url, 'http://x').searchParams); } catch (e) {}
-    const cwd = q.cwd && fs.existsSync(q.cwd) ? q.cwd : os.homedir();
+    // No folder given → read the server's launch directory (the repo WinMux was
+    // started from), not $HOME. $HOME is never a repo; the launch dir usually is.
+    const cwd = q.cwd && fs.existsSync(q.cwd) ? q.cwd : process.cwd();
     gitChanges(cwd, (payload) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(Object.assign({ cwd }, payload)));

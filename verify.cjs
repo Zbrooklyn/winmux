@@ -101,6 +101,7 @@ const PORT_RESUME = 9951;     // #240: an armed tab auto-runs its resume command
 // #246: three ports the port check holds itself, so it can prove the
 // every-candidate-taken refusal without starving the other auto-picking checks.
 const PORTS_EXHAUST = [9952, 9953, 9954];
+const PORT_DIFF = 9956;       // ST5: git diff opens as a pane tab (leaf), not a side dock
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
@@ -1419,7 +1420,7 @@ const SIDEBAR = () => {
     active: r.hasAttribute('data-active'),
     open: !!r.querySelector('.pexpand[data-open2]'),
   }));
-  // Scoped to the workspace: the changes dock carries a decorative .ptab of its own.
+  // Scoped to the workspace panes (#wsrow), the only place tabs live now.
   const tabs = [...document.querySelectorAll('#wsrow .ptabs .ptab')].map((el) => ({
     text: el.querySelector('.tt').textContent.trim(),
     shown: getComputedStyle(el).display !== 'none',
@@ -1666,11 +1667,11 @@ check('electron', PORT_GROUPS, async ({ t }) => {
     json && (json.ptyError || 'ptyOk=' + (json && json.ptyOk)));
 
   // Surfaces-as-tabs (Phase 1): the "+" button opens a type menu. Under Electron all
-  // three surfaces are available, so the menu offers Terminal, Browser and Markdown.
+  // four surfaces are available: Terminal, Browser, Markdown and Changes (git diff).
   const menu = (json && json.menuTypes) || [];
-  t('the "+" button opens a New-tab type menu', Array.isArray(menu) && menu.length >= 3, menu);
-  t('the menu offers Terminal / Browser / Markdown',
-    ['Terminal', 'Browser', 'Markdown'].every((k) => menu.indexOf(k) >= 0), menu);
+  t('the "+" button opens a New-tab type menu', Array.isArray(menu) && menu.length >= 4, menu);
+  t('the menu offers Terminal / Browser / Markdown / Changes',
+    ['Terminal', 'Browser', 'Markdown', 'Changes'].every((k) => menu.indexOf(k) >= 0), menu);
 });
 
 // --- cli: the `winmux` command-line drives the live app -------------------
@@ -2904,6 +2905,48 @@ check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
     return h ? h.textContent : null;
   });
   t('editing the file live-updates the open surface', after === 'Changed Title', after);
+  await page.close();
+});
+
+// ST5: git diff opens as a pane TAB (leaf), not a side dock. Opening it via the
+// New-tab menu mounts a .ptab[data-leaf="diff"] whose body renders the repo's
+// git status (the .diff file list, or the "working tree clean" note). The old
+// side dock (#dock element + data-dock root attribute) is gone from the DOM.
+check('diff-tab', PORT_DIFF, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(3500);
+
+  const noDock = await page.evaluate(() => ({
+    dock: !!document.getElementById('dock'),
+    attr: document.getElementById('root').hasAttribute('data-dock'),
+  }));
+  t('the side dock is gone (no #dock, no data-dock)', noDock.dock === false && noDock.attr === false, noDock);
+
+  // Open the New-tab menu and pick Changes.
+  await page.locator('.pc-new').first().click();
+  await page.waitForTimeout(200);
+  await page.locator('.tmenu .tmi:has-text("Changes")').first().click();
+  await page.waitForTimeout(1800);          // /api/git round trip + render
+
+  const leaf = await page.evaluate(() => {
+    const tab = document.querySelector('.ptab[data-leaf="diff"]');
+    const body = document.querySelector('.term-host.diffleaf');
+    const active = document.querySelector('.ptab[data-active]');
+    return {
+      tab: !!tab,
+      fav: tab ? (tab.querySelector('.fav') || {}).textContent : null,
+      activeIsDiff: active ? active.getAttribute('data-leaf') === 'diff' : false,
+      body: !!body,
+      hasDiff: !!(body && body.querySelector('.diff')),
+      hasEmpty: !!(body && body.querySelector('.diff-empty')),
+    };
+  });
+  t('a diff leaf opened as a pane tab', leaf.tab === true && leaf.activeIsDiff === true, leaf);
+  t('the diff tab carries the ± changes favicon', leaf.fav === '±', leaf.fav);
+  t('the diff leaf rendered git status (file list or clean note)',
+    leaf.body === true && (leaf.hasDiff === true || leaf.hasEmpty === true), leaf);
+  await shot(page, 'diff-tab');
   await page.close();
 });
 
