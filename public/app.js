@@ -1819,6 +1819,20 @@
     }
     term.open(host);
     applyRenderer(term);   // GPU vs DOM — see the function; must run AFTER open()
+    // WebGL scroll repaint. The GPU renderer can leave stale/torn rows behind after
+    // a scroll (the buffer is correct — proven by the scroll torture test — but the
+    // canvas doesn't always redraw the newly-exposed rows). Force a viewport refresh
+    // on the next frame after any scroll so the visible rows repaint from the real
+    // buffer. rAF-coalesced (one repaint per frame, not per wheel tick) and WebGL-only,
+    // so the DOM renderer — which never has this artifact — pays nothing.
+    term.onScroll(function () {
+      if (term.__winmuxRenderer !== 'webgl') return;
+      if (term.__winmuxScrollRaf) return;
+      term.__winmuxScrollRaf = requestAnimationFrame(function () {
+        term.__winmuxScrollRaf = 0;
+        try { term.refresh(0, term.rows - 1); } catch (e) {}
+      });
+    });
     // The bundled terminal font (Cascadia Code / CaskaydiaCove Nerd Font) can still
     // be loading when this terminal mounts on a clean machine. xterm measures its
     // cell size once at init; if it measured against the fallback, remeasure when the
