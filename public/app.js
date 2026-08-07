@@ -3347,12 +3347,17 @@
     var l = layouts()[parseInt(row.getAttribute('data-i'), 10)];
     if (!l) return;
     closeLayoutMenu();
-    // Restoring ends whatever is running now, so it asks first.
+    openSavedLayout(l);
+  });
+  // Restore a saved workspace by object — shared by the save/load menu and the
+  // command palette. Restoring ends whatever is running now, so it asks first.
+  function openSavedLayout(l) {
+    if (!l) return;
     var live = allTerms().filter(function (t) { return t.state === 'open'; }).length;
     if (S.confirmClose && live) {
       confirmDialog('Restore “' + l.name + '”?', live + ' running terminal' + (live > 1 ? 's' : '') + ' will be ended and the saved panes rebuilt.', 'Restore layout', function () { restoreLayout(l.desc); });
     } else restoreLayout(l.desc);
-  });
+  }
   document.addEventListener('mousedown', function (e) {
     if (!sessmenu.hasAttribute('data-open')) return;
     if (sessmenu.contains(e.target) || (e.target.closest && e.target.closest('#open-save,#open-load'))) return;
@@ -3811,6 +3816,15 @@
     allTerms().forEach(function (t) {
       list.push({ cat: 'Go to', name: t.tabEl.querySelector('.tt').textContent + (t.cwd ? ' — ' + t.cwd : ''), run: function () { focusTerm(t.id); } });
     });
+    // Phase 6 — one search reaches the whole app, not just the active pane: open any
+    // saved workspace by name, switch to any other project, or open remote access.
+    layouts().forEach(function (l) {
+      list.push({ cat: 'Workspace', name: 'Open workspace: ' + l.name, run: function () { openSavedLayout(l); } });
+    });
+    groups.forEach(function (g) {
+      if (g.id !== activeGroupId) list.push({ cat: 'Project', name: 'Switch to project: ' + g.name, run: function () { switchGroup(g.id); } });
+    });
+    list.push({ cat: 'Remote', name: 'Connect from your phone (remote access)', run: function () { openSettings('Phone'); } });
     return list;
   }
   function renderPalette() {
