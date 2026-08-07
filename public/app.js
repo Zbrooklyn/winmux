@@ -496,29 +496,30 @@
     if (!term || typeof term.registerDecoration !== 'function') return;
     if (!marker || marker.isDisposed) return;
     var cls = exit === 0 ? 'ok' : (exit == null ? 'run' : 'bad');
+    var mark = exit === 0 ? '✓' : (exit == null ? '·' : '✗');   // ✓ · ✗
+    var dur = fmtDur(ms);
+    var label = mark + (dur ? ' ' + dur : '');
     try {
-      // Left gutter stripe, coloured by exit status, spanning the command's rows.
-      var dec = term.registerDecoration({ marker: marker, x: 0, width: 1, height: Math.max(1, rows), layer: 'top' });
+      // Inline status tag, placed just after the command text on the command row.
+      // WinMux can't recolour the shell's own prompt (that is the shell's job), so
+      // instead of touching the prompt we append a small ✓/✗ + time tag in the empty
+      // space after the command — the command carries its own result, nothing boxed
+      // and nothing shoved to the far edge. Column is read from the buffer so the tag
+      // sits right where the typed command ends.
+      var col = 0;
+      try {
+        var bl = term.buffer.active.getLine(marker.line);
+        if (bl) col = bl.translateToString(true).replace(/\s+$/, '').length;
+      } catch (e) {}
+      var x = Math.min(col + 1, Math.max(1, (term.cols || 80) - label.length - 1));
+      var dec = term.registerDecoration({ marker: marker, x: x, width: label.length + 1, height: 1, layer: 'top' });
       if (dec) {
         dec.onRender(function (el) {
           if (el._blk) return; el._blk = true;
-          el.className = 'cmdblk ' + cls;
+          el.className = 'cmdtag ' + cls;
+          el.textContent = label;
         });
         (t.blockDecs || (t.blockDecs = [])).push(dec);
-      }
-      // Right-edge timing on the command row: WinMux owns the margin, so this annotates
-      // without touching the shell's own text. Grey when it succeeded, red when it failed.
-      var dur = fmtDur(ms);
-      if (dur) {
-        var td = term.registerDecoration({ marker: marker, x: 0, width: 1, height: 1, layer: 'top' });
-        if (td) {
-          td.onRender(function (el) {
-            if (el._blkt) return; el._blkt = true;
-            el.className = 'cmdtime ' + cls;
-            el.textContent = dur;
-          });
-          (t.blockDecs || (t.blockDecs = [])).push(td);
-        }
       }
     } catch (e) {}
   }
