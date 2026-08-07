@@ -384,13 +384,13 @@
   // default (Enter/click). Browser and Markdown open the working surfaces; the in-pane
   // tab versions land in a later unit. Browser is Electron-only (the <webview> dock),
   // so it's hidden on the web/phone client where that surface doesn't exist.
-  function openMarkdownPick() {
+  function openMarkdownPick(p) {
     if (window.winmux && window.winmux.pickFile) {
       window.winmux.pickFile({ filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'mdx', 'txt'] }] })
-        .then(function (path) { if (path) openMarkdown(path); });
+        .then(function (path) { if (path) openMarkdown(path, p); });
     } else {
       var path = window.prompt('Open markdown file (full path):', '');
-      if (path) openMarkdown(path.trim());
+      if (path) openMarkdown(path.trim(), p);
     }
   }
   // The three surfaces a new tab can be, each with the icon + one-liner the menu
@@ -405,7 +405,7 @@
       run: function (p) { newBrowserLeaf(p, 'about:blank'); } },
     { type: 'markdown', label: 'Markdown', desc: 'Open a .md file',
       svg: '<svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4M8 13h8M8 16.5h5"/></svg>',
-      run: function () { openMarkdownPick(); } },
+      run: function (p) { openMarkdownPick(p); } },
   ];
   // Shipped New-tab menu look: minimal (native context-menu, no icon tiles) — the
   // flattest, least "designed card" direction. Other looks stay reachable by changing
@@ -1454,6 +1454,9 @@
     // leaf is ST6's job; recording one here would reopen it as a blank shell.
     if (leafType(t) === 'terminal') recordClosed(p, t);
     clearTimeout(t.busyTimer); stopProg(t);
+    // A non-terminal leaf can hold a resource (markdown's live-update poll); let it
+    // clean up before the host is torn down.
+    if (t.onClose) { try { t.onClose(); } catch (e) {} }
     killShell(t);
     try { t.term.dispose(); } catch (e) {}
     t.host.remove(); t.tabEl.remove();
@@ -2134,6 +2137,83 @@
     var a = activeTerm();
     if (a && leafType(a) === 'browser') return a;
     var all = allTerms().filter(function (x) { return leafType(x) === 'browser'; });
+    return all.length ? all[all.length - 1] : null;
+  }
+
+  // ── Markdown leaf ───────────────────────────────────────────────────────
+  // A pane tab that renders a .md file (via /api/md) and live-updates it on
+  // save. Same leaf shape as the browser leaf; its body is a scroller instead
+  // of a <webview>, and it owns a poll timer cleaned up in closeTerm (onClose).
+  function mdLoadLeaf(t, mdPath) {
+    if (!t || !t.bodyEl) return { path: mdPath };
+    t.mdPath = String(mdPath || ''); t.mdMtime = 0;
+    var base = t.mdPath.split(/[\\/]/).pop();
+    t.mdTitle = base || 'Markdown';
+    setLeafTitle(t, t.mdTitle);
+    var pull = function () {
+      // Stop polling once the leaf is torn down (belt-and-suspenders with onClose).
+      if (!t.bodyEl || !document.body.contains(t.host)) { if (t.mdTimer) { clearInterval(t.mdTimer); t.mdTimer = null; } return; }
+      fetch('/api/md?path=' + encodeURIComponent(t.mdPath)).then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok) { t.bodyEl.innerHTML = '<p style="color:var(--err)">' + mdEsc(j.error || 'cannot read file') + '</p>'; return; }
+        if (j.mtime !== t.mdMtime) { t.mdMtime = j.mtime; t.bodyEl.innerHTML = mdRender(j.text); }
+      }).catch(function () {});
+    };
+    pull();
+    if (t.mdTimer) clearInterval(t.mdTimer);
+    t.mdTimer = setInterval(pull, 1500);
+    return { path: mdPath };
+  }
+  function newMarkdownLeaf(p, mdPath) {
+    var id = ++termSeq;
+    var host = document.createElement('div');
+    host.className = 'term-host leafbody mdleaf';
+    host.style.display = 'none';
+    host.innerHTML = '<div class="mdscroll"><div class="mdbody"></div></div>';
+    p.termArea.appendChild(host);
+
+    var t = {
+      id: id, paneId: p.id, groupId: activeGroupId, type: 'markdown',
+      term: null, fit: null, ws: null, host: host, tabEl: null, dotEl: null, progEl: null,
+      bodyEl: host.querySelector('.mdbody'), mdPath: String(mdPath || ''), mdTitle: '', mdMtime: 0, mdTimer: null,
+      state: 'idle', status: 'idle', sid: null, ended: false,
+      cwd: null, shell: null, results: null, renamed: false, resume: null, resumeId: null,
+    };
+    function pn() { return paneById(t.paneId) || p; }
+
+    var tabEl = document.createElement('div');
+    tabEl.className = 'ptab';
+    tabEl.draggable = true;
+    tabEl.setAttribute('data-leaf', 'markdown');
+    tabEl.innerHTML =
+      '<span class="tfav"><span class="fav fav-m">¶</span><span class="fdot" style="display:none"></span></span>' +
+      '<span class="tt">Markdown</span>' +
+      '<span class="x" title="Close tab (Alt+W)">×</span>';
+    p.tabscroll.appendChild(tabEl);
+    t.tabEl = tabEl; t.dotEl = tabEl.querySelector('.fdot');
+
+    tabEl.addEventListener('click', function (e) {
+      focusPane(t.paneId);
+      if (e.target && e.target.classList.contains('x')) { e.stopPropagation(); askCloseTerm(pn(), id); }
+      else activateTerm(pn(), id);
+    });
+    tabEl.addEventListener('mousedown', function (e) { if (e.button === 1) { e.preventDefault(); askCloseTerm(pn(), id); } });
+    tabEl.addEventListener('dblclick', function (e) {
+      if (e.target && e.target.classList.contains('x')) return;
+      e.preventDefault(); e.stopPropagation(); focusPane(t.paneId); activateTerm(pn(), id); startRename(t);
+    });
+    wireTabDrag(t);
+    t.onClose = function () { if (t.mdTimer) { clearInterval(t.mdTimer); t.mdTimer = null; } };
+
+    p.terms.push(t);
+    updateChrome();
+    activateTerm(p, id);
+    if (t.mdPath) mdLoadLeaf(t, t.mdPath);
+    return t;
+  }
+  function activeMarkdownLeaf() {
+    var a = activeTerm();
+    if (a && leafType(a) === 'markdown') return a;
+    var all = allTerms().filter(function (x) { return leafType(x) === 'markdown'; });
     return all.length ? all[all.length - 1] : null;
   }
 
@@ -4066,36 +4146,21 @@
     closeList();
     return html.join('\n');
   }
-  var _wmm = null;
-  function ensureMarkdownPanel() {
-    if (_wmm) return _wmm;
-    var wrap = document.createElement('div');
-    wrap.className = 'wmm';
-    wrap.innerHTML =
-      '<div class="wmm-bar"><span class="wmm-title">Markdown</span>' +
-        '<span class="wmm-nav wmm-close" title="Close" role="button">✕</span></div>' +
-      '<div class="wmm-body"></div>';
-    document.body.appendChild(wrap);
-    wrap.querySelector('.wmm-close').addEventListener('click', function () { wrap.removeAttribute('data-open'); if (_wmm) { clearInterval(_wmm.timer); _wmm.timer = null; } });
-    _wmm = { wrap: wrap, body: wrap.querySelector('.wmm-body'), title: wrap.querySelector('.wmm-title'), path: null, mtime: 0, timer: null };
-    return _wmm;
-  }
-  function openMarkdown(mdPath) {
-    var m = ensureMarkdownPanel();
-    m.wrap.setAttribute('data-open', '');
-    m.path = mdPath;
-    var pull = function () {
-      fetch('/api/md?path=' + encodeURIComponent(m.path)).then(function (r) { return r.json(); }).then(function (j) {
-        if (!j.ok) { m.body.innerHTML = '<p style="color:var(--err)">' + mdEsc(j.error || 'cannot read file') + '</p>'; return; }
-        if (j.mtime !== m.mtime) { m.mtime = j.mtime; m.body.innerHTML = mdRender(j.text); }
-        var base = String(m.path).split(/[\\/]/).pop();
-        m.title.textContent = base || 'Markdown';
-      }).catch(function () {});
-    };
-    pull();
-    if (m.timer) clearInterval(m.timer);
-    m.timer = setInterval(pull, 1500);   // live-update on save
-    return { path: mdPath };
+  // Markdown now opens as a pane tab (newMarkdownLeaf), not a side dock. Reuse
+  // the active markdown leaf if one is open (so pointing it at another file
+  // swaps content in place, as the dock did), else create one in the given /
+  // active pane. The CLI `winmux markdown <path>` + type menu both route here.
+  function openMarkdown(mdPath, p) {
+    var t = activeMarkdownLeaf();
+    if (!t) {
+      p = p || paneById(activePaneId) || panes[0];
+      if (!p) return { path: mdPath };
+      newMarkdownLeaf(p, mdPath);
+      return { path: mdPath };
+    }
+    var lp = paneById(t.paneId);
+    if (lp) { focusPane(lp.id); activateTerm(lp, t.id); }
+    return mdLoadLeaf(t, mdPath);
   }
 
   function runControl(cmd, args) {

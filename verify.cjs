@@ -2880,14 +2880,14 @@ check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
   await page.waitForTimeout(1500);
 
   const rendered = await page.evaluate(() => {
-    const e = document.querySelector('.wmm[data-open] .wmm-body');
+    const e = document.querySelector('.mdleaf .mdbody');
     if (!e) return null;
     return {
       h1: (e.querySelector('h1') || {}).textContent,
       strong: !!e.querySelector('strong'),
       code: !!e.querySelector('code'),
       li: e.querySelectorAll('li').length,
-      title: (document.querySelector('.wmm-title') || {}).textContent,
+      title: (document.querySelector('.ptab[data-leaf="markdown"] .tt') || {}).textContent,
     };
   });
   t('the viewer surface opened and rendered the markdown',
@@ -2900,7 +2900,7 @@ check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
   fs.writeFileSync(mdFile, '# Changed Title\n\nNew body.\n');
   await page.waitForTimeout(2200);
   const after = await page.evaluate(() => {
-    const h = document.querySelector('.wmm[data-open] .wmm-body h1');
+    const h = document.querySelector('.mdleaf .mdbody h1');
     return h ? h.textContent : null;
   });
   t('editing the file live-updates the open surface', after === 'Changed Title', after);
@@ -2935,7 +2935,7 @@ check('md-rich', PORT_MDRICH, async ({ browser, base, t, shot }) => {
   await page.waitForTimeout(1500);
 
   const r = await page.evaluate(() => {
-    const e = document.querySelector('.wmm[data-open] .wmm-body');
+    const e = document.querySelector('.mdleaf .mdbody');
     if (!e) return null;
     const th = [].map.call(e.querySelectorAll('table thead th'), (n) => n.textContent.trim());
     const firstCell = (e.querySelector('table tbody td') || {}).textContent;
