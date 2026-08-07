@@ -3399,6 +3399,7 @@
         frow('Default shell', 'Used by new tabs and splits', sel('defaultShell', [['', 'First available (' + labelFor(DEFAULT_SHELL) + ')']].concat(SHELLS.map(function (s) { return [s.key, s.label]; })), S.defaultShell)) +
         frow('Start folder', 'Blank = your home folder', '<input class="ctl" type="text" value="' + esc(S.startFolder) + '" data-set="startFolder" placeholder="' + esc(HOME) + '" style="width:230px" spellcheck="false">') +
         frow('Resume command', 'Run in each armed tab when WinMux reopens (right-click a tab → “Auto-resume this conversation”). {id} is replaced with that tab’s pinned Claude conversation.', '<input class="ctl" type="text" value="' + esc(S.resumeCommand) + '" data-set="resumeCommand" placeholder="claude --resume {id}" style="width:280px" spellcheck="false">') +
+        frow('Start WinMux when I log in', 'Reopens WinMux automatically after a restart so your tabs and their history come right back — no relaunching by hand. Adds a small launcher to your Windows Startup folder; turning this off removes it. Off by default.', '<span class="sw ' + (autostartS && autostartS.on ? 'on' : '') + '" data-autostart-toggle role="button" aria-label="Start WinMux when I log in"></span>') +
         (isEl ? frow('Closing the window', 'Your shells and agents keep running in the background — reopen WinMux to land right back on them. Use this only when you want to stop everything.', '<span class="btn" data-act="quit-server">Quit completely &amp; stop all sessions</span>') : '');
     }
     if (t === 'Phone') return phonePane();
@@ -3529,6 +3530,25 @@
       })
       .catch(function (e) { phoneBusy = false; phoneFail(String(e.message || e)); });
   }
+  // Start-at-logon lives in Behaviour but is server state (does the Startup file
+  // exist?), so it loads from /api/autostart and flips through it, like Phone.
+  var autostartS = null;          // last /api/autostart state, or null while loading
+  var autostartBusy = false;
+  function loadAutostart() {
+    fetch('/api/autostart', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+      autostartS = j; if (curSet === 'Behaviour') renderSettings();
+    }).catch(function () { autostartS = { on: false }; if (curSet === 'Behaviour') renderSettings(); });
+  }
+  function flipAutostart() {
+    if (autostartBusy || !autostartS) return;
+    autostartBusy = true;
+    var want = !autostartS.on;
+    fetch('/api/autostart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: want }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { autostartS = j; })
+      .catch(function () {})
+      .then(function () { autostartBusy = false; if (curSet === 'Behaviour') renderSettings(); });
+  }
   // Trusting the tailnet is its own POST field, so flipping it never disturbs
   // whether the door is open — those are two separate decisions.
   function flipTrust() {
@@ -3583,6 +3603,7 @@
     // plain footer/⌘, entry opens to the category list.
     settingsDrill(tab ? 'detail' : 'list');
     if (curSet === 'Phone') loadPhone();
+    if (curSet === 'Behaviour') loadAutostart();
   }
   document.getElementById('settings-tabs').addEventListener('click', function (e) {
     var tab = e.target.closest ? e.target.closest('[data-settab]') : null;
@@ -3591,12 +3612,14 @@
     settingsDrill('detail');
     // The switch must reflect the server, not whatever it looked like last time.
     if (curSet === 'Phone') { phoneS = null; phoneErr = ''; renderSettings(); loadPhone(); return; }
+    if (curSet === 'Behaviour') { autostartS = null; renderSettings(); loadAutostart(); return; }
     renderSettings();
   });
   document.getElementById('settings-back').addEventListener('click', function () { settingsDrill('list'); });
   document.getElementById('settings-pane').addEventListener('click', function (e) {
     if (e.target.closest && e.target.closest('[data-phone-toggle]')) { flipPhone(); return; }
     if (e.target.closest && e.target.closest('[data-trust-toggle]')) { flipTrust(); return; }
+    if (e.target.closest && e.target.closest('[data-autostart-toggle]')) { flipAutostart(); return; }
     var s = e.target.closest ? e.target.closest('[data-sw]') : null;
     if (s) {
       var k = s.getAttribute('data-sw');
