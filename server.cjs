@@ -1244,6 +1244,13 @@ function spawnSession(shell, cwd) {
   const id = crypto.randomBytes(16).toString('hex');
   const env = Object.assign({}, process.env, { WINMUX_SID: id, WINMUX_PORT: String(PORT) });
   const term = pty.spawn(shell.exec, shell.args, { name: 'xterm-256color', cols: 80, rows: 24, cwd, env });
+  // Inline command prediction (grey history completion, RightArrow to accept) is a
+  // shell feature, not ours to inject: PowerShell 7 (pwsh) renders it by default via
+  // PSReadLine 2.4+. Windows PowerShell 5.1 ships PSReadLine 2.0, which predates
+  // -PredictionSource entirely, so no injection can turn it on there. We honour the
+  // shell the user picked and leave prediction to it — a per-session Set-PSReadLineOption
+  // would be dead on 5.1 and redundant on pwsh. The default-shell picker (Settings)
+  // is how a user opts into the pwsh experience.
   const s = { id, term, dev: '', shell: shell.label, cwd, buf: '', ws: null, timer: null };
   term.onData((d) => {
     s.buf += d;

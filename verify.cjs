@@ -103,6 +103,7 @@ const PORT_RESUME = 9951;     // #240: an armed tab auto-runs its resume command
 const PORTS_EXHAUST = [9952, 9953, 9954];
 const PORT_DIFF = 9956;       // ST5: git diff opens as a pane tab (leaf), not a side dock
 const PORT_LEAFPERSIST = 9957; // ST6: non-terminal leaves survive a page reload
+const PORT_PREDICT = 9958;    // Phase 2: pwsh PSReadLine inline history prediction + RightArrow accept
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
@@ -272,7 +273,7 @@ const CHECKS = [];
 // check forces WINMUX_FAKE_LATEST so the badge can be proven without a real release.
 const check = (id, port, run, env) => CHECKS.push({ id, port, run, env });
 
-const desktop = async (browser) => {
+const desktop = async (browser, extraSettings) => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
   // Every check gets a fresh context, so the first-run onboarding would pop over
   // the UI and swallow clicks. Mark it seen everywhere except the check that tests
@@ -282,13 +283,14 @@ const desktop = async (browser) => {
   // of these checks read .xterm-rows text, which the WebGL renderer (the shipping
   // default) paints to a <canvas> instead. Pinning DOM keeps those reads valid; the
   // 'gpu' check separately proves the WebGL path + its DOM fallback.
-  await page.addInitScript(() => {
+  await page.addInitScript((extra) => {
     try {
       localStorage.setItem('ct-onboard', '1');
       const s = JSON.parse(localStorage.getItem('ct-settings') || '{}'); s.gpuRenderer = false;
+      if (extra) Object.assign(s, extra);
       localStorage.setItem('ct-settings', JSON.stringify(s));
     } catch (e) {}
-  });
+  }, extraSettings || null);
   return page;
 };
 
@@ -2923,6 +2925,70 @@ check('paste', PORT_PASTE, async ({ browser, base, t }) => {
   await firePaste('echo just-one-line');
   await page.waitForTimeout(400);
   t('a single-line paste is not interrupted', (await dlg()).open === false);
+});
+
+// Phase 2 — inline command prediction ("smarter typing"). This is a SHELL feature,
+// not a WinMux injection: PowerShell 7 (pwsh) ships PSReadLine 2.4+, which renders a
+// grey, history-based completion inline as you type and accepts it on RightArrow.
+// Windows PowerShell 5.1 ships PSReadLine 2.0, which has no prediction at all — so
+// the proof runs on a pwsh tab and skips cleanly on a machine without pwsh installed.
+// Proof: after typing only a PREFIX, the full seeded command is on screen (the suffix
+// was never typed, so it is the prediction), and RightArrow+Enter runs the whole
+// command — a second execution of the seeded echo.
+check('prediction', PORT_PREDICT, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser, { defaultShell: 'pwsh' });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  // Skip on machines where PowerShell 7 isn't installed: prediction is impossible on
+  // the 5.1 default, and that is a property of the OS, not a WinMux regression.
+  const shells = await page.evaluate(async () => {
+    try { return await (await fetch('/shells')).json(); } catch (e) { return []; }
+  });
+  const hasPwsh = Array.isArray(shells) && shells.some((s) => s && s.key === 'pwsh');
+  if (!hasPwsh) {
+    t('PowerShell 7 present → inline prediction available (skipped: pwsh not installed)', true, 'skip');
+    await page.close();
+    return;
+  }
+
+  await page.waitForTimeout(6000);
+  const screen = () => page.evaluate(() => {
+    const r = document.querySelector('.xterm-rows');
+    return r ? r.innerText : '';
+  });
+  const marker = 'winmuxpredict' + PORT_PREDICT;
+
+  // Seed history with a distinctive command, then clear the screen so the marker
+  // count that follows reflects ONLY the prediction + the accepted re-run (no
+  // scrolled-off ambiguity).
+  await page.click('.xterm').catch(() => {});
+  await page.keyboard.type('echo ' + marker);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(2000);
+  await page.keyboard.type('cls');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(1000);
+  const cleared = (await screen()).match(new RegExp(marker, 'g')) || [];
+  t('the screen is clear before the prediction test', cleared.length === 0, cleared.length);
+
+  // Type only a prefix; PSReadLine predicts the rest inline (grey) from history.
+  await page.keyboard.type('echo winmuxp');
+  await page.waitForTimeout(1400);
+  const predicted = await screen();
+  t('inline prediction completes the command from history',
+    predicted.indexOf('echo ' + marker) >= 0, predicted.slice(-160));
+
+  // RightArrow accepts the prediction; Enter runs the now-complete command, so the
+  // marker prints again — on the cleared screen it now appears at least twice
+  // (the command line + its output).
+  await page.keyboard.press('End');
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(300);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(1500);
+  const after = (await screen()).match(new RegExp(marker, 'g')) || [];
+  t('RightArrow accepts the prediction and runs the full command', after.length >= 2, { after: after.length });
+  await shot(page, 'prediction');
+  await page.close();
 });
 
 check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
