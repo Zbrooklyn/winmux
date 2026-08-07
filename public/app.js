@@ -1100,17 +1100,21 @@
     var sub = esc(g.name || 'Session') + (t.shell ? ' · ' + esc(labelFor(t.shell)) : '');
     var primary;
     if (t.status === 'needsyou') {
-      // Show the actual prompt so approving is a decision, not a blind Enter.
+      // The phone approval card (Phase 8, Option-B direction): lead with the plain
+      // decision, then the ACTUAL prompt so approving is a real choice, not a blind
+      // Enter. We only render data we truly have — the terminal screen, status, cwd.
+      // A parsed diff / test-count panel needs structured signals the agent doesn't
+      // emit yet, so we don't fake one here.
       var scr = serializeTerm(t, 14);
       var ask = scr
-        ? '<div class="pv-ask">This session is asking for input:</div><pre class="pv-screen mono">' + esc(scr) + '</pre>'
+        ? '<div class="pv-ask">This session paused and needs your OK. Here’s what it’s asking:</div><pre class="pv-screen mono">' + esc(scr) + '</pre>'
         : '<div class="pv-ask">This session rang for your attention and is waiting on you.</div>';
-      primary = '<div class="pv-primary hot"><div class="pv-lbl">Waiting for you</div>' + ask +
+      primary = '<div class="pv-primary hot"><div class="pv-lbl">Needs your OK</div>' + ask +
         '<div class="pv-acts">' +
-        '<button class="btn primary pv-btn" data-pv="approve">Approve</button>' +
-        '<button class="btn pv-btn" data-pv="deny">Deny</button>' +
+        '<button class="btn primary pv-btn pv-approve" data-pv="approve">Approve</button>' +
+        '<button class="btn pv-btn pv-reject" data-pv="deny">Reject</button>' +
         '</div>' +
-        '<div class="pv-hint">Approve sends Enter (accepts the highlighted choice) · Deny sends Esc · or Open to respond in full</div></div>';
+        '<div class="pv-hint">Approve sends Enter to continue · Reject sends Esc to cancel · or Open to type a full reply</div></div>';
     } else if (t.status === 'closed') {
       primary = '<div class="pv-primary hot"><div class="pv-lbl">Session ended</div>' +
         '<div class="pv-ask">This session has closed.</div>' +

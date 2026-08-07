@@ -662,6 +662,11 @@
   /* U4 — the approve/deny action row + the live-prompt preview inside the panel. */
   .sxpv .pv-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
   .sxpv .pv-acts .pv-btn { width: auto; flex: 1 1 auto; min-width: 96px; }
+  /* Phase 8 — Approve leads, Reject is the error-tinted secondary (Option-B card). */
+  .sxpv .pv-acts .pv-approve { flex: 1.6 1 auto; }
+  .sxpv .pv-acts .pv-reject { color: var(--err);
+    border-color: color-mix(in srgb, var(--err) 45%, transparent); background: transparent; }
+  .sxpv .pv-acts .pv-reject:hover { background: color-mix(in srgb, var(--err) 12%, transparent); }
   .sxpv .pv-screen { margin: 0 0 12px; padding: 10px 11px; border-radius: 8px; background: var(--term-bg);
     border: 1px solid var(--border); color: var(--muted); font-size: 11.5px; line-height: 1.5;
     white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; }
