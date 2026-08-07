@@ -1405,7 +1405,18 @@
   function activeTermOf(p) { for (var i = 0; i < p.terms.length; i++) if (p.terms[i].id === p.activeTermId) return p.terms[i]; return null; }
   function activeTerm() { var p = paneById(activePaneId); return p ? activeTermOf(p) : null; }
   window.__winmuxActiveTerm = activeTerm;   // observability hook (harness reads addon state)
-  function sendResize(t) { if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'r', c: t.term.cols, r: t.term.rows })); }
+  function sendResize(t) {
+    if (!(t.ws && t.ws.readyState === WebSocket.OPEN)) return;
+    // Skip a no-op resize. Every tab switch re-fits and calls sendResize, but the
+    // pane size usually hasn't changed — and telling the shell it "resized" to the
+    // same dimensions still makes PowerShell repaint its prompt. That redraw arrives
+    // as output, which markWorking reads as activity and flashes the orange "working"
+    // bar on every switch (a false alarm). Only notify the shell on a real size change;
+    // ws.onopen clears the memo so a (re)connect always sends the current size.
+    if (t._sentCols === t.term.cols && t._sentRows === t.term.rows) return;
+    t._sentCols = t.term.cols; t._sentRows = t.term.rows;
+    t.ws.send(JSON.stringify({ t: 'r', c: t.term.cols, r: t.term.rows }));
+  }
   // Closing a tab on purpose is the one close that should take the shell with it.
   // Every other disconnect is treated as an interruption and waited out, so this
   // has to say so explicitly — otherwise a closed tab parks a live PowerShell on
@@ -1982,6 +1993,7 @@
         t.state = 'open';
         if (t.status === 'closed') setStatus(t, 'idle');
         if (pn().activeTermId === id) reflect(pn());
+        t._sentCols = t._sentRows = null;   // force a real resize on every (re)connect
         sendResize(t);
       };
       ws.onmessage = function (ev) {
