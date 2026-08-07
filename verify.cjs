@@ -1670,6 +1670,15 @@ check('electron', PORT_GROUPS, async ({ t }) => {
   const outFile = path.join(OUT, 'electron-smoke.json');
   try { fs.unlinkSync(outFile); } catch (e) { /* fresh */ }
 
+  // ST6 persists the browser + diff leaves this smoke opens. The dev profile
+  // (WinMuxDev) survives across runs, so a prior run's leaves would be restored and
+  // dirty the clean-startup layout the menu/browser tests assume. Wipe the dev
+  // profile's Local Storage before each run for a deterministic default layout.
+  try {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    fs.rmSync(path.join(appData, 'WinMuxDev', 'Local Storage'), { recursive: true, force: true });
+  } catch (e) { /* best effort */ }
+
   const res = await new Promise((resolve) => {
     const proc = spawn(electronPath, [main], {
       cwd: ROOT,
@@ -1715,6 +1724,12 @@ check('electron', PORT_GROUPS, async ({ t }) => {
   // .ptab with the browser favicon and the old .wmb dock element is gone.
   t('the browser opened as a pane tab (leaf), not a side dock',
     !!json && json.browserIsTab === true, json && json.browserError);
+  // ST5/ST6: the git-diff surface also opens as a pane tab inside the packaged
+  // Electron app and renders real git status — not just in the plain-browser harness.
+  t('the diff surface opened as a pane tab inside Electron',
+    !!json && json.diffIsTab === true, json && (json.diffError || json.diffIsTab));
+  t('the diff leaf rendered git status inside Electron',
+    !!json && json.diffRendered === true, json && (json.diffError || json.diffRendered));
 
   // node-pty under Electron's ABI (#209): the smoke run drove the real terminal —
   // a live node-pty shell — to run `echo <token>` and read the marker back off the
@@ -3005,6 +3020,21 @@ check('diff-tab', PORT_DIFF, async ({ browser, base, t, shot }) => {
   t('the diff leaf rendered git status (file list or clean note)',
     leaf.body === true && (leaf.hasDiff === true || leaf.hasEmpty === true), leaf);
   await shot(page, 'diff-tab');
+
+  // Ctrl+Tab MRU must include the leaf: the diff leaf is active now and the terminal
+  // was active before it, so one Ctrl+Tab lands on the terminal and a second returns
+  // to the diff leaf — proving a non-terminal leaf sits in the same per-pane MRU ring.
+  const activeLeaf = () => page.evaluate(() => {
+    const a = document.querySelector('#wsrow .ptab[data-active]');
+    return a ? (a.getAttribute('data-leaf') || 'terminal') : null;
+  });
+  await page.keyboard.down('Control'); await page.keyboard.press('Tab'); await page.keyboard.up('Control');
+  await page.waitForTimeout(400);
+  t('Ctrl+Tab from the diff leaf lands on the terminal (MRU includes leaves)',
+    (await activeLeaf()) === 'terminal');
+  await page.keyboard.down('Control'); await page.keyboard.press('Tab'); await page.keyboard.up('Control');
+  await page.waitForTimeout(400);
+  t('a second Ctrl+Tab returns to the diff leaf', (await activeLeaf()) === 'diff');
   await page.close();
 });
 

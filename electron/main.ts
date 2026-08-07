@@ -105,7 +105,7 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
     hasCockpit: false, isElectron: false, dataElectron: false, ptabsRegion: null,
     browserOpened: false, browserRefs: 0, browserClicked: false, ptyOk: false, error: null,
     browserTyped: false, browserGotText: false, browserEval: false, browserScrolled: false,
-    menuTypes: [],
+    menuTypes: [], diffIsTab: false, diffRendered: false,
   };
   try {
     for (let i = 0; i < 40; i++) {
@@ -248,6 +248,29 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
     } catch (be) {
       result.browserError = String((be as Error).message || be);
     }
+
+    // ST5/ST6 in the packaged app: the git-diff surface opens as a pane tab too,
+    // via the same New-tab menu, and renders real git status inside Electron (not
+    // just in the plain-browser harness). Proves diff-in-the-real-app, not code-only.
+    try {
+      // The pane-header changes button (.pc-dock) calls openDiffLeaf() directly —
+      // deterministic, no menu to drive.
+      await w.webContents.executeJavaScript("var b=document.querySelector('.pc-dock'); if(b) b.click();");
+      await new Promise((r) => setTimeout(r, 2000));   // /api/git round trip + render
+      result.diffIsTab = await w.webContents.executeJavaScript(
+        "!!document.querySelector('.pane .ptab[data-leaf=\"diff\"]')");
+      result.diffRendered = await w.webContents.executeJavaScript(
+        "(function(){var b=document.querySelector('.term-host.diffleaf'); return !!(b && (b.querySelector('.diff') || b.querySelector('.diff-empty')));})()");
+      await w.webContents.executeJavaScript("[].forEach.call(document.querySelectorAll('.tmenu, .ofmenu, .ctxmenu'), function(m){ m.remove(); }); document.documentElement.removeAttribute('data-tmenu-elev'); document.documentElement.removeAttribute('data-tmenu-style');");
+      w.showInactive();
+      await new Promise((r) => setTimeout(r, 500));
+      fs.writeFileSync(path.join(outDir, 'diff-tab-electron.png'), (await w.webContents.capturePage()).toPNG());
+      w.hide();
+    } catch (de) {
+      result.diffError = String((de as Error).message || de);
+    }
+    // (ST6 persists the browser + diff leaf this smoke opens; the harness wipes the
+    // dev profile's Local Storage before each run so the startup layout stays clean.)
   } catch (e) {
     result.error = String((e as Error).message || e);
   }
