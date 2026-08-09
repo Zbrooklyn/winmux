@@ -42,6 +42,7 @@
     "verify:coexist": "node verify-coexist.cjs",
     "pack": "npm run build:electron && electron-builder --dir",
     "dist": "npm run build:electron && node scripts/dist.cjs",
+    "dist:rust": "node scripts/dist-rust.cjs",
     "winget": "node scripts/winget-manifest.mjs",
     "perf": "node perf.cjs"
   },
@@ -62,7 +63,14 @@
     ],
     "asarUnpack": [
       "node_modules/node-pty/prebuilds/**",
-      "node_modules/node-pty/build/Release/*.node"
+      "node_modules/node-pty/build/Release/*.node",
+      "public/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../../core/rust/target/release/winmux-core.exe",
+        "to": "winmux-core.exe"
+      }
     ],
     "win": {
       "target": [

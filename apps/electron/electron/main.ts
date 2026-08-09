@@ -48,19 +48,31 @@ async function createWindow(): Promise<void> {
     // WINMUX_CORE=rust boots the native Rust core as the sidecar instead of the
     // Node server. Discovery is identical (it writes the same instance.json and
     // answers /api/info), so the renderer connects the same way. Node stays default.
-    const useRust = process.env.WINMUX_CORE === 'rust';
+    // A packaged Rust build drops a core-rust.flag next to main.js (see
+    // scripts/dist-rust.cjs); the normal Node installer never writes it, so Node
+    // stays the shipped default. The env var still forces Rust in dev.
+    const rustFlag = path.join(__dirname, 'core-rust.flag');
+    const useRust = process.env.WINMUX_CORE === 'rust' || fs.existsSync(rustFlag);
     let rustCorePath: string | undefined;
     let extraEnv: Record<string, string> | undefined;
     if (useRust) {
       const root = path.join(__dirname, '..', '..', '..');   // apps/electron/dist-electron → repo root
       const candidates = [
         process.env.WINMUX_CORE_BIN,
+        // Packaged: bundled beside the app via extraResources.
+        app.isPackaged ? path.join(process.resourcesPath, 'winmux-core.exe') : undefined,
         path.join(root, 'core', 'rust', 'target', 'release', 'winmux-core.exe'),
         path.join(root, 'core', 'rust', 'target', 'debug', 'winmux-core.exe'),
       ].filter(Boolean) as string[];
       rustCorePath = candidates.find((p) => fs.existsSync(p));
       if (!rustCorePath) throw new Error('WINMUX_CORE=rust but no winmux-core.exe found (build core/rust first)');
-      extraEnv = { WINMUX_PUBLIC: path.join(__dirname, '..', 'public') };
+      // The Rust core is a separate process serving static files off disk, so in
+      // a packaged app public/ must be unpacked (asarUnpack), not inside the asar.
+      extraEnv = {
+        WINMUX_PUBLIC: app.isPackaged
+          ? path.join(process.resourcesPath, 'app.asar.unpacked', 'public')
+          : path.join(__dirname, '..', 'public'),
+      };
     }
     const resolved = await resolveServer({
       instanceFile: profile.instanceFile,

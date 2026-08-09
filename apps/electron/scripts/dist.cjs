@@ -7,8 +7,14 @@
 // Usage:  npm run dist            -> ~/winmux-build/WinMux Setup <version>.exe
 //         WINMUX_DIST_OUT=D:\out npm run dist
 const { spawnSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 const os = require('os');
+
+// A prior `npm run dist:rust` leaves core-rust.flag in dist-electron; strip it so
+// the Node installer never accidentally ships selecting the Rust core.
+const staleFlag = path.join(__dirname, '..', 'dist-electron', 'core-rust.flag');
+if (fs.existsSync(staleFlag)) { fs.unlinkSync(staleFlag); console.log('Removed stale core-rust.flag (Node build).'); }
 
 const out = process.env.WINMUX_DIST_OUT || path.join(os.homedir(), 'winmux-build');
 console.log('Packaging WinMux installer -> ' + out);
