@@ -130,14 +130,26 @@ async fn main() {
     let port: u16 = std::env::var("WINMUX_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(9920);
     let state = Arc::new(AppState::new(port));
 
+    let shutdown_state = state.clone();
     let serve = ServeDir::new(&public).append_index_html_on_directories(true);
     let app = Router::new()
         .route("/pty", get(pty_ws))
         .route("/control", get(control_ws))
         .route("/rpc", post(rpc_post))
         .route("/api/info", get(api_info))
+        .route("/api/md", get(api_md))
         .fallback_service(serve)
         .with_state(state);
+
+    // Graceful shutdown: on Ctrl+C, kill every live shell so we never leak a
+    // detached PowerShell after the core exits (mirrors the Node server's teardown).
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        for (_, s) in shutdown_state.sessions.lock().unwrap().drain() {
+            let _ = s.child.lock().unwrap().kill();
+        }
+        std::process::exit(0);
+    });
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     write_instance(port);
@@ -334,6 +346,23 @@ async fn api_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "shells": ["powershell", "pwsh", "cmd", "bash", "wsl"],
         "core": "rust",
     }))
+}
+
+// ---- /api/md ------------------------------------------------------------
+// The markdown viewer reads a file off this disk and gets back its text + mtime,
+// so the surface can render it and re-poll to live-update on save. Desk-door only
+// (the Rust core binds loopback for now; a networked build must 403 this).
+async fn api_md(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let file = q.get("path").cloned().unwrap_or_default();
+    match (std::fs::metadata(&file), std::fs::read_to_string(&file)) {
+        (Ok(st), Ok(text)) => {
+            let mtime = st.modified().ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64).unwrap_or(0);
+            Json(json!({"ok": true, "path": file, "text": text, "mtime": mtime}))
+        }
+        _ => Json(json!({"ok": false, "error": "cannot read", "path": file})),
+    }
 }
 
 // ---- /control + /rpc ----------------------------------------------------

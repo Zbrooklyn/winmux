@@ -115,6 +115,15 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   let infoBody = {}; try { infoBody = JSON.parse(info.body); } catch (e) {}
   ok('/api/info reports the running server (port+pid+core)', info.status === 200 && infoBody.port === PORT && infoBody.pid > 0 && infoBody.core === 'rust', { port: infoBody.port, core: infoBody.core });
 
+  // 5c. /api/md reads a real file for the markdown viewer; a missing file fails soft
+  const mdFile = new URL('./verify-core.mjs', import.meta.url).pathname.replace(/^\//, '');
+  const md = await get('/api/md?path=' + encodeURIComponent(mdFile));
+  let mdBody = {}; try { mdBody = JSON.parse(md.body); } catch (e) {}
+  ok('/api/md returns a file text + mtime', md.status === 200 && mdBody.ok === true && /winmux-core shell-I\/O harness/.test(mdBody.text) && mdBody.mtime > 0, { ok: mdBody.ok, mtime: mdBody.mtime > 0 });
+  const md404 = await get('/api/md?path=' + encodeURIComponent('C:/nope/does-not-exist.md'));
+  let md404Body = {}; try { md404Body = JSON.parse(md404.body); } catch (e) {}
+  ok('/api/md fails soft on a missing file', md404.status === 200 && md404Body.ok === false, { ok: md404Body.ok });
+
   // 6. /rpc with no controller connected → 409 "no app connected"
   const noApp = await post('/rpc', { cmd: 'new-tab', args: {} });
   ok('/rpc with no app connected returns 409', noApp.status === 409 && /no app connected/.test(noApp.body), { status: noApp.status });
