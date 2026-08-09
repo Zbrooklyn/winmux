@@ -66,12 +66,6 @@
       "node_modules/node-pty/build/Release/*.node",
       "public/**/*"
     ],
-    "extraResources": [
-      {
-        "from": "../../core/rust/target/release/winmux-core.exe",
-        "to": "winmux-core.exe"
-      }
-    ],
     "win": {
       "target": [
         "nsis"

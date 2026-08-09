@@ -39,8 +39,16 @@ console.log('Packaging Rust-core WinMux installer -> ' + out);
 // its own appId + productName (drives the Start-menu shortcut / install dir /
 // uninstall entry) + its own rust-orange icon. productName is quoted because it
 // contains a space and these args pass through the shell.
+//
+// The Rust binary is bundled via --config (scripts/eb-rust.config.js), NOT
+// package.json's static build config, so only this build ships it — the Node
+// installer (`npm run dist`) stays free of an engine it can't boot. That config
+// is the shared build config + extraResources; the scalar -c flags below still
+// layer on top of it. The Rust core reads public/ off disk, so its unpack
+// already comes from the shared asarUnpack in package.json.
 const r = runBuilder([
   '--win', 'nsis',
+  '--config', 'scripts/eb-rust.config.js',
   '-c.directories.output=' + out,
   '-c.nsis.artifactName=' + artifact,
   '-c.appId=com.zbrooklyn.winmux.rust',
