@@ -234,13 +234,27 @@ function waitUp(port, ms) {
 
 // Reuse a server that is already listening — Edward often has one running, and
 // killing it out from under him would be worse than sharing it.
+// WINMUX_CORE=rust runs the whole harness against the native Rust core instead of
+// server.cjs — the Stage-2/4 finish-line measurement ("how many of these pass on
+// Rust today"). Null (and every check unchanged) unless the env flag is set.
+const RUST_CORE = process.env.WINMUX_CORE === 'rust'
+  ? [path.join(ROOT, '..', '..', 'core', 'rust', 'target', 'release', 'winmux-core.exe'),
+     path.join(ROOT, '..', '..', 'core', 'rust', 'target', 'debug', 'winmux-core.exe')].find((p) => fs.existsSync(p))
+  : null;
+
 async function server(port, extraEnv) {
   if (await inUse('127.0.0.1', port)) return { port, borrowed: true, stop() {} };
-  const proc = spawn(process.execPath, ['server.cjs'], {
-    cwd: ROOT,
-    env: Object.assign({}, process.env, { PORT: String(port), WINMUX_TRUST_FILE: trustFile(port), WINMUX_CONFIG_FILE: configFile(port), WINMUX_NO_INSTANCE: '1' }, extraEnv || {}),
-    stdio: 'ignore',
-  });
+  const proc = RUST_CORE
+    ? spawn(RUST_CORE, [], {
+        cwd: ROOT,
+        env: Object.assign({}, process.env, { WINMUX_PORT: String(port), WINMUX_PUBLIC: path.join(ROOT, 'public'), WINMUX_INSTANCE_FILE: path.join(OUT, 'inst-' + port + '.json'), WINMUX_TRUST_FILE: trustFile(port) }, extraEnv || {}),
+        stdio: 'ignore',
+      })
+    : spawn(process.execPath, ['server.cjs'], {
+        cwd: ROOT,
+        env: Object.assign({}, process.env, { PORT: String(port), WINMUX_TRUST_FILE: trustFile(port), WINMUX_CONFIG_FILE: configFile(port), WINMUX_NO_INSTANCE: '1' }, extraEnv || {}),
+        stdio: 'ignore',
+      });
   await waitUp(port, 15000);
   return { port, borrowed: false, stop() { try { proc.kill(); } catch (e) {} } };
 }
