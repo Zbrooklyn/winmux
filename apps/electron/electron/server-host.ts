@@ -56,23 +56,27 @@ export interface ResolveOpts {
   serverPath: string;  // absolute path to server.cjs
   timeoutMs?: number;
   port?: number;       // force a specific port on the spawned server (tests/pinning)
+  rustCorePath?: string;              // when set, spawn this native Rust core instead of node+server.cjs
+  extraEnv?: Record<string, string>;  // extra env for the spawned core (e.g. WINMUX_PUBLIC for the Rust core)
 }
 
 // Reattach to a live server for this profile, else spawn a detached one and wait
 // for it to advertise its port. Throws if a freshly spawned server never comes up.
+// The Rust core (rustCorePath) is discovered the same way — it writes the same
+// instance.json and answers /api/info — so everything downstream is identical.
 export async function resolveServer(opts: ResolveOpts): Promise<Resolved> {
   const live = await liveInstance(opts.instanceFile);
   if (live) return { port: live.port, host: live.host || '127.0.0.1', attached: true };
 
-  const child = spawn(opts.execPath, [opts.serverPath], {
-    detached: true,
-    stdio: 'ignore',
-    env: Object.assign({}, process.env, {
-      ELECTRON_RUN_AS_NODE: '1',
-      WINMUX_INSTANCE_FILE: opts.instanceFile,
-      WINMUX_TRUST_FILE: opts.trustFile,
-    }, opts.port ? { PORT: String(opts.port) } : {}),
-  });
+  const rust = !!opts.rustCorePath;
+  const [cmd, args] = rust ? [opts.rustCorePath as string, []] : [opts.execPath, [opts.serverPath]];
+  const env = Object.assign({}, process.env,
+    rust ? {} : { ELECTRON_RUN_AS_NODE: '1' },
+    { WINMUX_INSTANCE_FILE: opts.instanceFile, WINMUX_TRUST_FILE: opts.trustFile },
+    opts.port ? (rust ? { WINMUX_PORT: String(opts.port) } : { PORT: String(opts.port) }) : {},
+    opts.extraEnv || {},
+  );
+  const child = spawn(cmd, args, { detached: true, stdio: 'ignore', env });
   child.unref();
 
   const deadline = Date.now() + (opts.timeoutMs || 15000);
