@@ -119,6 +119,22 @@ fn save_backlog(sid: &str, shell: &str, cwd: &str, buf: &str) {
     if std::fs::write(&tmp, body.to_string()).is_ok() { let _ = std::fs::rename(&tmp, &p); }
 }
 
+// Drop backlog files older than a week so a long-lived install never grows
+// unbounded (mirrors the Node server's pruneBacklog). Runs once at startup.
+fn prune_backlog() {
+    const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+    if let Ok(entries) = std::fs::read_dir(backlog_dir()) {
+        for e in entries.flatten() {
+            if !e.file_name().to_string_lossy().to_lowercase().ends_with(".json") { continue; }
+            if let Ok(modified) = e.metadata().and_then(|m| m.modified()) {
+                if SystemTime::now().duration_since(modified).map(|d| d > MAX_AGE).unwrap_or(false) {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
+}
+
 fn shell_cmd(key: &str) -> (String, Vec<String>, String) {
     match key {
         "pwsh" => ("pwsh.exe".into(), vec!["-NoLogo".into()], "PowerShell 7".into()),
@@ -203,6 +219,7 @@ async fn main() {
     });
 
     write_instance(port);
+    prune_backlog();
     println!("winmux-core: serving {} on http://127.0.0.1:{port}  (control+rpc+resume live)", public.display());
     axum::serve(listener, app).await.expect("serve");
 }
@@ -694,10 +711,15 @@ async fn handle_control(socket: WebSocket, state: Arc<AppState>) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
     state.controllers.lock().unwrap().insert(id, tx);
 
+    let ps = state.clone();
     let pump = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if sink.send(msg).await.is_err() { break; }
         }
+        // Write side is dead: drop the controller and fail any in-flight rpc NOW,
+        // so `/rpc` returns "no app connected" fast instead of the 8s timeout when
+        // the app disconnects mid-command.
+        drop_controller(&ps, id);
     });
 
     while let Some(Ok(msg)) = stream.next().await {
@@ -711,8 +733,19 @@ async fn handle_control(socket: WebSocket, state: Arc<AppState>) {
             }
         }
     }
-    state.controllers.lock().unwrap().remove(&id);
+    // Read side closed (the usual clean-disconnect path): same fast cleanup.
+    drop_controller(&state, id);
     pump.abort();
+}
+
+// Remove a controller and immediately answer any waiting rpc — with only one
+// controller live at a time, its socket dying means nothing can answer.
+fn drop_controller(state: &Arc<AppState>, id: u64) {
+    state.controllers.lock().unwrap().remove(&id);
+    if state.controllers.lock().unwrap().is_empty() {
+        let mut pend = state.pending.lock().unwrap();
+        for (_, tx) in pend.drain() { let _ = tx.send(json!({"ok": false, "error": "no app connected"})); }
+    }
 }
 
 async fn rpc_post(State(state): State<Arc<AppState>>, Json(body): Json<Value>) -> impl IntoResponse {
