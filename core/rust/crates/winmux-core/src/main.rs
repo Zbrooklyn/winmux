@@ -155,7 +155,9 @@ async fn main() {
         .route("/api/md", get(api_md))
         .route("/api/findpath", get(api_findpath))
         .route("/api/clip", get(api_clip_get).post(api_clip_post))
+        .route("/api/config", get(api_config_get).post(api_config_post))
         .fallback_service(serve)
+        .layer(axum::middleware::from_fn(no_store_html))
         .with_state(state);
 
     // Graceful shutdown: on Ctrl+C, kill every live shell so we never leak a
@@ -180,13 +182,16 @@ async fn pty_ws(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>, Query(
 }
 
 // Spawn a brand-new shell as a registry Session with a lifelong reader thread.
-fn spawn_session(shell_key: &str, cwd: &str) -> Result<(String, Arc<Session>), String> {
+fn spawn_session(shell_key: &str, cwd: &str, port: u16) -> Result<(String, Arc<Session>), String> {
     let (exec, args, label) = shell_cmd(shell_key);
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| format!("openpty failed: {e}"))?;
 
+    // The sid is minted before spawn so it can be injected as WINMUX_SID — the way
+    // tmux exports $TMUX_PANE — letting an agent's hook address exactly this session.
+    let sid = new_sid();
     let mut cmd = CommandBuilder::new(&exec);
     for a in &args { cmd.arg(a); }
     cmd.cwd(cwd);
@@ -198,14 +203,14 @@ fn spawn_session(shell_key: &str, cwd: &str) -> Result<(String, Arc<Session>), S
     }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    cmd.env("WINMUX_SID", &sid);
+    cmd.env("WINMUX_PORT", port.to_string());
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to start {label}: {e}"))?;
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| format!("reader: {e}"))?;
     let writer = pair.master.take_writer().map_err(|e| format!("writer: {e}"))?;
 
-    let sid = new_sid();
-    // set WINMUX_SID after spawn is impossible; it was scrubbed-in above via env for children.
     let session = Arc::new(Session {
         shell: label,
         cwd: cwd.to_string(),
@@ -247,7 +252,7 @@ async fn handle_pty(socket: WebSocket, state: Arc<AppState>, q: HashMap<String, 
     let existing = want_sid.as_ref().and_then(|s| state.sessions.lock().unwrap().get(s).cloned());
     let (sid, session, resumed) = match existing {
         Some(s) => (want_sid.clone().unwrap(), s, true),
-        None => match spawn_session(&shell_key, &cwd) {
+        None => match spawn_session(&shell_key, &cwd, state.port) {
             Ok((sid, s)) => {
                 state.sessions.lock().unwrap().insert(sid.clone(), s.clone());
                 (sid, s, false)
@@ -342,6 +347,21 @@ async fn send_meta_err(socket: WebSocket, err: &str) -> Result<(), axum::Error> 
     socket.send(Message::Text(json!({"type":"meta","error": err}).to_string())).await
 }
 
+// The app shell must never be cached — a stale index would pin an old UI against a
+// new core. Tag every HTML response no-store (mirrors the Node server's headers).
+async fn no_store_html(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderValue};
+    let mut res = next.run(req).await;
+    // The app shell and its code are rebuilt constantly at a fixed local address,
+    // so a cached html/js/css asset can render a version that no longer exists.
+    let app_asset = res.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()).map_or(false, |c| {
+        c.starts_with("text/html") || c.starts_with("text/css")
+            || c.contains("javascript")
+    });
+    if app_asset { res.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store")); }
+    res
+}
+
 // ---- /api/info ----------------------------------------------------------
 // Read-only server + fleet snapshot the `winmux status` verb reads (no control
 // client needed). sessions = live registry size; detached = shells with no socket.
@@ -378,6 +398,40 @@ async fn api_md(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
         }
         _ => Json(json!({"ok": false, "error": "cannot read", "path": file})),
     }
+}
+
+// ---- /api/config --------------------------------------------------------
+// A hand-editable JSON config on disk (WINMUX_CONFIG_FILE): GET returns it, POST
+// replaces whole sub-objects (settings/themes/keymap) and leaves the rest intact.
+fn config_file() -> PathBuf {
+    std::env::var("WINMUX_CONFIG_FILE").map(PathBuf::from).unwrap_or_else(|_| {
+        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
+        PathBuf::from(home).join(".winmux").join("config.json")
+    })
+}
+fn read_config() -> Value {
+    std::fs::read_to_string(config_file()).ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| json!({}))
+}
+async fn api_config_get() -> impl IntoResponse {
+    Json(json!({"ok": true, "config": read_config()}))
+}
+async fn api_config_post(Json(incoming): Json<Value>) -> impl IntoResponse {
+    let mut cur = read_config();
+    if let Some(obj) = cur.as_object_mut() {
+        for k in ["settings", "themes", "keymap"] {
+            if let Some(v) = incoming.get(k) {
+                if v.is_object() { obj.insert(k.to_string(), v.clone()); }
+            }
+        }
+    }
+    let file = config_file();
+    if let Some(dir) = file.parent() { let _ = std::fs::create_dir_all(dir); }
+    let tmp = file.with_extension(format!("{}.tmp", std::process::id()));
+    let ok = std::fs::write(&tmp, cur.to_string()).and_then(|_| std::fs::rename(&tmp, &file)).is_ok();
+    Json(json!({"ok": ok}))
 }
 
 // ---- /api/clip ----------------------------------------------------------

@@ -19,8 +19,8 @@ const ok = (name, cond, detail) => {
 };
 
 const get = (path) => new Promise((res) => {
-  http.get(BASE + path, (r) => { let b = ''; r.on('data', (d) => (b += d)); r.on('end', () => res({ status: r.statusCode, body: b })); })
-    .on('error', () => res({ status: 0, body: '' }));
+  http.get(BASE + path, (r) => { let b = ''; r.on('data', (d) => (b += d)); r.on('end', () => res({ status: r.statusCode, body: b, headers: JSON.stringify(r.headers) })); })
+    .on('error', () => res({ status: 0, body: '', headers: '' }));
 });
 
 const post = (path, obj) => new Promise((res) => {
@@ -141,6 +141,16 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const clipGet = await get('/api/clip');
   let clipGetBody = {}; try { clipGetBody = JSON.parse(clipGet.body); } catch (e) {}
   ok('/api/clip hands the clip back to another device', clipGet.status === 200 && clipGetBody.text === clipText && clipGetBody.at > 0, { match: clipGetBody.text === clipText });
+
+  // 5f. /api/config persists + returns a hand-editable settings file, and / is no-store
+  const cfgPost = await post('/api/config', { settings: { theme: 'aurora', fontSize: 15 } });
+  let cfgPostBody = {}; try { cfgPostBody = JSON.parse(cfgPost.body); } catch (e) {}
+  ok('/api/config persists settings', cfgPost.status === 200 && cfgPostBody.ok === true, { ok: cfgPostBody.ok });
+  const cfgGet = await get('/api/config');
+  let cfgGetBody = {}; try { cfgGetBody = JSON.parse(cfgGet.body); } catch (e) {}
+  ok('/api/config returns the persisted settings', cfgGet.status === 200 && cfgGetBody.config && cfgGetBody.config.settings && cfgGetBody.config.settings.theme === 'aurora', { theme: cfgGetBody.config && cfgGetBody.config.settings && cfgGetBody.config.settings.theme });
+  const idx2 = await get('/');
+  ok('the app shell is served no-store', /no-store/i.test(idx2.headers || ''), { cc: idx2.headers });
 
   // 6. /rpc with no controller connected → 409 "no app connected"
   const noApp = await post('/rpc', { cmd: 'new-tab', args: {} });

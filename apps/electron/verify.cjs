@@ -247,7 +247,7 @@ async function server(port, extraEnv) {
   const proc = RUST_CORE
     ? spawn(RUST_CORE, [], {
         cwd: ROOT,
-        env: Object.assign({}, process.env, { WINMUX_PORT: String(port), WINMUX_PUBLIC: path.join(ROOT, 'public'), WINMUX_INSTANCE_FILE: path.join(OUT, 'inst-' + port + '.json'), WINMUX_TRUST_FILE: trustFile(port) }, extraEnv || {}),
+        env: Object.assign({}, process.env, { WINMUX_PORT: String(port), WINMUX_PUBLIC: path.join(ROOT, 'public'), WINMUX_INSTANCE_FILE: path.join(OUT, 'inst-' + port + '.json'), WINMUX_TRUST_FILE: trustFile(port), WINMUX_CONFIG_FILE: configFile(port) }, extraEnv || {}),
         stdio: 'ignore',
       })
     : spawn(process.execPath, ['server.cjs'], {
