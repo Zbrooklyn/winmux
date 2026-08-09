@@ -1,10 +1,20 @@
 [package]
 name = "winmux-core"
-version = "0.0.0"
+version = "0.0.1"
 edition = "2021"
-description = "WinMux v2 native core (Rust) — scaffold. See core/rust/README.md for the staged plan."
+description = "WinMux v2 native core (Rust) — Stage 1 skeleton: serves public/ + /pty WebSocket over portable-pty."
 license = "MIT"
 
 [[bin]]
 name = "winmux-core"
 path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs"] }
+portable-pty = "0.8"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
