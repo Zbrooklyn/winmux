@@ -23,6 +23,14 @@ const get = (path) => new Promise((res) => {
     .on('error', () => res({ status: 0, body: '' }));
 });
 
+const post = (path, obj) => new Promise((res) => {
+  const body = JSON.stringify(obj);
+  const req = http.request(BASE + path, { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } },
+    (r) => { let b = ''; r.on('data', (d) => (b += d)); r.on('end', () => res({ status: r.statusCode, body: b })); });
+  req.on('error', () => res({ status: 0, body: '' }));
+  req.write(body); req.end();
+});
+
 // Open a /pty, return { meta, out() } where out() is the accumulated decoded output.
 function openPty(query) {
   return new Promise((resolve, reject) => {
@@ -79,6 +87,32 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     ok('cmd runs a command', /RUSTCMD_\d+/.test(cmd.text()));
     cmd.ws.close();
   } catch (e) { ok('cmd.exe spawns via the same /pty path', false, { err: String(e.message) }); }
+
+  // 6. /rpc with no controller connected → 409 "no app connected"
+  const noApp = await post('/rpc', { cmd: 'new-tab', args: {} });
+  ok('/rpc with no app connected returns 409', noApp.status === 409 && /no app connected/.test(noApp.body), { status: noApp.status });
+
+  // 7. full round-trip: register a /control client, POST /rpc, control gets the push,
+  //    replies, and the reply relays back out of the POST as {ok,result}.
+  const ctl = new WebSocket(`ws://127.0.0.1:${PORT}/control`);
+  await new Promise((r, j) => { ctl.on('open', r); ctl.on('error', j); setTimeout(r, 1500); });
+  ctl.on('message', (data) => {
+    try {
+      const m = JSON.parse(data.toString());
+      if (m.rpc && m.cmd === 'new-tab') ctl.send(JSON.stringify({ rpc: m.rpc, ok: true, result: { tabId: 'tab-42', cmd: m.cmd } }));
+      if (m.rpc && m.cmd === 'boom') ctl.send(JSON.stringify({ rpc: m.rpc, ok: false, error: 'kaboom' }));
+    } catch (e) {}
+  });
+  await wait(200);
+  const rt = await post('/rpc', { cmd: 'new-tab', args: { shell: 'pwsh' } });
+  let rtBody = {}; try { rtBody = JSON.parse(rt.body); } catch (e) {}
+  ok('/rpc forwards to the control client and relays its reply', rt.status === 200 && rtBody.ok === true && rtBody.result && rtBody.result.tabId === 'tab-42', { status: rt.status, body: rt.body.slice(0, 80) });
+
+  // 8. an app-side error reply relays as {ok:false} with 422
+  const err = await post('/rpc', { cmd: 'boom', args: {} });
+  let errBody = {}; try { errBody = JSON.parse(err.body); } catch (e) {}
+  ok('/rpc relays an app error as ok:false', err.status === 422 && errBody.ok === false && /kaboom/.test(err.body), { status: err.status });
+  ctl.close();
 
   console.log(`\n${pass}/${pass + fail} checks passed`);
   process.exit(fail === 0 ? 0 : 1);
