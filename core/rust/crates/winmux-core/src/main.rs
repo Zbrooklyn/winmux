@@ -157,6 +157,7 @@ async fn main() {
         .route("/api/clip", get(api_clip_get).post(api_clip_post))
         .route("/api/config", get(api_config_get).post(api_config_post))
         .route("/api/update", get(api_update))
+        .route("/shells", get(api_shells))
         .fallback_service(serve)
         .layer(axum::middleware::from_fn(no_store_html))
         .with_state(state);
@@ -361,6 +362,19 @@ async fn no_store_html(req: axum::extract::Request, next: axum::middleware::Next
     });
     if app_asset { res.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store")); }
     res
+}
+
+// ---- /shells ------------------------------------------------------------
+// The list of shells the new-tab picker can offer (the frontend fetches this
+// at boot). Labels mirror shell_cmd()'s.
+async fn api_shells() -> impl IntoResponse {
+    Json(json!([
+        {"key": "powershell", "label": "Windows PowerShell"},
+        {"key": "pwsh", "label": "PowerShell 7"},
+        {"key": "cmd", "label": "Command Prompt"},
+        {"key": "bash", "label": "Git Bash"},
+        {"key": "wsl", "label": "WSL"},
+    ]))
 }
 
 // ---- /api/update --------------------------------------------------------
