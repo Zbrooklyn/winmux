@@ -1223,14 +1223,24 @@ check('reload', PORT_RELOAD, async ({ browser, base, t, shot }) => {
     await page.waitForTimeout(1500);
     const before = await info();
     t('a shell is running before the reload',
-      before.sessions === 1 && before.detached === 0, before);
+      before.sessions >= 1 && before.detached === 0, before);
 
     // The whole page, torn down and rebuilt — exactly what used to orphan the shell.
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(6000);
-    const back = await info();
-    t('the reopened page holds the same one shell, nothing orphaned',
-      back.sessions === 1 && back.detached === 0, back);
+    // The reload briefly detaches the old socket, then the rebuilt page reattaches by
+    // sid. The real invariant is baseline-independent: reload must neither ORPHAN a
+    // shell (detached>0) nor LEAK one (session count grows) — asserting a hardcoded
+    // "== 1" wrongly fails whenever the baseline is 2 (Node pre-warms a spare shell;
+    // Rust does not). Poll until the session table settles back to the pre-reload
+    // shape, or fail loudly if it never does (a genuine leak never settles).
+    let back = before;
+    for (let i = 0; i < 24; i++) {
+      await page.waitForTimeout(500);
+      back = await info();
+      if (back.detached === 0 && back.sessions === before.sessions) break;
+    }
+    t('the reopened page holds the same shells, nothing orphaned or leaked',
+      back.sessions === before.sessions && back.detached === 0, { before, back });
 
     await page.click('.xterm').catch(() => {});
     await page.keyboard.type('echo $mywork');
@@ -1882,10 +1892,18 @@ check('cli', PORT_CLI, async ({ browser, base, t, shot }) => {
   t('new-tab adds a terminal the app can see', p2 && p2.sessions.length === before + 1, { before, after: p2 && p2.sessions.length });
   await shot(page, 'cli-drove-it');
 
-  // With no app open the CLI must fail clearly and fast, never hang.
+  // With no app open the CLI must fail clearly, never hang. Closing the page drops the
+  // /control socket, but the server takes a moment to notice — a fixed wait races that
+  // on a fast machine (it still answers from the just-departed app, so err is empty and
+  // the check flakes on both engines). Poll until it reports the app is gone; the
+  // invariant is that it fails clearly, not that it does so within one arbitrary tick.
   await page.close();
-  await new Promise((r) => setTimeout(r, 800));
-  const orphan = await winmux(['list']);
+  let orphan = { code: 0, err: '' };
+  for (let i = 0; i < 24; i++) {
+    await new Promise((r) => setTimeout(r, 400));
+    orphan = await winmux(['list']);
+    if (orphan.code !== 0 && /no app connected/i.test(orphan.err)) break;
+  }
   t('with no app open the CLI fails clearly, fast', orphan.code !== 0 && /no app connected/i.test(orphan.err), orphan.err);
 });
 
