@@ -22,7 +22,7 @@ use futures_util::{SinkExt, StreamExt};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde_json::{json, Value};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     io::{Read, Write},
     net::SocketAddr,
     path::PathBuf,
@@ -30,7 +30,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
 use tower_http::services::ServeDir;
@@ -151,6 +151,7 @@ async fn main() {
         .route("/rpc", post(rpc_post))
         .route("/api/info", get(api_info))
         .route("/api/md", get(api_md))
+        .route("/api/findpath", get(api_findpath))
         .fallback_service(serve)
         .with_state(state);
 
@@ -374,6 +375,81 @@ async fn api_md(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
         }
         _ => Json(json!({"ok": false, "error": "cannot read", "path": file})),
     }
+}
+
+// ---- /api/findpath ------------------------------------------------------
+// Dropping a folder from Explorer hands the browser only the folder name + its
+// child names, never the path. The server stands on the same disk, so it BFS-walks
+// a few likely roots to find the folder whose name and contents match, scoring by
+// how many dropped children are present. Desk-door only (see /api/md note).
+const FIND_DEPTH: usize = 6;
+const FIND_BUDGET: usize = 12_000;
+const FIND_MS: u128 = 4000;
+
+fn find_skip(name: &str) -> bool {
+    matches!(name,
+        "node_modules" | ".git" | "appdata" | "windows" | "program files" | "program files (x86)"
+        | "programdata" | "$recycle.bin" | "system volume information" | ".cache" | "__pycache__"
+        | "venv" | ".venv" | "dist" | "build" | ".next" | "onedrivetemp")
+        || name.starts_with('$')
+}
+
+fn score_dir(dir: &PathBuf, kids: &HashSet<String>) -> f64 {
+    if kids.is_empty() { return 0.5; } // an empty folder can only match by name
+    let mut got = 0usize;
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            if kids.contains(&e.file_name().to_string_lossy().to_lowercase()) { got += 1; }
+        }
+    }
+    got as f64 / kids.len() as f64
+}
+
+fn find_folder(name: &str, kids: &HashSet<String>, near: &str) -> Vec<Value> {
+    let want = name.to_lowercase();
+    if want.is_empty() { return vec![]; }
+    let home = std::env::var("USERPROFILE").unwrap_or_default();
+    let roots = [near.to_string(), home.clone(), format!("{home}\\Dropbox"), "C:\\dev".into(), "C:\\".into()];
+    let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
+    for r in roots.iter().filter(|r| !r.is_empty()) {
+        let p = PathBuf::from(r);
+        if p.is_dir() { queue.push_back((p, 0)); }
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut hits: Vec<(PathBuf, f64)> = Vec::new();
+    let started = Instant::now();
+    let mut budget = FIND_BUDGET;
+
+    while let Some((dir, depth)) = queue.pop_front() {
+        if budget == 0 || started.elapsed().as_millis() > FIND_MS { break; }
+        budget -= 1;
+        let key = dir.to_string_lossy().to_lowercase();
+        if !seen.insert(key) { continue; }
+        let entries = match std::fs::read_dir(&dir) { Ok(e) => e, Err(_) => continue };
+        for e in entries.flatten() {
+            if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
+            let low = e.file_name().to_string_lossy().to_lowercase();
+            if find_skip(&low) { continue; }
+            let full = dir.join(e.file_name());
+            if low == want {
+                let s = score_dir(&full, kids);
+                if s > 0.0 { hits.push((full.clone(), s)); }
+                if s >= 1.0 { queue.clear(); break; } // perfect content match — done
+            }
+            if depth + 1 <= FIND_DEPTH { queue.push_back((full, depth + 1)); }
+        }
+    }
+    hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        .then(a.0.to_string_lossy().len().cmp(&b.0.to_string_lossy().len())));
+    hits.into_iter().take(5).map(|(p, s)| json!({"path": p.to_string_lossy(), "score": s})).collect()
+}
+
+async fn api_findpath(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let name = q.get("name").cloned().unwrap_or_default();
+    let near = q.get("near").cloned().unwrap_or_default();
+    let kids: HashSet<String> = q.get("kids").map(|s| s.split('|').filter(|x| !x.is_empty()).map(|x| x.to_lowercase()).collect()).unwrap_or_default();
+    let hits = tokio::task::spawn_blocking(move || find_folder(&name, &kids, &near)).await.unwrap_or_default();
+    Json(json!({"hits": hits}))
 }
 
 // ---- /control + /rpc ----------------------------------------------------

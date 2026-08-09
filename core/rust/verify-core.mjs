@@ -124,6 +124,15 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   let md404Body = {}; try { md404Body = JSON.parse(md404.body); } catch (e) {}
   ok('/api/md fails soft on a missing file', md404.status === 200 && md404Body.ok === false, { ok: md404Body.ok });
 
+  // 5d. /api/findpath resolves a dropped folder by name + child names (BFS off disk)
+  const fp = await get('/api/findpath?near=' + encodeURIComponent(process.env.USERPROFILE || 'C:/Users') + '&name=winmux&kids=' + encodeURIComponent('core|apps|README.md'));
+  let fpBody = {}; try { fpBody = JSON.parse(fp.body); } catch (e) {}
+  const topHit = fpBody.hits && fpBody.hits[0];
+  ok('/api/findpath resolves a folder by name + children', fp.status === 200 && topHit && /winmux$/i.test(topHit.path) && topHit.score > 0, topHit && { path: topHit.path, score: topHit.score });
+  const fpNone = await get('/api/findpath?name=');
+  let fpNoneBody = {}; try { fpNoneBody = JSON.parse(fpNone.body); } catch (e) {}
+  ok('/api/findpath with no name returns empty hits', fpNone.status === 200 && Array.isArray(fpNoneBody.hits) && fpNoneBody.hits.length === 0);
+
   // 6. /rpc with no controller connected → 409 "no app connected"
   const noApp = await post('/rpc', { cmd: 'new-tab', args: {} });
   ok('/rpc with no app connected returns 409', noApp.status === 409 && /no app connected/.test(noApp.body), { status: noApp.status });
