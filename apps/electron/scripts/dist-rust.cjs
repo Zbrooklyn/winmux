@@ -11,6 +11,7 @@ const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { runBuilder } = require('./eb-retry.cjs');
 
 const appDir = path.join(__dirname, '..');
 const root = path.join(appDir, '..', '..');
@@ -38,18 +39,14 @@ console.log('Packaging Rust-core WinMux installer -> ' + out);
 // its own appId + productName (drives the Start-menu shortcut / install dir /
 // uninstall entry) + its own rust-orange icon. productName is quoted because it
 // contains a space and these args pass through the shell.
-const r = spawnSync(
-  'npx',
-  [
-    'electron-builder', '--win', 'nsis',
-    '-c.directories.output=' + out,
-    '-c.nsis.artifactName=' + artifact,
-    '-c.appId=com.zbrooklyn.winmux.rust',
-    '-c.productName="WinMux Rust"',
-    '-c.win.icon=build/icon-rust.ico',
-  ],
-  { stdio: 'inherit', shell: true, cwd: appDir }
-);
+const r = runBuilder([
+  '--win', 'nsis',
+  '-c.directories.output=' + out,
+  '-c.nsis.artifactName=' + artifact,
+  '-c.appId=com.zbrooklyn.winmux.rust',
+  '-c.productName="WinMux Rust"',
+  '-c.win.icon=build/icon-rust.ico',
+], appDir);
 
 if (r.status === 0) {
   const { version } = require('../package.json');

@@ -6,10 +6,10 @@
 //
 // Usage:  npm run dist            -> ~/winmux-build/WinMux Setup <version>.exe
 //         WINMUX_DIST_OUT=D:\out npm run dist
-const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { runBuilder } = require('./eb-retry.cjs');
 
 // A prior `npm run dist:rust` leaves core-rust.flag in dist-electron; strip it so
 // the Node installer never accidentally ships selecting the Rust core.
@@ -19,11 +19,7 @@ if (fs.existsSync(staleFlag)) { fs.unlinkSync(staleFlag); console.log('Removed s
 const out = process.env.WINMUX_DIST_OUT || path.join(os.homedir(), 'winmux-build');
 console.log('Packaging WinMux installer -> ' + out);
 
-const r = spawnSync(
-  'npx',
-  ['electron-builder', '--win', 'nsis', '-c.directories.output=' + out],
-  { stdio: 'inherit', shell: true, cwd: path.join(__dirname, '..') }
-);
+const r = runBuilder(['--win', 'nsis', '-c.directories.output=' + out], path.join(__dirname, '..'));
 
 if (r.status === 0) {
   const { version } = require('../package.json');
