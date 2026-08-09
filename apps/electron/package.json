@@ -44,7 +44,8 @@
     "dist": "npm run build:electron && node scripts/dist.cjs",
     "dist:rust": "node scripts/dist-rust.cjs",
     "winget": "node scripts/winget-manifest.mjs",
-    "perf": "node perf.cjs"
+    "perf": "node perf.cjs",
+    "endurance": "node endurance.cjs"
   },
   "build": {
     "appId": "com.zbrooklyn.winmux",
