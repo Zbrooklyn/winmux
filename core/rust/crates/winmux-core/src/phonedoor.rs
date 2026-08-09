@@ -21,6 +21,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 const AUTH_MAX: u32 = 10; // wrong-key guesses within the window...
 const AUTH_WINDOW_MS: u64 = 60_000; // ...trip a 60s lockout
@@ -62,6 +64,14 @@ pub struct PhoneDoor {
     pub ip: Mutex<Option<String>>, // the Tailscale address currently bound
     pub token: Mutex<String>,      // the rotating 128-bit key, hex
     fails: Mutex<HashMap<String, Fail>>,
+    // The running phone listener: a graceful-shutdown trigger + its task handle.
+    // Some while the door is open. Firing the trigger stops the accept loop (which
+    // drops the TcpListener and frees ip:PORT) and closes idle connections;
+    // awaiting the handle confirms it is fully gone.
+    listener: Mutex<Option<(oneshot::Sender<()>, JoinHandle<()>)>>,
+    // Cached tailnet peer count + when it was taken (ms). Refreshed lazily off the
+    // hot path so /api/phone never blocks on a `tailscale status` spawn.
+    peers: Mutex<(Option<u64>, u64)>,
 }
 
 fn now_ms() -> u64 {
@@ -171,6 +181,8 @@ impl PhoneDoor {
             ip: Mutex::new(None),
             token: Mutex::new(String::new()),
             fails: Mutex::new(HashMap::new()),
+            listener: Mutex::new(None),
+            peers: Mutex::new((None, 0)),
         }
     }
 
@@ -294,6 +306,23 @@ impl PhoneDoor {
         }
         gone
     }
+    /// Refresh a known device's "last seen" on a page load (never on every
+    /// asset — that would rewrite the file dozens of times per screen).
+    pub fn touch_device(&self, dev_id: &str) {
+        if dev_id.is_empty() {
+            return;
+        }
+        let mut changed = false;
+        if let Ok(mut t) = self.trust.lock() {
+            if let Some(d) = t.devices.iter_mut().find(|d| ct_eq(dev_id, &d.id)) {
+                d.last = now_iso();
+                changed = true;
+            }
+        }
+        if changed {
+            self.save();
+        }
+    }
     pub fn forget_all(&self) {
         if let Ok(mut t) = self.trust.lock() {
             t.devices.clear();
@@ -342,6 +371,174 @@ impl PhoneDoor {
             .collect();
         serde_json::Value::Array(arr)
     }
+
+    // ---- stage 3: the live listener + its credentials ---------------------
+
+    /// The current access key (empty while the door is shut).
+    pub fn token(&self) -> String {
+        self.token.lock().map(|t| t.clone()).unwrap_or_default()
+    }
+    /// The Tailscale address currently bound (None while shut).
+    pub fn ip(&self) -> Option<String> {
+        self.ip.lock().ok().and_then(|v| v.clone())
+    }
+    /// The scannable link: `http://<ip>:<port>/?k=<token>`, or "" while shut.
+    pub fn phone_url(&self, port: u16) -> String {
+        match (self.is_on(), self.ip()) {
+            (true, Some(ip)) => format!("http://{}:{}/?k={}", ip, port, self.token()),
+            _ => String::new(),
+        }
+    }
+
+    /// A fresh 128-bit access key. The door mints one on every open, so a link
+    /// that leaked yesterday is dead today (Node: crypto.randomBytes(16)).
+    pub fn fresh_token() -> String {
+        hex16()
+    }
+
+    /// Open the door: record the bound address, the new key, and the shutdown
+    /// trigger + task that serve it. The previous listener must already be stopped.
+    pub fn open_with(&self, ip: String, token: String, shutdown: oneshot::Sender<()>, task: JoinHandle<()>) {
+        if let Ok(mut t) = self.token.lock() {
+            *t = token;
+        }
+        if let Ok(mut i) = self.ip.lock() {
+            *i = Some(ip);
+        }
+        *self.listener.lock().unwrap() = Some((shutdown, task));
+        self.on.store(true, Ordering::SeqCst);
+    }
+
+    /// Take the running listener's shutdown trigger + task handle so the caller
+    /// can fire it and await the drain. Closing drops every phone terminal with
+    /// it — that is the point of an off switch.
+    pub fn take_listener(&self) -> Option<(oneshot::Sender<()>, JoinHandle<()>)> {
+        self.listener.lock().unwrap().take()
+    }
+    pub fn mark_off(&self) {
+        self.on.store(false, Ordering::SeqCst);
+        if let Ok(mut i) = self.ip.lock() {
+            *i = None;
+        }
+        if let Ok(mut t) = self.token.lock() {
+            t.clear();
+        }
+    }
+
+    /// How many other machines are on the tailnet right now — a label for the
+    /// "trust the whole tailnet" switch. Returns the cached count and never
+    /// blocks; the /api/phone handler kicks a refresh (probe_peers → set_peers)
+    /// for the NEXT read when peers_stale(), exactly like the Node server. Null
+    /// when `tailscale` cannot be asked.
+    pub fn tailnet_peers(&self) -> Option<u64> {
+        self.peers.lock().unwrap().0
+    }
+    /// Blocking peer count via `tailscale status --json`; None if the CLI is
+    /// missing or errors. Call from a blocking context; store with set_peers().
+    pub fn probe_peers() -> Option<u64> {
+        let out = std::process::Command::new("tailscale")
+            .args(["status", "--json"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let j: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+        j.get("Peer").and_then(|p| p.as_object()).map(|m| m.len() as u64)
+    }
+    pub fn set_peers(&self, n: Option<u64>) {
+        *self.peers.lock().unwrap() = (n, now_ms());
+    }
+    /// True when the cached peer count is stale enough to warrant a refresh.
+    pub fn peers_stale(&self) -> bool {
+        now_ms().saturating_sub(self.peers.lock().unwrap().1) > 60_000
+    }
+
+    /// Render the current link as an SVG QR so nobody types a 32-char key.
+    pub fn qr_svg(&self, port: u16) -> Option<String> {
+        let url = self.phone_url(port);
+        if url.is_empty() {
+            return None;
+        }
+        qr_svg(&url)
+    }
+}
+
+/// The Tailscale address to listen on: `CT_HOST` override, else the first
+/// interface IP in 100.64.0.0/10 (the tailnet CGNAT range). None = no tailnet.
+pub fn tailscale_ip() -> Option<String> {
+    if let Ok(h) = std::env::var("CT_HOST") {
+        if !h.is_empty() {
+            return Some(h);
+        }
+    }
+    let ifs = if_addrs::get_if_addrs().ok()?;
+    for iface in ifs {
+        if iface.is_loopback() {
+            continue;
+        }
+        if let std::net::IpAddr::V4(v4) = iface.ip() {
+            let o = v4.octets();
+            if o[0] == 100 && (64..=127).contains(&o[1]) {
+                return Some(v4.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// A link as a scannable SVG square (Node: qrcode.toString, svg, margin 1). The
+/// crate prepends an `<?xml …?>` prologue that Node's lib omits; strip it so the
+/// body opens with `<svg`, matching the shape callers (and the harness) expect.
+pub fn qr_svg(url: &str) -> Option<String> {
+    use qrcode::render::svg;
+    let code = qrcode::QrCode::new(url.as_bytes()).ok()?;
+    let out = code
+        .render()
+        .min_dimensions(190, 190)
+        .quiet_zone(true)
+        .dark_color(svg::Color("#000000"))
+        .light_color(svg::Color("#ffffff"))
+        .build();
+    Some(match out.find("<svg") {
+        Some(i) => out[i..].to_string(),
+        None => out,
+    })
+}
+
+/// Someone typed the tailnet address by hand instead of scanning the QR. "Needs
+/// its access key" is a dead end — it names the problem and hides the fix. This
+/// page is self-contained: every asset is behind the same door, so it loads
+/// nothing. Verbatim from the Node keyNeededPage (same four theme tokens, same
+/// accent, same three steps) so the door matches the app in front of it.
+pub fn key_needed_page() -> &'static str {
+    "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+<title>WinMux — one step left</title><style>\
+:root{color-scheme:light dark;--bg:#1e1e1e;--text:#dadada;--muted:#a8a8a8;--line:#333}\
+@media (prefers-color-scheme:light){:root{--bg:#ffffff;--text:#232323;--muted:#5c5c5c;--line:#e2e2e2}}\
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;\
+background:var(--bg);color:var(--text);font:400 16px/1.55 \"Segoe UI\",system-ui,sans-serif;padding:28px}\
+.card{max-width:23rem}\
+.brand{font-size:19px;font-weight:600;letter-spacing:-.01em;margin:0 0 26px}\
+.brand b{color:#8a5cf5;font-weight:600}\
+h1{font-size:21px;font-weight:600;margin:0 0 10px;letter-spacing:-.01em}\
+p{margin:0 0 18px;color:var(--muted)}\
+ol{margin:0 0 22px;padding-left:1.25em;color:var(--text)}\
+li{margin-bottom:9px}\
+.note{font-size:13.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:16px;margin:0}\
+</style></head><body><main class=\"card\">\
+<p class=\"brand\">Win<b>Mux</b></p>\
+<h1>One step left</h1>\
+<p>WinMux: this link needs its access key. The address on its own can&rsquo;t open a \
+terminal &mdash; the key is what proves it&rsquo;s your phone.</p>\
+<ol><li>On your PC, open WinMux.</li>\
+<li>Go to <strong>Settings &rarr; Phone</strong>.</li>\
+<li>Scan the QR code with your phone&rsquo;s camera.</li></ol>\
+<p class=\"note\">Scan it once and this phone is remembered &mdash; it keeps working after \
+restarts, without scanning again. Typing the address by hand never works: the key is the \
+part that&rsquo;s missing.</p>\
+</main></body></html>"
 }
 
 #[cfg(test)]

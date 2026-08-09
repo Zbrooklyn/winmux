@@ -12,9 +12,10 @@
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
-    extract::{Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    extract::{ConnectInfo, Query, Request, State},
+    http::{header, HeaderValue, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -68,6 +69,10 @@ struct AppState {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     clip: Mutex<(String, u64)>, // cross-device clipboard: (text, at_ms)
     phone: phonedoor::PhoneDoor, // the tailnet phone door (trust + key auth)
+    // Live phone terminals, keyed by a monotonic id → (device id, close signal).
+    // Closing the door drops all of them; forgetting a device drops only its own.
+    phone_conns: Mutex<HashMap<u64, (String, UnboundedSender<()>)>>,
+    phone_conn_seq: AtomicU64,
     port: u16,
 }
 impl AppState {
@@ -80,12 +85,42 @@ impl AppState {
             sessions: Mutex::new(HashMap::new()),
             clip: Mutex::new((String::new(), 0)),
             phone: phonedoor::PhoneDoor::load(trust_file()),
+            phone_conns: Mutex::new(HashMap::new()),
+            phone_conn_seq: AtomicU64::new(1),
             port,
         }
     }
     fn pick_controller(&self) -> Option<UnboundedSender<Message>> {
         let map = self.controllers.lock().unwrap();
         map.iter().max_by_key(|(id, _)| **id).map(|(_, s)| s.clone())
+    }
+
+    // Register a live phone terminal; the returned receiver fires when the door
+    // closes or this device is forgotten, which breaks the socket loop.
+    fn register_phone_conn(&self, dev: String) -> (u64, tokio::sync::mpsc::UnboundedReceiver<()>) {
+        let id = self.phone_conn_seq.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        self.phone_conns.lock().unwrap().insert(id, (dev, tx));
+        (id, rx)
+    }
+    fn unregister_phone_conn(&self, id: u64) {
+        self.phone_conns.lock().unwrap().remove(&id);
+    }
+    // Close phone terminals: every one (dev = None) on door-off, or a single
+    // device's (Some) when it is forgotten — a revoked phone must lose its shell,
+    // not just its next login.
+    fn close_phone_conns(&self, dev: Option<&str>) {
+        let mut map = self.phone_conns.lock().unwrap();
+        let ids: Vec<u64> = map
+            .iter()
+            .filter(|(_, (d, _))| dev.map_or(true, |want| d == want))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            if let Some((_, tx)) = map.remove(&id) {
+                let _ = tx.send(());
+            }
+        }
     }
 }
 
@@ -208,8 +243,9 @@ async fn main() {
         .route("/shells", get(api_shells))
         .route("/api/claude-sessions", get(api_claude_sessions))
         .route("/api/backlog", get(api_backlog))
-        .route("/api/phone", get(api_phone))
-        .route("/api/phone/devices", get(api_phone_devices))
+        .route("/api/phone", get(api_phone).post(api_phone_post))
+        .route("/api/phone/devices", get(api_phone_devices).post(api_phone_devices_post))
+        .route("/api/phone/qr", get(api_phone_qr))
         .fallback_service(serve)
         .layer(axum::middleware::from_fn(no_store_html))
         .with_state(state);
@@ -233,7 +269,27 @@ async fn main() {
 // ---- /pty ---------------------------------------------------------------
 
 async fn pty_ws(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>, Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_pty(socket, state, q))
+    ws.on_upgrade(move |socket| handle_pty(socket, state, q, None))
+}
+
+// The phone door's /pty: same shell, but the connection is registered so the off
+// switch (and forgetting this device) can force it shut. Keyed by the device id
+// (ct_dev cookie) so a revoke closes exactly that phone's terminals.
+async fn pty_ws_phone(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let mut dev = phonedoor::device_id_from(cookie);
+    if dev.is_empty() {
+        // A key-only connection (no device cookie yet) is still keyed so door-off
+        // closes it; it just won't be matched by a per-device forget.
+        dev = q.get("k").cloned().unwrap_or_default();
+    }
+    let (id, rx) = state.register_phone_conn(dev);
+    ws.on_upgrade(move |socket| handle_pty(socket, state, q, Some((id, rx))))
 }
 
 // Spawn a brand-new shell as a registry Session with a lifelong reader thread.
@@ -320,7 +376,16 @@ fn spawn_session(shell_key: &str, cwd: &str, port: u16) -> Result<(String, Arc<S
     Ok((sid, session))
 }
 
-async fn handle_pty(socket: WebSocket, state: Arc<AppState>, q: HashMap<String, String>) {
+async fn handle_pty(
+    socket: WebSocket,
+    state: Arc<AppState>,
+    q: HashMap<String, String>,
+    phone: Option<(u64, tokio::sync::mpsc::UnboundedReceiver<()>)>,
+) {
+    let (phone_conn_id, mut close_rx) = match phone {
+        Some((id, rx)) => (Some(id), Some(rx)),
+        None => (None, None),
+    };
     let want_sid = q.get("sid").cloned().filter(|s| !s.is_empty());
     let shell_key = q.get("shell").map(|s| s.as_str()).unwrap_or("powershell").to_string();
     let cwd = q.get("cwd").cloned().filter(|c| !c.is_empty())
@@ -366,7 +431,21 @@ async fn handle_pty(socket: WebSocket, state: Arc<AppState>, q: HashMap<String, 
     });
 
     let mut explicit_kill = false;
-    while let Some(Ok(msg)) = stream.next().await {
+    loop {
+        // A forced close (door off / device forgotten) breaks the loop, dropping
+        // the socket so the phone's terminal stops answering. Otherwise read the
+        // next client frame.
+        let msg = match close_rx.as_mut() {
+            Some(rx) => tokio::select! {
+                m = stream.next() => m,
+                _ = rx.recv() => break,
+            },
+            None => stream.next().await,
+        };
+        let msg = match msg {
+            Some(Ok(m)) => m,
+            _ => break,
+        };
         match msg {
             Message::Text(t) => {
                 let v: Value = match serde_json::from_str(&t) { Ok(v) => v, Err(_) => continue };
@@ -392,6 +471,9 @@ async fn handle_pty(socket: WebSocket, state: Arc<AppState>, q: HashMap<String, 
         }
     }
     out.abort();
+    if let Some(id) = phone_conn_id {
+        state.unregister_phone_conn(id);
+    }
 
     // Detach. On explicit kill, tear the session down now. Otherwise keep it alive for
     // the grace window and let a delayed task reap it if nobody reattaches.
@@ -581,30 +663,358 @@ async fn api_md(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
 }
 
 // ---- /api/config --------------------------------------------------------
-// --- The phone door (read side) --------------------------------------------
-// The status the Settings panel and onboarding poll. These read routes are mounted
-// only on the loopback server, so canChange is always true and full device ids are
-// shown; the phone-facing (via_phone) view and the tailnet listener land in stage 3.
-// tailnetPeers is null for now — the Rust core does not yet query tailscale, and the
-// contract explicitly allows "a number, or null if it cannot count".
+// --- The phone door --------------------------------------------------------
+// The whole two-door flow. The desk door (loopback) reads and CHANGES the switch;
+// the phone door (a second listener bound to the Tailscale address, opened on
+// demand) is key-gated and read-only for the switch. Faithful port of the Node
+// server's handle(req,res,viaPhone) + setPhone.
+
+// The status the Settings panel, onboarding, and the phone all poll. Over the
+// phone door (via_phone) canChange is false and device ids — a credential — are
+// withheld. ip/url/tailscale/tailnetPeers now reflect the live listener.
 fn phone_state(state: &AppState, via_phone: bool) -> Value {
     json!({
         "on": state.phone.is_on(),
-        "ip": Value::Null,
+        "ip": state.phone.ip().map(Value::from).unwrap_or(Value::Null),
         "port": state.port,
-        "url": "",
+        "url": state.phone.phone_url(state.port),
         "canChange": !via_phone,
-        "tailscale": false,
+        "tailscale": phonedoor::tailscale_ip().is_some(),
         "trustTailnet": state.phone.trust_tailnet(),
-        "tailnetPeers": Value::Null,
+        "tailnetPeers": state.phone.tailnet_peers().map(Value::from).unwrap_or(Value::Null),
         "devices": state.phone.device_list(via_phone),
     })
 }
+
+// {"ok":ok} merged over the desk view — the shape both setPhone paths return.
+fn ok_state(state: &Arc<AppState>, ok: bool) -> Value {
+    let mut v = phone_state(state, false);
+    if let Some(o) = v.as_object_mut() {
+        o.insert("ok".into(), json!(ok));
+    }
+    v
+}
+
+// The tailnet peer count is a label for the trust switch; refresh it OFF the hot
+// path (a `tailscale status` spawn) so /api/phone never blocks. Restamps the
+// cache time immediately so a burst of reads kicks only one probe, then fills the
+// real value for the NEXT read — exactly the Node cache behaviour.
+fn kick_peers_refresh(state: &Arc<AppState>) {
+    if !state.phone.peers_stale() {
+        return;
+    }
+    state.phone.set_peers(state.phone.tailnet_peers()); // restamp; keep current value
+    let s = state.clone();
+    tokio::spawn(async move {
+        if let Ok(n) = tokio::task::spawn_blocking(phonedoor::PhoneDoor::probe_peers).await {
+            s.phone.set_peers(n);
+        }
+    });
+}
+
+// ---- desk door (loopback): read + change the switch ---------------------
 async fn api_phone(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    kick_peers_refresh(&state);
     Json(phone_state(&state, false))
+}
+async fn api_phone_post(State(state): State<Arc<AppState>>, body: String) -> Response {
+    let msg: Value = serde_json::from_str(&body).unwrap_or(json!({}));
+    // Trusting the whole tailnet is a separate, persisted decision from opening
+    // the door at all, so it is a separate field.
+    if let Some(tt) = msg.get("trustTailnet") {
+        state.phone.set_trust_tailnet(tt.as_bool().unwrap_or(false));
+    }
+    if msg.get("on").is_none() {
+        return (StatusCode::OK, Json(ok_state(&state, true))).into_response();
+    }
+    let want = msg.get("on").and_then(|v| v.as_bool()).unwrap_or(false);
+    let (code, v) = set_phone(&state, want).await;
+    (code, Json(v)).into_response()
 }
 async fn api_phone_devices(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(json!({ "devices": state.phone.device_list(false), "canChange": true }))
+}
+async fn api_phone_devices_post(State(state): State<Arc<AppState>>, body: String) -> impl IntoResponse {
+    let msg: Value = serde_json::from_str(&body).unwrap_or(json!({}));
+    // Forgetting a phone rotates the key so a revoked device can't walk back in
+    // on the link it already holds (#153).
+    if msg.get("all").and_then(|v| v.as_bool()).unwrap_or(false) {
+        state.phone.forget_all();
+        state.phone.rotate_key();
+        state.close_phone_conns(None); // every remembered phone loses its shell
+    } else if let Some(id) = msg.get("forget").and_then(|v| v.as_str()) {
+        if state.phone.forget_device(id) {
+            state.phone.rotate_key();
+            state.close_phone_conns(Some(id)); // the revoked phone loses its shell now
+        }
+    }
+    Json(json!({ "ok": true, "devices": state.phone.device_list(false) }))
+}
+
+// The link as a scannable square, so nobody types a 32-char key. Served on both
+// doors; 404 while the door is shut. On the phone door the gate has already
+// authed the request.
+async fn api_phone_qr(State(state): State<Arc<AppState>>) -> Response {
+    if !state.phone.is_on() {
+        return (StatusCode::NOT_FOUND, "off").into_response();
+    }
+    match state.phone.qr_svg(state.port) {
+        Some(svg) => (
+            [
+                (header::CONTENT_TYPE, "image/svg+xml"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            svg,
+        )
+            .into_response(),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "qr failed").into_response(),
+    }
+}
+
+// ---- opening and closing the phone door (setPhone) ----------------------
+// Turning ON binds a SECOND listener to the Tailscale address on the SAME port,
+// running the key-gated phone router. Turning OFF aborts it, which drops the
+// TcpListener and frees ip:PORT — dropping every phone terminal with it.
+async fn set_phone(state: &Arc<AppState>, want: bool) -> (StatusCode, Value) {
+    if want == state.phone.is_on() {
+        return (StatusCode::OK, ok_state(state, true));
+    }
+    if !want {
+        // Closing drops every phone terminal with it — that is the point of an
+        // off switch. Force the shells shut, then trigger graceful shutdown: the
+        // moment the signal fires the accept loop ends and the listener is
+        // dropped (freeing ip:PORT and closing idle keep-alives), and awaiting
+        // the task confirms it is fully gone before we report the door shut — so
+        // the very next request is refused, not answered on a dying socket.
+        // (Aborting the task instead leaves the socket accepting for ~200ms on
+        // Windows, and bind() can't detect that; graceful shutdown is exact.)
+        state.close_phone_conns(None);
+        if let Some((shutdown, handle)) = state.phone.take_listener() {
+            let _ = shutdown.send(());
+            let _ = tokio::time::timeout(Duration::from_secs(3), handle).await;
+        }
+        state.phone.mark_off();
+        return (StatusCode::OK, ok_state(state, true));
+    }
+    // Turning on: need a private address to listen on.
+    let ip = match phonedoor::tailscale_ip() {
+        Some(ip) => ip,
+        None => {
+            return (
+                StatusCode::CONFLICT,
+                json!({"ok": false, "error":
+                    "Tailscale is not running on this PC, so there is no private address to listen on. Start Tailscale and try again."}),
+            )
+        }
+    };
+    let addr: SocketAddr = match format!("{}:{}", ip, state.port).parse() {
+        Ok(a) => a,
+        Err(_) => {
+            return (
+                StatusCode::CONFLICT,
+                json!({"ok": false, "error": format!("Could not parse the Tailscale address {}:{}.", ip, state.port)}),
+            )
+        }
+    };
+    let listener = match bind_phone(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            // A failed phone door must never take the desk door down with it.
+            let busy = e.kind() == std::io::ErrorKind::AddrInUse;
+            let msg = if busy {
+                format!("Something else on this PC is already using port {} on your Tailscale address. Close it, or start this app on a different port, then try again.", state.port)
+            } else {
+                format!("Could not listen on {}:{} — {}", ip, state.port, e)
+            };
+            return (StatusCode::CONFLICT, json!({"ok": false, "error": msg}));
+        }
+    };
+    let token = phonedoor::PhoneDoor::fresh_token();
+    let app = phone_router(state.clone());
+    let make = app.into_make_service_with_connect_info::<SocketAddr>();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
+        let _ = axum::serve(listener, make)
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await;
+    });
+    state.phone.open_with(ip, token, shutdown_tx, task);
+    (StatusCode::OK, ok_state(state, true))
+}
+
+// Bind the tailnet listener, absorbing the brief AddrInUse window when a prior
+// off→on reuses the same port faster than the OS releases it. A port a real
+// process holds stays busy through every retry, so the failure still surfaces.
+async fn bind_phone(addr: SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
+    let mut last: Option<std::io::Error> = None;
+    for _ in 0..4 {
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(l) => return Ok(l),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                last = Some(e);
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::AddrInUse, "address in use")))
+}
+
+// ---- phone door router + gate -------------------------------------------
+// The key-gated router the second listener serves. Every request passes the gate
+// (throttle → auth → cookie-mint) before any handler runs; the switch is
+// read-only here and the file-reading endpoints refuse outright.
+fn phone_router(state: Arc<AppState>) -> Router {
+    let public = resolve_public_dir();
+    let serve = ServeDir::new(&public).append_index_html_on_directories(true);
+    Router::new()
+        .route("/pty", get(pty_ws_phone))
+        .route("/api/phone", get(phone_api_phone).post(phone_api_phone_post))
+        .route(
+            "/api/phone/devices",
+            get(phone_api_devices).post(phone_api_devices_post),
+        )
+        .route("/api/phone/qr", get(api_phone_qr))
+        .route("/api/clip", get(api_clip_get).post(api_clip_post))
+        .route("/api/config", get(api_config_get).post(api_config_post))
+        .route("/api/info", get(api_info))
+        .route("/api/update", get(api_update))
+        .route("/shells", get(api_shells))
+        .route("/api/backlog", get(api_backlog))
+        // Desk-door only over the tailnet: reading the host disk is refused even
+        // with a valid key (#210).
+        .route("/api/md", get(phone_denied))
+        .route("/api/findpath", get(phone_denied))
+        .route("/api/claude-sessions", get(phone_denied))
+        .fallback_service(serve)
+        .layer(axum::middleware::from_fn(no_store_html))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), phone_gate))
+        .with_state(state)
+}
+
+fn hget(req: &Request, name: header::HeaderName) -> String {
+    req.headers().get(name).and_then(|v| v.to_str().ok()).unwrap_or("").to_string()
+}
+// The ?k= value out of a raw query string (keys are hex, so no decoding needed).
+fn query_k(query: &str) -> Option<String> {
+    for pair in query.split('&') {
+        let mut it = pair.splitn(2, '=');
+        if it.next() == Some("k") {
+            return Some(it.next().unwrap_or("").to_string());
+        }
+    }
+    None
+}
+
+// The phone door: no key, no anything. Throttle, then auth, before the URL is
+// even routed. A valid ?k= parks the key in a cookie and mints the device id
+// that lets this phone skip the QR next time.
+async fn phone_gate(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let ip = peer.ip().to_string();
+    // An address that has burned through its guesses waits out the cooldown.
+    if state.phone.throttle_locked(&ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, "60")],
+            "WinMux: too many attempts. Wait a minute and try again.",
+        )
+            .into_response();
+    }
+    let qk = req.uri().query().and_then(query_k);
+    let has_k = qk.as_deref().map(|k| !k.is_empty()).unwrap_or(false);
+    let cookie = hget(&req, header::COOKIE);
+    let accept = hget(&req, header::ACCEPT);
+    let ua = hget(&req, header::USER_AGENT);
+    let wants_html = accept.contains("text/html");
+    let token = phonedoor::token_from(qk.as_deref(), &cookie);
+    let dev = phonedoor::device_id_from(&cookie);
+
+    if !state.phone.authed(&token, &dev) {
+        // Count only deliberate wrong keys (a ?k= that didn't match) toward the
+        // throttle — browsing with no key is not a guess.
+        if has_k {
+            state.phone.note_bad_key(&ip);
+        }
+        if wants_html {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                phonedoor::key_needed_page(),
+            )
+                .into_response();
+        }
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            "WinMux: this link needs its access key.",
+        )
+            .into_response();
+    }
+
+    // Mint (cookie the key + remember the device) only on a real key match —
+    // never because trustTailnet waved it in, or toggling the tailnet switch
+    // would silently trust the room.
+    let minted = if has_k && state.phone.key_matches(&token) {
+        Some(state.phone.remember_device(&ua, &ip, &dev))
+    } else {
+        // Page loads only: refresh this device's "last seen".
+        if wants_html {
+            state.phone.touch_device(&dev);
+        }
+        None
+    };
+
+    let mut res = next.run(req).await;
+    if let Some(devid) = minted {
+        let tok = state.phone.token();
+        let h = res.headers_mut();
+        if let Ok(v) = HeaderValue::from_str(&format!("ct_k={}; Path=/; HttpOnly; SameSite=Strict", tok)) {
+            h.append(header::SET_COOKIE, v);
+        }
+        // A year, because the point is to outlive restarts and key rotation.
+        if let Ok(v) = HeaderValue::from_str(&format!(
+            "ct_dev={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000",
+            devid
+        )) {
+            h.append(header::SET_COOKIE, v);
+        }
+    }
+    res
+}
+
+// ---- phone-door handlers (via_phone = true) -----------------------------
+async fn phone_api_phone(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    kick_peers_refresh(&state);
+    Json(phone_state(&state, true))
+}
+async fn phone_api_phone_post() -> impl IntoResponse {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({"ok": false, "error": "Phone access can only be changed at the PC itself."})),
+    )
+}
+async fn phone_api_devices(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(json!({ "devices": state.phone.device_list(true), "canChange": false }))
+}
+async fn phone_api_devices_post() -> impl IntoResponse {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({"ok": false, "error": "Remembered devices can only be changed at the PC itself."})),
+    )
+}
+// The host disk is never a read/enumerate surface over the tailnet (#210).
+async fn phone_denied() -> impl IntoResponse {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({"ok": false, "error": "available only at the PC"})),
+    )
 }
 
 // A hand-editable JSON config on disk (WINMUX_CONFIG_FILE): GET returns it, POST

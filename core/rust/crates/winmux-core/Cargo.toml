@@ -19,3 +19,7 @@ futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rand = "0.8"
+# SVG rendering only — default features pull the heavy `image` raster crate we
+# don't use (and it trips Dropbox file locks under `cargo build`).
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+if-addrs = "0.13"
