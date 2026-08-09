@@ -1510,8 +1510,16 @@ check('colour', PORT_COLOUR, async ({ browser, base, t, shot }) => {
 
   // One palette cannot serve both grounds — that is the whole reason there are
   // two. If light mode handed back the dark values, this check has no point.
+  // READ_MARKS scrapes span colours out of .xterm-rows, which only the DOM renderer
+  // creates — so pin it (gpuRenderer:false), same as the dark half's desktop() does.
+  // Without the pin the shipping WebGL default paints to canvas and the read is null
+  // (or races the async DOM->WebGL swap, making this flaky).
   const lightPage = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
-  await lightPage.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await lightPage.addInitScript(() => { try {
+    localStorage.setItem('ct-onboard', '1');
+    const s = JSON.parse(localStorage.getItem('ct-settings') || '{}'); s.gpuRenderer = false;
+    localStorage.setItem('ct-settings', JSON.stringify(s));
+  } catch (e) {} });
   try {
     const l = await paintMarks(lightPage, base);
     t('light: the shell is drawn on the near-white we designed against', l.bg === '#fbfbfb', l);
@@ -1527,7 +1535,12 @@ check('colour', PORT_COLOUR, async ({ browser, base, t, shot }) => {
   const ember = await desktop(browser);
   try {
     await ember.addInitScript(() => {
-      localStorage.setItem('ct-settings', JSON.stringify({ palette: 'ember' }));
+      // Merge, don't clobber: a wholesale overwrite here would wipe the
+      // gpuRenderer:false pin desktop() set, dropping this page back to the WebGL
+      // renderer whose canvas has no .xterm-rows for paintMarks to read (-> null).
+      const s = JSON.parse(localStorage.getItem('ct-settings') || '{}');
+      s.palette = 'ember'; s.gpuRenderer = false;
+      localStorage.setItem('ct-settings', JSON.stringify(s));
     });
     const e = await paintMarks(ember, base);
     t('picking a different palette repaints the terminal', e.yellow === '#f5c87c', e.yellow);
@@ -2400,8 +2413,13 @@ check('font', PORT_FONT, async ({ browser, base, t }) => {
   const ct = String(res.headers['content-type'] || '');
   t('the bundled Nerd Font .ttf is served', res.status === 200 && /font\/(ttf|otf|sfnt)/.test(ct), { status: res.status, ct: ct });
 
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
-  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  // Read the DOM renderer's text layer: xterm sets the font on .xterm-rows, which
+  // only exists under the DOM renderer. The shipping default is the WebGL renderer,
+  // which paints rows to a <canvas> (no .xterm-rows, and .xterm/.xterm-screen keep
+  // the page's Inter) — so this check pins the DOM renderer (gpuRenderer:false, via
+  // desktop()) to read a meaningful computed font-family. WebGL font correctness is
+  // covered by the loaded @font-face (usable) + the gpu check.
+  const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(4000);
   const info = await page.evaluate(async () => {
@@ -2631,8 +2649,16 @@ check('osnotify', PORT_OSNOTIFY, async ({ browser, base, t }) => {
 // DOM renderer here and the shipping WebGL default alike. Writes a URL so the
 // screenshot shows a linkified address.
 check('parity', PORT_PARITY, async ({ browser, base, t, shot }) => {
+  // Most assertions read the live term object (renderer-independent), but the OSC-8
+  // sub-check below hovers a .xterm-rows span, which only the DOM renderer creates.
+  // Pin it (gpuRenderer:false) so that hover resolves instead of timing out under the
+  // shipping WebGL default — this is the "forced DOM renderer here" the header notes.
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
-  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.addInitScript(() => { try {
+    localStorage.setItem('ct-onboard', '1');
+    const s = JSON.parse(localStorage.getItem('ct-settings') || '{}'); s.gpuRenderer = false;
+    localStorage.setItem('ct-settings', JSON.stringify(s));
+  } catch (e) {} });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(4000);
   const st = await page.evaluate(async () => {
