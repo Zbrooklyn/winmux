@@ -133,6 +133,15 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   let fpNoneBody = {}; try { fpNoneBody = JSON.parse(fpNone.body); } catch (e) {}
   ok('/api/findpath with no name returns empty hits', fpNone.status === 200 && Array.isArray(fpNoneBody.hits) && fpNoneBody.hits.length === 0);
 
+  // 5e. /api/clip: copy on one device, read on another (in-memory, opt-in)
+  const clipText = 'RUST clip sync ' + (6 * 7);
+  const clipPost = await post('/api/clip', { text: clipText });
+  let clipPostBody = {}; try { clipPostBody = JSON.parse(clipPost.body); } catch (e) {}
+  ok('/api/clip stores a posted clip', clipPost.status === 200 && clipPostBody.ok === true && clipPostBody.len === clipText.length, { len: clipPostBody.len });
+  const clipGet = await get('/api/clip');
+  let clipGetBody = {}; try { clipGetBody = JSON.parse(clipGet.body); } catch (e) {}
+  ok('/api/clip hands the clip back to another device', clipGet.status === 200 && clipGetBody.text === clipText && clipGetBody.at > 0, { match: clipGetBody.text === clipText });
+
   // 6. /rpc with no controller connected → 409 "no app connected"
   const noApp = await post('/rpc', { cmd: 'new-tab', args: {} });
   ok('/rpc with no app connected returns 409', noApp.status === 409 && /no app connected/.test(noApp.body), { status: noApp.status });

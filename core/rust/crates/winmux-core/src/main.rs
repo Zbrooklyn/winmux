@@ -61,6 +61,7 @@ struct AppState {
     pending: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
     rpc_seq: AtomicU64,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
+    clip: Mutex<(String, u64)>, // cross-device clipboard: (text, at_ms)
     port: u16,
 }
 impl AppState {
@@ -71,6 +72,7 @@ impl AppState {
             pending: Mutex::new(HashMap::new()),
             rpc_seq: AtomicU64::new(1),
             sessions: Mutex::new(HashMap::new()),
+            clip: Mutex::new((String::new(), 0)),
             port,
         }
     }
@@ -152,6 +154,7 @@ async fn main() {
         .route("/api/info", get(api_info))
         .route("/api/md", get(api_md))
         .route("/api/findpath", get(api_findpath))
+        .route("/api/clip", get(api_clip_get).post(api_clip_post))
         .fallback_service(serve)
         .with_state(state);
 
@@ -375,6 +378,22 @@ async fn api_md(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
         }
         _ => Json(json!({"ok": false, "error": "cannot read", "path": file})),
     }
+}
+
+// ---- /api/clip ----------------------------------------------------------
+// Cross-device clipboard (opt-in): POST {text} stores the latest clip in memory,
+// GET hands it back — copy on the PC, paste on the phone. Never touches disk;
+// size-capped so it can't be used to hoard memory. Allowed over the tailnet by design.
+async fn api_clip_get(State(s): State<Arc<AppState>>) -> impl IntoResponse {
+    let (text, at) = s.clip.lock().unwrap().clone();
+    Json(json!({"ok": true, "text": text, "at": at}))
+}
+async fn api_clip_post(State(s): State<Arc<AppState>>, Json(body): Json<Value>) -> impl IntoResponse {
+    let text: String = body.get("text").and_then(|x| x.as_str()).unwrap_or("").chars().take(100_000).collect();
+    let at = now_ms() as u64;
+    let len = text.chars().count();
+    *s.clip.lock().unwrap() = (text, at);
+    Json(json!({"ok": true, "at": at, "len": len}))
 }
 
 // ---- /api/findpath ------------------------------------------------------
