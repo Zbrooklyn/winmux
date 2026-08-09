@@ -34,12 +34,19 @@ const out = process.env.WINMUX_DIST_OUT || path.join(os.homedir(), 'winmux-build
 const artifact = process.env.WINMUX_RUST_ARTIFACT || 'WinMux-Rust-Setup-${version}.${ext}';
 console.log('Packaging Rust-core WinMux installer -> ' + out);
 
+// Distinct identity so the Rust installer is a separate app from Node WinMux:
+// its own appId + productName (drives the Start-menu shortcut / install dir /
+// uninstall entry) + its own rust-orange icon. productName is quoted because it
+// contains a space and these args pass through the shell.
 const r = spawnSync(
   'npx',
   [
     'electron-builder', '--win', 'nsis',
     '-c.directories.output=' + out,
     '-c.nsis.artifactName=' + artifact,
+    '-c.appId=com.zbrooklyn.winmux.rust',
+    '-c.productName="WinMux Rust"',
+    '-c.win.icon=build/icon-rust.ico',
   ],
   { stdio: 'inherit', shell: true, cwd: appDir }
 );

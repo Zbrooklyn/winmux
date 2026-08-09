@@ -17,10 +17,15 @@ const { start } = require('../server.cjs') as {
 // — separate %APPDATA% dirs (and separate ProcessSingleton locks), separate CLI
 // discovery files, separate trusted-device files. This is what lets both run at
 // once without stepping on each other (Phase 12 coexistence contract).
+// A packaged Rust build drops core-rust.flag next to main.js (scripts/dist-rust.cjs);
+// the Node installer never writes it. It selects both the Rust core AND the Rust
+// build's distinct identity (name/icon/profile), so the two installers coexist.
+const isRustBuild = fs.existsSync(path.join(__dirname, 'core-rust.flag'));
 const profile = resolveProfile({
   isPackaged: app.isPackaged,
   appData: app.getPath('appData'),
   home: os.homedir(),
+  rust: isRustBuild,
 });
 app.setAppUserModelId(profile.appId);
 app.setName(profile.name);
@@ -48,11 +53,9 @@ async function createWindow(): Promise<void> {
     // WINMUX_CORE=rust boots the native Rust core as the sidecar instead of the
     // Node server. Discovery is identical (it writes the same instance.json and
     // answers /api/info), so the renderer connects the same way. Node stays default.
-    // A packaged Rust build drops a core-rust.flag next to main.js (see
-    // scripts/dist-rust.cjs); the normal Node installer never writes it, so Node
-    // stays the shipped default. The env var still forces Rust in dev.
-    const rustFlag = path.join(__dirname, 'core-rust.flag');
-    const useRust = process.env.WINMUX_CORE === 'rust' || fs.existsSync(rustFlag);
+    // isRustBuild (module scope) is set from core-rust.flag; the env var still
+    // forces Rust in dev. Node stays the shipped default when neither is set.
+    const useRust = process.env.WINMUX_CORE === 'rust' || isRustBuild;
     let rustCorePath: string | undefined;
     let extraEnv: Record<string, string> | undefined;
     if (useRust) {
