@@ -35,6 +35,8 @@ use std::{
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
 use tower_http::services::ServeDir;
 
+mod phonedoor;
+
 static SID_COUNTER: AtomicU64 = AtomicU64::new(1);
 const SCROLLBACK_CAP: usize = 256 * 1024; // bytes of backlog replayed on reattach
 const GRACE: Duration = Duration::from_secs(30); // a detached shell survives this long
@@ -65,6 +67,7 @@ struct AppState {
     rpc_seq: AtomicU64,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     clip: Mutex<(String, u64)>, // cross-device clipboard: (text, at_ms)
+    phone: phonedoor::PhoneDoor, // the tailnet phone door (trust + key auth)
     port: u16,
 }
 impl AppState {
@@ -76,6 +79,7 @@ impl AppState {
             rpc_seq: AtomicU64::new(1),
             sessions: Mutex::new(HashMap::new()),
             clip: Mutex::new((String::new(), 0)),
+            phone: phonedoor::PhoneDoor::load(trust_file()),
             port,
         }
     }
@@ -581,6 +585,15 @@ fn config_file() -> PathBuf {
     std::env::var("WINMUX_CONFIG_FILE").map(PathBuf::from).unwrap_or_else(|_| {
         let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
         PathBuf::from(home).join(".winmux").join("config.json")
+    })
+}
+
+// The trusted-devices guest list. WINMUX_TRUST_FILE overrides (the harness points
+// it at a scratch file); default mirrors the Node profile's ~/.winmux/devices.json.
+fn trust_file() -> PathBuf {
+    std::env::var("WINMUX_TRUST_FILE").map(PathBuf::from).unwrap_or_else(|_| {
+        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
+        PathBuf::from(home).join(".winmux").join("devices.json")
     })
 }
 fn read_config() -> Value {
