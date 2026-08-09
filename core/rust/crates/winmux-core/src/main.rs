@@ -42,6 +42,7 @@ const GRACE: Duration = Duration::from_secs(30); // a detached shell survives th
 // A live terminal that outlives any single socket. The reader thread runs for the
 // session's whole life, appending to `scrollback` and forwarding to the attached sink.
 struct Session {
+    sid: String,
     shell: String,
     cwd: String,
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -49,6 +50,8 @@ struct Session {
     child: Mutex<Box<dyn Child + Send + Sync>>,
     inner: Mutex<SinkState>,
     detach_epoch: AtomicU64, // bumped on every attach/detach; the grace task checks it
+    dirty: std::sync::atomic::AtomicBool, // set on new output; the flusher persists then clears it
+    alive: std::sync::atomic::AtomicBool, // cleared when the reader thread ends, stopping the flusher
 }
 struct SinkState {
     scrollback: VecDeque<u8>,
@@ -87,8 +90,33 @@ fn now_ms() -> u128 {
 }
 
 fn new_sid() -> String {
-    let n = SID_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{:x}{:x}", now_ms(), n)
+    // 32 lowercase hex chars, like the Node server's ids — the backlog filename
+    // and the tab's recover-by key both depend on this exact shape.
+    let n = SID_COUNTER.fetch_add(1, Ordering::Relaxed) as u128;
+    let mix = now_ms().wrapping_mul(0x1_0000_0000).wrapping_add(n).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let v = mix ^ (mix.rotate_left(64)) ^ (now_ms() << 24) ^ n;
+    format!("{:032x}", v)
+}
+
+// The backlog dir sits next to the config file, so a restarted process on the same
+// config reads the same dir the previous one wrote (mirrors the Node server).
+fn backlog_dir() -> PathBuf {
+    config_file().parent().map(|p| p.join("backlog")).unwrap_or_else(|| PathBuf::from("backlog"))
+}
+
+fn backlog_path(sid: &str) -> Option<PathBuf> {
+    if sid.is_empty() || !sid.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') { return None; }
+    Some(backlog_dir().join(format!("{sid}.json")))
+}
+
+// Persist a session's scrollback so it survives a full process restart. Atomic
+// (tmp + rename); dev is empty because the Rust core is loopback-only for now.
+fn save_backlog(sid: &str, shell: &str, cwd: &str, buf: &str) {
+    let p = match backlog_path(sid) { Some(p) => p, None => return };
+    let _ = std::fs::create_dir_all(backlog_dir());
+    let body = json!({"id": sid, "dev": "", "shell": shell, "cwd": cwd, "buf": buf, "savedAt": now_ms() as u64});
+    let tmp = p.with_extension(format!("{}.tmp", std::process::id()));
+    if std::fs::write(&tmp, body.to_string()).is_ok() { let _ = std::fs::rename(&tmp, &p); }
 }
 
 fn shell_cmd(key: &str) -> (String, Vec<String>, String) {
@@ -158,6 +186,8 @@ async fn main() {
         .route("/api/config", get(api_config_get).post(api_config_post))
         .route("/api/update", get(api_update))
         .route("/shells", get(api_shells))
+        .route("/api/claude-sessions", get(api_claude_sessions))
+        .route("/api/backlog", get(api_backlog))
         .fallback_service(serve)
         .layer(axum::middleware::from_fn(no_store_html))
         .with_state(state);
@@ -214,6 +244,7 @@ fn spawn_session(shell_key: &str, cwd: &str, port: u16) -> Result<(String, Arc<S
     let writer = pair.master.take_writer().map_err(|e| format!("writer: {e}"))?;
 
     let session = Arc::new(Session {
+        sid: sid.clone(),
         shell: label,
         cwd: cwd.to_string(),
         master: Mutex::new(pair.master),
@@ -221,9 +252,13 @@ fn spawn_session(shell_key: &str, cwd: &str, port: u16) -> Result<(String, Arc<S
         child: Mutex::new(child),
         inner: Mutex::new(SinkState { scrollback: VecDeque::new(), attached: None }),
         detach_epoch: AtomicU64::new(0),
+        dirty: std::sync::atomic::AtomicBool::new(false),
+        alive: std::sync::atomic::AtomicBool::new(true),
     });
 
-    // Lifelong reader: appends to scrollback and pushes to whoever is attached now.
+    // Lifelong reader: appends to scrollback, pushes to whoever is attached now, and
+    // flags the scrollback dirty so the flusher persists it (trailing-edge, so the
+    // LAST line before a quiet restart is never dropped).
     let sref = session.clone();
     std::thread::spawn(move || {
         let mut reader = reader;
@@ -237,8 +272,26 @@ fn spawn_session(shell_key: &str, cwd: &str, port: u16) -> Result<(String, Arc<S
                     for &b in &bytes { inner.scrollback.push_back(b); }
                     while inner.scrollback.len() > SCROLLBACK_CAP { inner.scrollback.pop_front(); }
                     if let Some(tx) = &inner.attached { let _ = tx.send(bytes); }
+                    drop(inner);
+                    sref.dirty.store(true, Ordering::Relaxed);
                 }
             }
+        }
+        sref.alive.store(false, Ordering::Relaxed);
+    });
+
+    // Flusher: every 600ms, if the scrollback changed, persist it to disk. This is
+    // a trailing-edge debounce — the last output before a restart is always saved
+    // within ~600ms of quiescence, and idle sessions cost no writes.
+    let fref = session.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(600));
+            if fref.dirty.swap(false, Ordering::Relaxed) {
+                let snap: Vec<u8> = { fref.inner.lock().unwrap().scrollback.iter().copied().collect() };
+                save_backlog(&fref.sid, &fref.shell, &fref.cwd, &String::from_utf8_lossy(&snap));
+            }
+            if !fref.alive.load(Ordering::Relaxed) { break; }
         }
     });
     Ok((sid, session))
@@ -362,6 +415,65 @@ async fn no_store_html(req: axum::extract::Request, next: axum::middleware::Next
     });
     if app_asset { res.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store")); }
     res
+}
+
+// ---- /api/claude-sessions -----------------------------------------------
+// The real Claude conversation ids for a folder, so a tab can arm
+// `claude --resume <id>` instead of guessing "the latest". Claude keeps one dir
+// per cwd under ~/.claude/projects, named by replacing every non-alphanumeric
+// char of the resolved path with '-', holding one <id>.jsonl each. We read file
+// NAMES + mtimes only — never a transcript's contents. Desk-only (Node 403s the
+// phone; the Rust core is loopback-only until the phone door lands).
+async fn api_claude_sessions(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let cwd = q.get("cwd").cloned().unwrap_or_default();
+    if cwd.is_empty() {
+        return Json(json!({"ok": false, "error": "missing cwd", "sessions": []}));
+    }
+    // Mirror Node's path.resolve(cwd).replace(/[^a-zA-Z0-9]/g,'-'). The frontend
+    // passes an already-absolute cwd, so a per-char replace matches path.resolve.
+    // ponytail: relative/`..` cwds aren't normalized first; frontend never sends them.
+    let key: String = cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_else(|_| ".".into());
+    let dir = PathBuf::from(home).join(".claude").join("projects").join(&key);
+    let dir_str = dir.to_string_lossy().to_string();
+    let mut out: Vec<Value> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.to_lowercase().ends_with(".jsonl") { continue; }
+            let meta = match e.metadata() { Ok(m) => m, Err(_) => continue };
+            if meta.len() == 0 { continue; }
+            let mtime = meta.modified().ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as f64).unwrap_or(0.0);
+            let id = &name[..name.len() - 6]; // strip ".jsonl"
+            out.push(json!({"id": id, "mtime": mtime, "size": meta.len()}));
+        }
+    }
+    // No dir = folder never ran Claude → a normal empty answer, not an error.
+    out.sort_by(|a, b| b["mtime"].as_f64().unwrap_or(0.0).partial_cmp(&a["mtime"].as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
+    out.truncate(25);
+    Json(json!({"ok": true, "dir": dir_str, "sessions": out}))
+}
+
+// ---- /api/backlog -------------------------------------------------------
+// After a full restart the fresh process reads the previous one's on-disk
+// scrollback (keyed by sid) and replays it as dimmed history above a new prompt.
+async fn api_backlog(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let sid = q.get("sid").cloned().unwrap_or_default();
+    let bl = backlog_path(&sid)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok());
+    match bl {
+        Some(o) if o.is_object() => Json(json!({
+            "found": true,
+            "buf": o.get("buf").and_then(|v| v.as_str()).unwrap_or(""),
+            "shell": o.get("shell").and_then(|v| v.as_str()).unwrap_or(""),
+            "cwd": o.get("cwd").and_then(|v| v.as_str()).unwrap_or(""),
+            "savedAt": o.get("savedAt").and_then(|v| v.as_u64()).unwrap_or(0),
+        })).into_response(),
+        _ => (axum::http::StatusCode::NOT_FOUND, Json(json!({"found": false}))).into_response(),
+    }
 }
 
 // ---- /shells ------------------------------------------------------------
