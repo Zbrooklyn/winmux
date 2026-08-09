@@ -127,9 +127,22 @@ fn write_instance(port: u16) {
 #[tokio::main]
 async fn main() {
     let public = resolve_public_dir();
-    let port: u16 = std::env::var("WINMUX_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(9920);
-    let state = Arc::new(AppState::new(port));
+    let want: u16 = std::env::var("WINMUX_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(9920);
 
+    // Bind the first free port at/after the requested one instead of crashing on a
+    // busy port (mirrors the Node server's pickPort). Tailscale-collision avoidance
+    // is deferred — this is the universal "port in use, try the next" fallback.
+    let mut listener = None;
+    let mut port = want;
+    for p in want..want.saturating_add(10) {
+        match tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], p))).await {
+            Ok(l) => { listener = Some(l); port = p; break; }
+            Err(_) => { if p != want { continue; } eprintln!("winmux-core: port {p} busy, trying the next"); }
+        }
+    }
+    let listener = listener.unwrap_or_else(|| { eprintln!("winmux-core: no free port in {want}..{}", want + 10); std::process::exit(1); });
+
+    let state = Arc::new(AppState::new(port));
     let shutdown_state = state.clone();
     let serve = ServeDir::new(&public).append_index_html_on_directories(true);
     let app = Router::new()
@@ -151,10 +164,8 @@ async fn main() {
         std::process::exit(0);
     });
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     write_instance(port);
-    println!("winmux-core: serving {} on http://{}  (control+rpc+resume live)", public.display(), addr);
-    let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
+    println!("winmux-core: serving {} on http://127.0.0.1:{port}  (control+rpc+resume live)", public.display());
     axum::serve(listener, app).await.expect("serve");
 }
 
