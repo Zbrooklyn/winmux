@@ -88,6 +88,28 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     cmd.ws.close();
   } catch (e) { ok('cmd.exe spawns via the same /pty path', false, { err: String(e.message) }); }
 
+  // 5a. session survival: a shell outlives its socket; reconnecting by sid resumes it
+  //     with scrollback replayed, and a stale sid yields a fresh (lost) session.
+  const s1 = await openPty('?shell=powershell');
+  const survSid = s1.meta.sid;
+  send(s1.ws, { t: 'i', d: '"SURVIVE_" + (100+11)\r' });
+  await wait(1500);
+  ok('marker ran before disconnect', /SURVIVE_111/.test(s1.text()));
+  s1.ws.close();                       // drop the socket; the shell must keep running
+  await wait(500);
+  const s2 = await openPty('?sid=' + survSid);
+  ok('reconnecting by sid resumes the same shell', s2.meta.resumed === true && s2.meta.sid === survSid, { resumed: s2.meta.resumed });
+  await wait(400);
+  ok('scrollback is replayed on resume', /SURVIVE_111/.test(s2.text()));
+  // the resumed shell still has live state (its command history / working shell)
+  send(s2.ws, { t: 'i', d: '"STILLHERE_" + (5*5)\r' });
+  await wait(1200);
+  ok('the resumed shell is still live', /STILLHERE_25/.test(s2.text()));
+  s2.ws.close();
+  const s3 = await openPty('?sid=deadbeefnope');
+  ok('a stale sid yields a fresh lost session', s3.meta.resumed === false && s3.meta.lost === true, { lost: s3.meta.lost });
+  s3.ws.close();
+
   // 5b. /api/info answers the `winmux status` verb without a control client
   const info = await get('/api/info');
   let infoBody = {}; try { infoBody = JSON.parse(info.body); } catch (e) {}

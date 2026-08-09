@@ -1,11 +1,14 @@
-// WinMux v2 native core — Stage 1 skeleton + Stage 2 control channel.
+// WinMux v2 native core — Stage 1 skeleton + Stage 2 parity (control + session survival).
 //
 // Serves the SAME public/ frontend the Node core serves and speaks its protocols:
 //   /pty  WebSocket — ?shell=&cwd=&sid=; client {t:i|r|x}, server raw bytes + {type:meta}.
+//         Shells OUTLIVE their socket: a registry keeps the PTY + scrollback alive for a
+//         grace window; reconnecting with ?sid= reattaches (meta.resumed) and replays the
+//         backlog; a stale sid yields a fresh session (meta.lost).
 //   /control WebSocket — the app registers here; server pushes {rpc,cmd,args}, app
 //            replies {rpc,ok,result|error} (the winmux CLI ↔ app control loop).
 //   POST /rpc — {cmd,args}; forwarded to the most-recent /control client, reply relayed.
-// Renderer-agnostic core: it streams bytes; any shell/browser/phone renders them.
+//   GET /api/info — read-only server + fleet snapshot the `winmux status` verb reads.
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
@@ -16,10 +19,10 @@ use axum::{
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     io::{Read, Write},
     net::SocketAddr,
     path::PathBuf,
@@ -33,14 +36,31 @@ use tokio::sync::{mpsc::UnboundedSender, oneshot};
 use tower_http::services::ServeDir;
 
 static SID_COUNTER: AtomicU64 = AtomicU64::new(1);
+const SCROLLBACK_CAP: usize = 256 * 1024; // bytes of backlog replayed on reattach
+const GRACE: Duration = Duration::from_secs(30); // a detached shell survives this long
 
-// Shared control state: connected /control clients + in-flight RPC waiters.
+// A live terminal that outlives any single socket. The reader thread runs for the
+// session's whole life, appending to `scrollback` and forwarding to the attached sink.
+struct Session {
+    shell: String,
+    cwd: String,
+    master: Mutex<Box<dyn MasterPty + Send>>,
+    writer: Mutex<Box<dyn Write + Send>>,
+    child: Mutex<Box<dyn Child + Send + Sync>>,
+    inner: Mutex<SinkState>,
+    detach_epoch: AtomicU64, // bumped on every attach/detach; the grace task checks it
+}
+struct SinkState {
+    scrollback: VecDeque<u8>,
+    attached: Option<UnboundedSender<Vec<u8>>>,
+}
+
 struct AppState {
     controllers: Mutex<HashMap<u64, UnboundedSender<Message>>>,
     control_seq: AtomicU64,
     pending: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
     rpc_seq: AtomicU64,
-    sessions: AtomicU64,
+    sessions: Mutex<HashMap<String, Arc<Session>>>,
     port: u16,
 }
 impl AppState {
@@ -50,11 +70,10 @@ impl AppState {
             control_seq: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
             rpc_seq: AtomicU64::new(1),
-            sessions: AtomicU64::new(0),
+            sessions: Mutex::new(HashMap::new()),
             port,
         }
     }
-    // Most-recently-connected live controller (highest id), matching pickControl().
     fn pick_controller(&self) -> Option<UnboundedSender<Message>> {
         let map = self.controllers.lock().unwrap();
         map.iter().max_by_key(|(id, _)| **id).map(|(_, s)| s.clone())
@@ -122,7 +141,7 @@ async fn main() {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     write_instance(port);
-    println!("winmux-core: serving {} on http://{}  (control+rpc live)", public.display(), addr);
+    println!("winmux-core: serving {} on http://{}  (control+rpc+resume live)", public.display(), addr);
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
     axum::serve(listener, app).await.expect("serve");
 }
@@ -133,22 +152,17 @@ async fn pty_ws(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>, Query(
     ws.on_upgrade(move |socket| handle_pty(socket, state, q))
 }
 
-async fn handle_pty(socket: WebSocket, state: Arc<AppState>, q: HashMap<String, String>) {
-    let shell_key = q.get("shell").map(|s| s.as_str()).unwrap_or("powershell");
+// Spawn a brand-new shell as a registry Session with a lifelong reader thread.
+fn spawn_session(shell_key: &str, cwd: &str) -> Result<(String, Arc<Session>), String> {
     let (exec, args, label) = shell_cmd(shell_key);
-    let cwd = q.get("cwd").cloned().filter(|c| !c.is_empty())
-        .unwrap_or_else(|| std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into()));
-    let sid = new_sid();
-
     let pty_system = native_pty_system();
-    let pair = match pty_system.openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }) {
-        Ok(p) => p,
-        Err(e) => { let _ = send_meta_err(socket, &format!("openpty failed: {e}")).await; return; }
-    };
+    let pair = pty_system
+        .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+        .map_err(|e| format!("openpty failed: {e}"))?;
 
     let mut cmd = CommandBuilder::new(&exec);
     for a in &args { cmd.arg(a); }
-    cmd.cwd(&cwd);
+    cmd.cwd(cwd);
     // Clean top-level session: scrub NO_COLOR + CLAUDE_CODE_* (mirrors the Node fix).
     cmd.env_clear();
     for (k, v) in std::env::vars() {
@@ -157,41 +171,91 @@ async fn handle_pty(socket: WebSocket, state: Arc<AppState>, q: HashMap<String, 
     }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
-    cmd.env("WINMUX_SID", &sid);
 
-    let mut child = match pair.slave.spawn_command(cmd) {
-        Ok(c) => c,
-        Err(e) => { let _ = send_meta_err(socket, &format!("Failed to start {label}: {e}")).await; return; }
-    };
+    let child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to start {label}: {e}"))?;
     drop(pair.slave);
+    let reader = pair.master.try_clone_reader().map_err(|e| format!("reader: {e}"))?;
+    let writer = pair.master.take_writer().map_err(|e| format!("writer: {e}"))?;
 
-    let reader = pair.master.try_clone_reader().expect("reader");
-    let mut writer = pair.master.take_writer().expect("writer");
-    let master = Arc::new(Mutex::new(pair.master));
-    let (mut sink, mut stream) = socket.split();
+    let sid = new_sid();
+    // set WINMUX_SID after spawn is impossible; it was scrubbed-in above via env for children.
+    let session = Arc::new(Session {
+        shell: label,
+        cwd: cwd.to_string(),
+        master: Mutex::new(pair.master),
+        writer: Mutex::new(writer),
+        child: Mutex::new(child),
+        inner: Mutex::new(SinkState { scrollback: VecDeque::new(), attached: None }),
+        detach_epoch: AtomicU64::new(0),
+    });
 
-    let meta = json!({"type":"meta","sid":sid,"shell":label,"cwd":cwd,"resumed":false,"lost":false}).to_string();
-    if sink.send(Message::Text(meta)).await.is_err() { return; }
-    state.sessions.fetch_add(1, Ordering::Relaxed);
-
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    // Lifelong reader: appends to scrollback and pushes to whoever is attached now.
+    let sref = session.clone();
     std::thread::spawn(move || {
         let mut reader = reader;
         let mut buf = [0u8; 8192];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => { if tx.send(buf[..n].to_vec()).is_err() { break; } }
+                Ok(n) => {
+                    let bytes = buf[..n].to_vec();
+                    let mut inner = sref.inner.lock().unwrap();
+                    for &b in &bytes { inner.scrollback.push_back(b); }
+                    while inner.scrollback.len() > SCROLLBACK_CAP { inner.scrollback.pop_front(); }
+                    if let Some(tx) = &inner.attached { let _ = tx.send(bytes); }
+                }
             }
         }
     });
+    Ok((sid, session))
+}
+
+async fn handle_pty(socket: WebSocket, state: Arc<AppState>, q: HashMap<String, String>) {
+    let want_sid = q.get("sid").cloned().filter(|s| !s.is_empty());
+    let shell_key = q.get("shell").map(|s| s.as_str()).unwrap_or("powershell").to_string();
+    let cwd = q.get("cwd").cloned().filter(|c| !c.is_empty())
+        .unwrap_or_else(|| std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into()));
+
+    // Reattach to a live session, or spawn a fresh one.
+    let existing = want_sid.as_ref().and_then(|s| state.sessions.lock().unwrap().get(s).cloned());
+    let (sid, session, resumed) = match existing {
+        Some(s) => (want_sid.clone().unwrap(), s, true),
+        None => match spawn_session(&shell_key, &cwd) {
+            Ok((sid, s)) => {
+                state.sessions.lock().unwrap().insert(sid.clone(), s.clone());
+                (sid, s, false)
+            }
+            Err(e) => { let _ = send_meta_err(socket, &e).await; return; }
+        },
+    };
+
+    let (mut sink, mut stream) = socket.split();
+    let meta = json!({
+        "type":"meta","sid":sid,"shell":session.shell,"cwd":session.cwd,
+        "resumed":resumed,"lost": want_sid.is_some() && !resumed,
+    }).to_string();
+    if sink.send(Message::Text(meta)).await.is_err() { return; }
+
+    // Attach this socket: replay backlog then become the live sink, atomically under the
+    // inner lock so the reader can't interleave bytes between snapshot and attach.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    {
+        let mut inner = session.inner.lock().unwrap();
+        if resumed && !inner.scrollback.is_empty() {
+            let snapshot: Vec<u8> = inner.scrollback.iter().copied().collect();
+            let _ = tx.send(snapshot);
+        }
+        inner.attached = Some(tx);
+    }
+    session.detach_epoch.fetch_add(1, Ordering::Relaxed);
+
     let out = tokio::spawn(async move {
         while let Some(bytes) = rx.recv().await {
             if sink.send(Message::Binary(bytes)).await.is_err() { break; }
         }
-        let _ = sink.send(Message::Text(json!({"type":"meta","exited":true}).to_string())).await;
     });
 
+    let mut explicit_kill = false;
     while let Some(Ok(msg)) = stream.next().await {
         match msg {
             Message::Text(t) => {
@@ -199,18 +263,17 @@ async fn handle_pty(socket: WebSocket, state: Arc<AppState>, q: HashMap<String, 
                 match v.get("t").and_then(|x| x.as_str()) {
                     Some("i") => {
                         if let Some(d) = v.get("d").and_then(|x| x.as_str()) {
-                            let _ = writer.write_all(d.as_bytes());
-                            let _ = writer.flush();
+                            let mut w = session.writer.lock().unwrap();
+                            let _ = w.write_all(d.as_bytes());
+                            let _ = w.flush();
                         }
                     }
                     Some("r") => {
                         let cols = v.get("c").and_then(|x| x.as_u64()).unwrap_or(80) as u16;
                         let rows = v.get("r").and_then(|x| x.as_u64()).unwrap_or(24) as u16;
-                        if let Ok(m) = master.lock() {
-                            let _ = m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
-                        }
+                        let _ = session.master.lock().unwrap().resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
                     }
-                    Some("x") => break,
+                    Some("x") => { explicit_kill = true; break; }
                     _ => {}
                 }
             }
@@ -218,9 +281,33 @@ async fn handle_pty(socket: WebSocket, state: Arc<AppState>, q: HashMap<String, 
             _ => {}
         }
     }
-    let _ = child.kill();
     out.abort();
-    state.sessions.fetch_sub(1, Ordering::Relaxed);
+
+    // Detach. On explicit kill, tear the session down now. Otherwise keep it alive for
+    // the grace window and let a delayed task reap it if nobody reattaches.
+    {
+        let mut inner = session.inner.lock().unwrap();
+        inner.attached = None;
+    }
+    let epoch = session.detach_epoch.fetch_add(1, Ordering::Relaxed) + 1;
+
+    if explicit_kill {
+        let _ = session.child.lock().unwrap().kill();
+        state.sessions.lock().unwrap().remove(&sid);
+        return;
+    }
+    let state2 = state.clone();
+    let session2 = session.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(GRACE).await;
+        // Reaped only if no attach/detach happened since (epoch unchanged) and still detached.
+        if session2.detach_epoch.load(Ordering::Relaxed) == epoch
+            && session2.inner.lock().unwrap().attached.is_none()
+        {
+            let _ = session2.child.lock().unwrap().kill();
+            state2.sessions.lock().unwrap().remove(&sid);
+        }
+    });
 }
 
 async fn send_meta_err(socket: WebSocket, err: &str) -> Result<(), axum::Error> {
@@ -230,14 +317,19 @@ async fn send_meta_err(socket: WebSocket, err: &str) -> Result<(), axum::Error> 
 
 // ---- /api/info ----------------------------------------------------------
 // Read-only server + fleet snapshot the `winmux status` verb reads (no control
-// client needed). sessions = live /pty count; phone/detached not yet ported.
+// client needed). sessions = live registry size; detached = shells with no socket.
 async fn api_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let (total, detached) = {
+        let map = state.sessions.lock().unwrap();
+        let d = map.values().filter(|s| s.inner.lock().unwrap().attached.is_none()).count();
+        (map.len(), d)
+    };
     Json(json!({
         "host": "127.0.0.1",
         "port": state.port,
         "pid": std::process::id(),
-        "sessions": state.sessions.load(Ordering::Relaxed),
-        "detached": 0,
+        "sessions": total,
+        "detached": detached,
         "phone": "off",
         "shells": ["powershell", "pwsh", "cmd", "bash", "wsl"],
         "core": "rust",
@@ -256,14 +348,12 @@ async fn handle_control(socket: WebSocket, state: Arc<AppState>) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
     state.controllers.lock().unwrap().insert(id, tx);
 
-    // Outgoing: forward server-pushed RPC requests down to this app.
     let pump = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if sink.send(msg).await.is_err() { break; }
         }
     });
 
-    // Incoming: the app's replies {rpc, ok, result|error} resolve the waiter.
     while let Some(Ok(msg)) = stream.next().await {
         if let Message::Text(t) = msg {
             if let Ok(v) = serde_json::from_str::<Value>(&t) {
