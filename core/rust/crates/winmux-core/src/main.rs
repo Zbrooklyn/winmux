@@ -156,6 +156,7 @@ async fn main() {
         .route("/api/findpath", get(api_findpath))
         .route("/api/clip", get(api_clip_get).post(api_clip_post))
         .route("/api/config", get(api_config_get).post(api_config_post))
+        .route("/api/update", get(api_update))
         .fallback_service(serve)
         .layer(axum::middleware::from_fn(no_store_html))
         .with_state(state);
@@ -360,6 +361,36 @@ async fn no_store_html(req: axum::extract::Request, next: axum::middleware::Next
     });
     if app_asset { res.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store")); }
     res
+}
+
+// ---- /api/update --------------------------------------------------------
+// Reports whether a newer release exists so the app's badge can light up.
+// WINMUX_FAKE_LATEST is the harness hook (prove the badge without a real release).
+const UPDATE_URL: &str = "https://github.com/Zbrooklyn/winmux/releases/latest";
+
+fn cmp_semver(a: &str, b: &str) -> i32 {
+    let parse = |s: &str| -> [i64; 3] {
+        let mut out = [0i64; 3];
+        for (i, p) in s.trim_start_matches('v').split('.').take(3).enumerate() {
+            out[i] = p.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
+        }
+        out
+    };
+    let (pa, pb) = (parse(a), parse(b));
+    for i in 0..3 { let d = pa[i] - pb[i]; if d != 0 { return if d > 0 { 1 } else { -1 }; } }
+    0
+}
+
+async fn api_update() -> impl IntoResponse {
+    let version = env!("CARGO_PKG_VERSION");
+    // ponytail: live GitHub-release fetch deferred; Node falls back to this same
+    // no-update default on any network failure, so it's a safe production default.
+    if let Ok(fl) = std::env::var("WINMUX_FAKE_LATEST") {
+        let fl = fl.trim_start_matches('v').to_string();
+        return Json(json!({ "current": version, "latest": fl,
+            "updateAvailable": cmp_semver(&fl, version) > 0, "url": UPDATE_URL }));
+    }
+    Json(json!({ "current": version, "latest": Value::Null, "updateAvailable": false, "url": UPDATE_URL }))
 }
 
 // ---- /api/info ----------------------------------------------------------
