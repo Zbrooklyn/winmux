@@ -40,14 +40,18 @@ struct AppState {
     control_seq: AtomicU64,
     pending: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
     rpc_seq: AtomicU64,
+    sessions: AtomicU64,
+    port: u16,
 }
 impl AppState {
-    fn new() -> Self {
+    fn new(port: u16) -> Self {
         Self {
             controllers: Mutex::new(HashMap::new()),
             control_seq: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
             rpc_seq: AtomicU64::new(1),
+            sessions: AtomicU64::new(0),
+            port,
         }
     }
     // Most-recently-connected live controller (highest id), matching pickControl().
@@ -105,13 +109,14 @@ fn write_instance(port: u16) {
 async fn main() {
     let public = resolve_public_dir();
     let port: u16 = std::env::var("WINMUX_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(9920);
-    let state = Arc::new(AppState::new());
+    let state = Arc::new(AppState::new(port));
 
     let serve = ServeDir::new(&public).append_index_html_on_directories(true);
     let app = Router::new()
         .route("/pty", get(pty_ws))
         .route("/control", get(control_ws))
         .route("/rpc", post(rpc_post))
+        .route("/api/info", get(api_info))
         .fallback_service(serve)
         .with_state(state);
 
@@ -124,11 +129,11 @@ async fn main() {
 
 // ---- /pty ---------------------------------------------------------------
 
-async fn pty_ws(ws: WebSocketUpgrade, Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_pty(socket, q))
+async fn pty_ws(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>, Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_pty(socket, state, q))
 }
 
-async fn handle_pty(socket: WebSocket, q: HashMap<String, String>) {
+async fn handle_pty(socket: WebSocket, state: Arc<AppState>, q: HashMap<String, String>) {
     let shell_key = q.get("shell").map(|s| s.as_str()).unwrap_or("powershell");
     let (exec, args, label) = shell_cmd(shell_key);
     let cwd = q.get("cwd").cloned().filter(|c| !c.is_empty())
@@ -167,6 +172,7 @@ async fn handle_pty(socket: WebSocket, q: HashMap<String, String>) {
 
     let meta = json!({"type":"meta","sid":sid,"shell":label,"cwd":cwd,"resumed":false,"lost":false}).to_string();
     if sink.send(Message::Text(meta)).await.is_err() { return; }
+    state.sessions.fetch_add(1, Ordering::Relaxed);
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
     std::thread::spawn(move || {
@@ -214,11 +220,28 @@ async fn handle_pty(socket: WebSocket, q: HashMap<String, String>) {
     }
     let _ = child.kill();
     out.abort();
+    state.sessions.fetch_sub(1, Ordering::Relaxed);
 }
 
 async fn send_meta_err(socket: WebSocket, err: &str) -> Result<(), axum::Error> {
     let mut socket = socket;
     socket.send(Message::Text(json!({"type":"meta","error": err}).to_string())).await
+}
+
+// ---- /api/info ----------------------------------------------------------
+// Read-only server + fleet snapshot the `winmux status` verb reads (no control
+// client needed). sessions = live /pty count; phone/detached not yet ported.
+async fn api_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(json!({
+        "host": "127.0.0.1",
+        "port": state.port,
+        "pid": std::process::id(),
+        "sessions": state.sessions.load(Ordering::Relaxed),
+        "detached": 0,
+        "phone": "off",
+        "shells": ["powershell", "pwsh", "cmd", "bash", "wsl"],
+        "core": "rust",
+    }))
 }
 
 // ---- /control + /rpc ----------------------------------------------------

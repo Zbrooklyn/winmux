@@ -88,6 +88,11 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     cmd.ws.close();
   } catch (e) { ok('cmd.exe spawns via the same /pty path', false, { err: String(e.message) }); }
 
+  // 5b. /api/info answers the `winmux status` verb without a control client
+  const info = await get('/api/info');
+  let infoBody = {}; try { infoBody = JSON.parse(info.body); } catch (e) {}
+  ok('/api/info reports the running server (port+pid+core)', info.status === 200 && infoBody.port === PORT && infoBody.pid > 0 && infoBody.core === 'rust', { port: infoBody.port, core: infoBody.core });
+
   // 6. /rpc with no controller connected → 409 "no app connected"
   const noApp = await post('/rpc', { cmd: 'new-tab', args: {} });
   ok('/rpc with no app connected returns 409', noApp.status === 409 && /no app connected/.test(noApp.body), { status: noApp.status });
