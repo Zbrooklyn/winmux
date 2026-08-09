@@ -208,6 +208,8 @@ async fn main() {
         .route("/shells", get(api_shells))
         .route("/api/claude-sessions", get(api_claude_sessions))
         .route("/api/backlog", get(api_backlog))
+        .route("/api/phone", get(api_phone))
+        .route("/api/phone/devices", get(api_phone_devices))
         .fallback_service(serve)
         .layer(axum::middleware::from_fn(no_store_html))
         .with_state(state);
@@ -579,6 +581,32 @@ async fn api_md(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
 }
 
 // ---- /api/config --------------------------------------------------------
+// --- The phone door (read side) --------------------------------------------
+// The status the Settings panel and onboarding poll. These read routes are mounted
+// only on the loopback server, so canChange is always true and full device ids are
+// shown; the phone-facing (via_phone) view and the tailnet listener land in stage 3.
+// tailnetPeers is null for now — the Rust core does not yet query tailscale, and the
+// contract explicitly allows "a number, or null if it cannot count".
+fn phone_state(state: &AppState, via_phone: bool) -> Value {
+    json!({
+        "on": state.phone.is_on(),
+        "ip": Value::Null,
+        "port": state.port,
+        "url": "",
+        "canChange": !via_phone,
+        "tailscale": false,
+        "trustTailnet": state.phone.trust_tailnet(),
+        "tailnetPeers": Value::Null,
+        "devices": state.phone.device_list(via_phone),
+    })
+}
+async fn api_phone(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(phone_state(&state, false))
+}
+async fn api_phone_devices(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(json!({ "devices": state.phone.device_list(false), "canChange": true }))
+}
+
 // A hand-editable JSON config on disk (WINMUX_CONFIG_FILE): GET returns it, POST
 // replaces whole sub-objects (settings/themes/keymap) and leaves the rest intact.
 fn config_file() -> PathBuf {
