@@ -176,7 +176,9 @@ var Projects = (function () {
   function list() { return api('GET', '/api/projects'); }
   function read(path) { return api('GET', '/api/project?path=' + encodeURIComponent(path)); }
   function save(name, path, layout) { return api('POST', '/api/project', { name: name, path: path, layout: layout }); }
-  function forget(path) { return api('DELETE', '/api/project', { path: path }); }
+  // DELETE takes the path in the QUERY, not a body — DELETE-with-body is unevenly
+  // supported (the body can arrive empty at the server); a query param is reliable.
+  function forget(path, trash) { return api('DELETE', '/api/project?path=' + encodeURIComponent(path) + (trash ? '&trash=1' : '')); }
   return { api: api, list: list, read: read, save: save, forget: forget };
 })();
 ```

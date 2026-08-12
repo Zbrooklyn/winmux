@@ -311,6 +311,42 @@ function writeConfigAtomic(obj) {
   } catch (e) { return false; }
 }
 
+// ---- projects: workspaces saved as real files on disk -----------------------
+// A project is a `.json` the user can back up, move, or share; the server owns the
+// filesystem so every face (Electron, browser, phone) and both engines reach it the
+// same way, over /api/project(s). The recents index lives beside config in ~/.winmux
+// (a cache, not the source of truth), so it honours WINMUX_CONFIG_FILE and never
+// pollutes the real home during tests — same trick as BACKLOG_DIR.
+function projectsDir() {
+  const d = process.env.WINMUX_PROJECTS_DIR || path.join(os.homedir(), 'Documents', 'WinMux Projects');
+  try { fs.mkdirSync(d, { recursive: true }); } catch (e) {}
+  return d;
+}
+const RECENTS_FILE = path.join(path.dirname(CONFIG_FILE), 'recents.json');
+function readRecents() {
+  try { const r = JSON.parse(fs.readFileSync(RECENTS_FILE, 'utf8')); return Array.isArray(r.recents) ? r.recents : []; }
+  catch (e) { return []; }
+}
+function writeRecents(list) {
+  try {
+    fs.mkdirSync(path.dirname(RECENTS_FILE), { recursive: true });
+    const tmp = RECENTS_FILE + '.' + process.pid + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({ recents: list.slice(0, 30) }, null, 2));
+    fs.renameSync(tmp, RECENTS_FILE);
+  } catch (e) {}
+}
+// Only ever touch a real .json file — reject anything without the extension so a
+// bad path can't be steered at an arbitrary host file.
+function safeProjectPath(p) {
+  if (!p || typeof p !== 'string') return null;
+  const r = path.resolve(p);
+  return /\.json$/i.test(r) ? r : null;
+}
+function tabCount(layout) {
+  try { return (layout.cols || []).reduce((a, c) => a + c.reduce((b, pd) => b + (pd.tabs || []).length, 0), 0); }
+  catch (e) { return 0; }
+}
+
 // Start WinMux at logon. A copy of a tiny launcher in the user's Startup folder
 // makes the app simply present after a reboot instead of "not running until
 // someone remembers", which is what makes the scrollback-restore above actually
@@ -802,6 +838,75 @@ function handle(req, res, viaPhone) {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({ ok: true, config: readConfig() }));
     return;
+  }
+
+  // Projects — save / list / read / forget a workspace file. Reads and writes host
+  // disk, so it is desk-door only: a phone attaches to an already-open workspace and
+  // has no business writing .json files onto the PC. Same guard as /api/md.
+  if (urlPath === '/api/projects' || urlPath === '/api/project') {
+    if (viaPhone) {
+      res.writeHead(403, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ error: 'projects are available only at the PC, not over the network' }));
+    }
+    const sendJson = (code, obj) => {
+      res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(obj));
+    };
+    // GET /api/projects — recents (with missing flags) + the default folder.
+    if (urlPath === '/api/projects') {
+      const list = readRecents().map((r) => Object.assign({}, r, { missing: !fs.existsSync(r.path) }));
+      return sendJson(200, { dir: projectsDir(), recents: list });
+    }
+    // GET /api/project?path= — one project's contents.
+    if (req.method === 'GET') {
+      let q = {}; try { q = Object.fromEntries(new URL(req.url, 'http://x').searchParams); } catch (e) {}
+      const p = safeProjectPath(q.path);
+      if (!p || !fs.existsSync(p)) return sendJson(404, { error: 'not found' });
+      try {
+        const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+        return sendJson(200, { name: j.name || path.basename(p, '.json'), layout: j.layout || j, modified: j.modified || 0 });
+      } catch (e) { return sendJson(400, { error: 'unreadable' }); }
+    }
+    // POST /api/project { name, path?, layout } — write the file, upsert recents.
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (d) => { body += d; if (body.length > 4000000) req.destroy(); });
+      req.on('end', () => {
+        let incoming = {}; try { incoming = JSON.parse(body || '{}') || {}; } catch (e) {}
+        const name = String(incoming.name || 'Untitled').trim() || 'Untitled';
+        let p = safeProjectPath(incoming.path);
+        if (!p) {
+          const slug = name.replace(/[^\w.\- ]+/g, '').replace(/\s+/g, '-').toLowerCase() || 'project';
+          p = path.join(projectsDir(), slug + '.winmux.json');
+        }
+        const now = Date.now();
+        let created = now; try { created = JSON.parse(fs.readFileSync(p, 'utf8')).created || now; } catch (e) {}
+        const doc = { winmuxProject: 1, name, created, modified: now, layout: incoming.layout || {} };
+        try {
+          fs.mkdirSync(path.dirname(p), { recursive: true });
+          const tmp = p + '.' + process.pid + '.tmp';
+          fs.writeFileSync(tmp, JSON.stringify(doc, null, 2));
+          fs.renameSync(tmp, p);
+        } catch (e) { return sendJson(500, { error: 'write failed: ' + e.message }); }
+        const rec = { path: p, name, tabs: tabCount(incoming.layout || {}), opened: now };
+        writeRecents([rec].concat(readRecents().filter((r) => r.path !== p)));
+        return sendJson(200, { path: p });
+      });
+      return;
+    }
+    // DELETE /api/project?path=&trash=1 — drop from recents; unlink only with trash.
+    // The path rides in the query, not a request body: DELETE-with-body is unevenly
+    // supported across HTTP clients/proxies (the body can arrive empty), so a query
+    // param is the one form every client sends reliably.
+    if (req.method === 'DELETE') {
+      let q = {}; try { q = Object.fromEntries(new URL(req.url, 'http://x').searchParams); } catch (e) {}
+      const p = safeProjectPath(q.path);
+      if (!p) return sendJson(400, { error: 'bad path' });
+      writeRecents(readRecents().filter((r) => r.path !== p));
+      if (q.trash === '1' || q.trash === 'true') { try { fs.unlinkSync(p); } catch (e) {} }
+      return sendJson(200, { ok: true });
+    }
+    return sendJson(405, { error: 'method not allowed' });
   }
 
   // Start WinMux at logon. GET reports whether the Startup launcher exists; POST
