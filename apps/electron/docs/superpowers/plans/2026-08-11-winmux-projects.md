@@ -8,6 +8,17 @@
 
 **Tech Stack:** Node `http` server (`server.cjs`), vanilla-JS frontend (`public/app.js`, `index.html`, `public/cockpit.css`), `verify.cjs` Playwright harness. No new dependencies.
 
+## Status — 2026-08-12 (shipped, `feature/phase8-electron-shell`)
+
+All six tasks landed; a few deliberate deviations from the sub-steps below:
+
+- **Task 1** ✅ server store + `/api/project(s)` (gated desk-door only; DELETE takes the path in the **query**, not a body). Enriched recents with `dir` + `shells`.
+- **Task 2** ✅ but the panel is a **centered `.ovl` overlay** (`#projects-ovl`), not the cramped `#sessmenu` popover — the popover read "glitchy and incomplete" and was rebuilt. Rows use `.pjrow*` classes (renamed off `.prow*` to avoid colliding with the sidebar's own project rows).
+- **Task 3** ✅ save-on-close via an **on-demand dirty signature** (`projectDirty()` compares the live `projectLayout()` against a baseline captured at save/open/boot) rather than per-mutation `markDirty()` hooks — nothing to forget to instrument. Prompt is a 3-way `confirmDialog3` (Save / Don't save / Cancel) on the deliberate titlebar close. Alt+F4/taskbar close still exits directly; live state is auto-restored next launch regardless, so nothing is truly lost.
+- **Task 4** ✅ one-time `migrateLayoutsOnce()` behind the `ct-projects-migrated` marker.
+- **Task 5** — entry points shipped as footer icon + `Ctrl+Alt+O` + palette; **on-launch = "Never auto-show"** (Edward's call: always open into the last workspace, Projects only on demand). The optional sidebar "Projects row" was **declined** to keep the calm 3-door sidebar.
+- **Task 6** ✅ harness proves save-on-close end-to-end (bind → dirty → prompt → Don't-save proceeds), isolated to a scratch `WINMUX_PROJECTS_DIR`; README gained a **Projects** section. Full harness green.
+
 ## Global Constraints
 
 - Canonical copy: `C:\Users\EDWAR\Dropbox\AI_Projects_Claude\projects\winmux`, branch `feature/phase8-electron-shell`. All work here.

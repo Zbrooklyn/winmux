@@ -2950,7 +2950,27 @@
     var b = winBridge(); if (b && b.maximize) { b.maximize(); return; }
     try { if (!document.fullscreenElement) document.documentElement.requestFullscreen(); else document.exitFullscreen(); } catch (e) {}
   });
-  document.getElementById('wc-close').addEventListener('click', function () { var b = winBridge(); if (b && b.close) { b.close(); return; } window.close(); });
+  // Closing with unsaved project changes should not silently leave the named project
+  // file behind. Live session state is always auto-persisted (ct-live) and restored
+  // next launch, so this guards the *project file*, not the working state — and only
+  // the deliberate titlebar close is intercepted (Alt+F4 / taskbar close still exits
+  // directly; the live state is restored on relaunch either way, still showing dirty).
+  function doWindowClose() { var b = winBridge(); if (b && b.close) { b.close(); return; } window.close(); }
+  function requestWindowClose() {
+    if (!projectDirty()) { doWindowClose(); return; }
+    var cur = readCurrent();
+    confirmDialog3('Save changes to “' + (cur ? cur.name : 'this project') + '”?',
+      'Your workspace changed since it was last saved to its project file.',
+      'Save', 'Don’t save',
+      function () {
+        Projects.save(cur.name, cur.path, projectLayout()).then(function (r) {
+          if (r && r.path) { markProjectClean(); doWindowClose(); }
+          else notify('Save failed', (r && r.error) || 'could not write the project file');
+        });
+      },
+      doWindowClose);
+  }
+  document.getElementById('wc-close').addEventListener('click', requestWindowClose);
   // ── Diff leaf (git changes as a pane tab) ───────────────────────────────
   // The git-diff surface is a pane tab, not a side dock. renderDiff/renderHunks
   // paint a git status into a given box using per-leaf state {files,active,refresh},
@@ -3113,6 +3133,20 @@
     openOvl('dlg-ovl');
     body.querySelector('[data-cancel]').addEventListener('click', function () { closeOvl('dlg-ovl'); });
     body.querySelector('[data-ok]').addEventListener('click', function () { closeOvl('dlg-ovl'); onOk(); });
+  }
+  // Three-way close prompt: Save / Don't save / Cancel. Cancel just dismisses; the
+  // other two run their callback. Used when closing a window with unsaved project
+  // changes so the named project file is not silently left behind.
+  function confirmDialog3(title, text, saveLabel, discardLabel, onSave, onDiscard) {
+    var body = document.getElementById('dlg-body');
+    body.innerHTML = '<h3>' + esc(title) + '</h3><p>' + esc(text) + '</p>' +
+      '<div class="drow"><span class="btn" data-cancel>Cancel</span>' +
+      '<span class="btn" data-discard>' + esc(discardLabel) + '</span>' +
+      '<span class="btn primary" data-ok>' + esc(saveLabel) + '</span></div>';
+    openOvl('dlg-ovl');
+    body.querySelector('[data-cancel]').addEventListener('click', function () { closeOvl('dlg-ovl'); });
+    body.querySelector('[data-discard]').addEventListener('click', function () { closeOvl('dlg-ovl'); onDiscard(); });
+    body.querySelector('[data-ok]').addEventListener('click', function () { closeOvl('dlg-ovl'); onSave(); });
   }
   // An in-app text prompt. window.prompt() THROWS in Electron ("not supported"),
   // which silently killed New group / Rename group in the desktop app — so naming
@@ -3372,6 +3406,19 @@
     d.cols.forEach(function (c) { c.forEach(function (pd) { (pd.tabs || []).forEach(function (td) { td.sid = ''; }); }); });
     return d;
   }
+  // Dirty-tracking for save-on-close. The baseline is the layout signature captured
+  // the moment we bind to a project (save / open / boot-restore); projectDirty() is
+  // true when a project is open and the live layout has drifted from that baseline.
+  // Computed on demand from the same template Save writes, so there is no per-mutation
+  // bookkeeping to forget — every real change to the panes shows up here.
+  var projectBaseline = null;
+  function projectSig() { try { return JSON.stringify(projectLayout()); } catch (e) { return null; } }
+  function markProjectClean() { projectBaseline = projectSig(); }
+  function projectDirty() {
+    if (!readCurrent() || projectBaseline === null) return false;
+    var s = projectSig();
+    return s !== null && s !== projectBaseline;
+  }
   // One-time migration: fold any browser-storage layouts (the retired system) into
   // real project files, so nothing a returning user saved is lost. Runs once, guarded
   // by a marker; the ct-layouts blob is left untouched as a silent safety copy — we
@@ -3432,7 +3479,6 @@
   function toggleLayoutMenu(anchor) {
     if (sessmenu.hasAttribute('data-open')) closeLayoutMenu(); else openLayoutMenu(anchor);
   }
-  var PROJECT_DIRTY = false;   // Task 3 hooks this to save-on-close; false for now.
   function doSaveProject() {
     var cur = readCurrent();
     var name = (smName.value || (cur && cur.name) || '').trim();
@@ -3440,7 +3486,7 @@
     Projects.save(name, cur ? cur.path : null, projectLayout()).then(function (r) {
       if (!r || !r.path) { notify('Save failed', (r && r.error) || 'could not write the project file'); return; }
       setCurrent(r.path, name);
-      PROJECT_DIRTY = false;
+      markProjectClean();
       if (typeof updateProjectRow === 'function') updateProjectRow();
       renderLayouts();
       notify('Project saved', name);
@@ -3472,7 +3518,7 @@
   function newProject() {
     closeLayoutMenu();
     var start = function () {
-      setCurrent(null); PROJECT_DIRTY = false;
+      setCurrent(null); projectBaseline = null;
       restoreLayout({ v: SCHEMA_VERSION, cols: [[{ active: 0, tabs: [{ type: 'terminal', shell: startShell(), cwd: '' }] }]], group: '' });
       if (typeof updateProjectRow === 'function') updateProjectRow();
     };
@@ -3499,7 +3545,7 @@
     if (!l) return;
     var apply = function () {
       restoreLayout(l.desc);
-      if (l.path) { setCurrent(l.path, l.name); PROJECT_DIRTY = false; if (typeof updateProjectRow === 'function') updateProjectRow(); }
+      if (l.path) { setCurrent(l.path, l.name); markProjectClean(); if (typeof updateProjectRow === 'function') updateProjectRow(); }
     };
     var live = allTerms().filter(function (t) { return t.state === 'open'; }).length;
     if (S.confirmClose && live) {
@@ -4378,6 +4424,9 @@
     // refused or failed restore falls through to a clean default rather than a lie.
     if (liveState) restored = restoreLayout(liveState);
   } catch (e) {}
+  // If this window is still bound to a project, treat the restored layout as the
+  // saved baseline so save-on-close only fires on changes made this session.
+  try { if (readCurrent()) markProjectClean(); } catch (e) {}
   if (!restored) {
     // Wait for the real shell list before opening the first-ever tab, so it lands on the
     // true default (PowerShell 7 when installed) instead of the 'powershell' placeholder.

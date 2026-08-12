@@ -110,6 +110,9 @@ const PORT_LEAFPERSIST = 9957; // ST6: non-terminal leaves survive a page reload
 const PORT_PREDICT = 9958;    // Phase 2: pwsh PSReadLine inline history prediction + RightArrow accept
 const PORT_IMAGES = 9959;     // Phase 3: inline images (addon-image) + `winmux image` verb
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
+// Save-on-close writes real project files; point them at a scratch dir so a test
+// never drops a "Verify Project.winmux.json" into the real Documents\WinMux Projects.
+const PROJECTS_TMP = path.join(os.tmpdir(), 'winmux-verify-projects');
 
 // Every server this harness starts gets its own scratch guest list. Two reasons,
 // both real: @edward's actual remembered phones must never be edited by a test
@@ -2204,6 +2207,7 @@ check('footer', PORT_FOOTER, async ({ browser, base, t, shot }) => {
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(4000);
+  await page.evaluate(() => { try { document.querySelectorAll('.ovl[data-open]').forEach((o) => o.removeAttribute('data-open')); } catch (e) {} });
 
   const n = (sel) => page.evaluate((s) => document.querySelectorAll(s).length, sel);
   const openId = (id) => page.evaluate((i) => { const e = document.getElementById(i); return !!(e && e.hasAttribute('data-open')); }, id);
@@ -2259,9 +2263,50 @@ check('footer', PORT_FOOTER, async ({ browser, base, t, shot }) => {
   await page.waitForTimeout(300);
   t('Settings opens the settings panel', await openId('settings-ovl'), 'settings-ovl');
   await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+
+  // Save-on-close: saving binds this window to a project file; a later change makes it
+  // dirty; closing then asks before dropping the change instead of exiting silently.
+  await page.click('#open-save');
+  await page.waitForTimeout(250);
+  await page.fill('#sm-name', 'Verify Project');
+  await page.click('#sm-save');
+  await page.waitForTimeout(800);
+  const bound = await page.evaluate(() => { try { return !!JSON.parse(localStorage.getItem('ct-current') || 'null'); } catch (e) { return false; } });
+  t('Saving binds this window to the project file', bound, { bound });
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+  // Stub the real teardown so the harness window survives a close click; record whether
+  // close was actually reached — a dirty project must block it.
+  await page.evaluate(() => {
+    window.__closed = false;
+    if (window.winmux) window.winmux.close = () => { window.__closed = true; };
+    try { window.close = () => { window.__closed = true; }; } catch (e) {}
+  });
+  // A clean (just-saved) project closes straight through — no prompt.
+  await page.click('#wc-close');
+  await page.waitForTimeout(250);
+  t('A saved (clean) project closes without a prompt',
+    !(await openId('dlg-ovl')) && (await page.evaluate(() => window.__closed === true)), 'clean-close');
+  await page.evaluate(() => { window.__closed = false; });
+  // Dirty it (add a tab) → closing asks first and does NOT close yet.
+  await page.click('#open-new');
+  await page.waitForTimeout(1000);
+  await page.click('#wc-close');
+  await page.waitForTimeout(300);
+  const promptUp = await openId('dlg-ovl');
+  const heldOpen = await page.evaluate(() => window.__closed === false);
+  const askTitle = await page.evaluate(() => { const h = document.querySelector('#dlg-body h3'); return h ? h.textContent : ''; });
+  t('A dirty project prompts before closing (and does not close yet)', promptUp && heldOpen, { promptUp, heldOpen });
+  t('The close prompt names the project and offers Don’t save',
+    /Verify Project/.test(askTitle) && (await openSel('#dlg-body [data-discard]')), askTitle);
+  // "Don’t save" lets the close proceed.
+  await page.click('#dlg-body [data-discard]');
+  await page.waitForTimeout(250);
+  t('“Don’t save” proceeds with the close', await page.evaluate(() => window.__closed === true), 'discard-closes');
 
   await page.close();
-});
+}, { WINMUX_PROJECTS_DIR: PROJECTS_TMP });
 
 // --- update notice: a newer release lights the .upbadge pill (never installs) ---
 // The server is booted with WINMUX_FAKE_LATEST=9.9.9 (via the check's env override),

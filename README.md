@@ -57,6 +57,15 @@ Open WinMux for the first time and it introduces itself once — what it is, the
 <img src="docs/screenshots/onboarding.png" alt="WinMux first-run onboarding" width="720">
 </div>
 
+## Projects
+
+A **project** is a real file on disk — a saved working setup (its group and tabs, each tab's folder, shell, and auto-resume). Not browser storage: a portable `.json` you can back up, copy to another machine, or check into a repo.
+
+- **Save** the current setup from the footer's *Save project* icon (or `Ctrl+Alt+S`, or the command palette). Name it and it writes `<name>.winmux.json` into `Documents\WinMux Projects` (override with `WINMUX_PROJECTS_DIR`).
+- **Open** a past project from the *Open project* icon (`Ctrl+Alt+O`) — the Recent list shows each project's folder, tab count, and shells — or *Open project file…* to pick a `.json` from anywhere. Opening rebuilds the panes with fresh shells.
+- **Save on close.** If you've changed a workspace since it was last saved to its project file, closing the window asks first — *Save* / *Don't save* / *Cancel* — so a named project isn't silently left behind. (Your live session state is always auto-restored on next launch regardless, so nothing is truly lost; this just keeps the project file current.)
+- From the CLI: `winmux open <file.json>` opens a saved project directly.
+
 ## Requirements
 
 - **Windows 10 or 11**
