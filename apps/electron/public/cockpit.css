@@ -290,7 +290,7 @@
   .oagent .otok{color:var(--faint);font-variant-numeric:tabular-nums;font-size:10.5px}
   .orch-rev{padding:6px 11px 9px;font-size:11px;color:var(--muted);border-top:1px solid var(--border)}.orch-rev b{color:var(--ok)}
   /* session save/load popover */
-  .sessmenu{display:none;position:fixed;z-index:90;left:10px;bottom:52px;width:252px;background:var(--bg1);border:1px solid var(--border);border-radius:10px;box-shadow:0 16px 44px rgba(0,0,0,.42);padding:9px}
+  .sessmenu{display:none;position:fixed;z-index:90;left:10px;bottom:52px;width:308px;background:var(--bg1);border:1px solid var(--border);border-radius:10px;box-shadow:0 16px 44px rgba(0,0,0,.42);padding:9px}
   .sessmenu[data-open]{display:block}
   .sessmenu .sm-title{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);padding:2px 3px 7px}
   .sessmenu .sm-save{display:flex;gap:6px;margin-bottom:8px}
@@ -304,6 +304,18 @@
   .sessmenu .sm-row .sm-del{width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:var(--faint);opacity:0;font-size:15px}
   .sessmenu .sm-row:hover .sm-del{opacity:1}.sessmenu .sm-row .sm-del:hover{background:color-mix(in srgb,var(--err) 14%,transparent);color:var(--err)}
   .sessmenu .sm-empty{padding:12px;text-align:center;color:var(--faint);font-size:11.5px}
+  /* projects panel additions (recents rows + top actions) */
+  .sessmenu .sm-actions{display:flex;gap:6px;margin-bottom:8px}
+  .sessmenu .sm-act{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 8px;border-radius:7px;background:var(--bg2);border:1px solid var(--border);color:var(--text);font-size:11.5px;font-weight:600;cursor:pointer}
+  .sessmenu .sm-act:hover{border-color:var(--border-s)}
+  .sessmenu .sm-act svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2}
+  .sessmenu .sm-seclbl{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:4px 3px 5px}
+  .sessmenu .sm-row .sm-dot{width:8px;height:8px;border-radius:50%;flex:none}
+  .sessmenu .sm-row .sm-col{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+  .sessmenu .sm-row .sm-col .sm-nm{flex:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sessmenu .sm-row .sm-file{font-size:10px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+  .sessmenu .sm-row.missing{opacity:.55}
+  .sessmenu .sm-miss{font-size:9px;color:var(--err);text-transform:uppercase;letter-spacing:.05em;margin-left:5px}
   /* modal overlay (settings / dialogs / cheat) */
   .ovl{display:none;position:fixed;inset:0;z-index:110;background:color-mix(in srgb,#000 45%,transparent);backdrop-filter:blur(2px);align-items:center;justify-content:center}
   .ovl[data-open]{display:flex}

@@ -3343,21 +3343,61 @@
   var sessmenu = document.getElementById('sessmenu');
   var smName = document.getElementById('sm-name');
   var smList = document.getElementById('sm-list');
-  function writeLayouts(list) { try { localStorage.setItem('ct-layouts', JSON.stringify(list.slice(0, 20))); } catch (e) {} }
+  // ---- projects: workspaces saved as real files on disk (server owns the disk) ----
+  // A project is the current workspace written to a .json the user can back up or
+  // move; the server exposes it over /api/project(s), so this is just fetch + render
+  // on top of the same snapshot()/restoreLayout() the live layout already uses.
+  var Projects = (function () {
+    function api(method, url, body) {
+      return fetch(url, { method: method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(function (r) { return r.json(); });
+    }
+    return {
+      list: function () { return api('GET', '/api/projects'); },
+      read: function (p) { return api('GET', '/api/project?path=' + encodeURIComponent(p)); },
+      save: function (name, path, layout) { return api('POST', '/api/project', { name: name, path: path, layout: layout }); },
+      // DELETE takes the path in the query, never a body — DELETE-with-body arrives
+      // empty across HTTP clients, so a query param is the reliable form.
+      forget: function (p, trash) { return api('DELETE', '/api/project?path=' + encodeURIComponent(p) + (trash ? '&trash=1' : '')); },
+    };
+  })();
+  // The current project this window is bound to (path + name), so Save overwrites the
+  // right file and the sidebar can show which project is open. A template, never live
+  // session ids — reopening always spawns fresh shells (same rule as a saved layout).
+  function readCurrent() { try { return JSON.parse(localStorage.getItem('ct-current') || 'null'); } catch (e) { return null; } }
+  function setCurrent(path, name) {
+    try { if (path) localStorage.setItem('ct-current', JSON.stringify({ path: path, name: name })); else localStorage.removeItem('ct-current'); } catch (e) {}
+  }
+  function projectLayout() {
+    var d = snapshot();
+    d.cols.forEach(function (c) { c.forEach(function (pd) { (pd.tabs || []).forEach(function (td) { td.sid = ''; }); }); });
+    return d;
+  }
+  // Basename of a project path, for the row's file badge and the folder-colour hash.
+  function baseName(p) { return (p || '').split(/[\\/]/).pop() || p; }
+  var FOLDER_COLORS = ['#8a5cf5', '#e9973f', '#44cf6e', '#fb464c', '#3f9ae9', '#d05ce9'];
+  function folderColor(s) { var h = 0; for (var i = 0; i < (s || '').length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return FOLDER_COLORS[Math.abs(h) % FOLDER_COLORS.length]; }
+  var recentsCache = [];
   function renderLayouts() {
-    var list = layouts();
-    if (!list.length) { smList.innerHTML = '<div class="sm-empty">No saved layouts yet. Name this one and hit Save.</div>'; return; }
-    smList.innerHTML = list.map(function (l, i) {
-      var n = l.desc.cols.reduce(function (a, c) { return a + c.reduce(function (b, p) { return b + p.tabs.length; }, 0); }, 0);
-      return '<div class="sm-row" data-i="' + i + '" role="button" title="Restore this layout">' +
-        '<span class="sm-nm">' + esc(l.name) + '</span>' +
-        '<span class="sm-sub">' + n + ' tab' + (n === 1 ? '' : 's') + ' · ' + ago(l.when) + '</span>' +
-        '<span class="sm-del" data-del="' + i + '" title="Delete layout">×</span></div>';
-    }).join('');
+    Projects.list().then(function (r) {
+      recentsCache = (r && r.recents) || [];
+      if (!recentsCache.length) { smList.innerHTML = '<div class="sm-empty">No projects yet. Name this workspace and hit Save.</div>'; return; }
+      smList.innerHTML = recentsCache.map(function (p, i) {
+        var file = baseName(p.path);
+        var sub = (p.tabs || 0) + ' tab' + (p.tabs === 1 ? '' : 's') + (p.opened ? ' · ' + ago(p.opened) : '');
+        return '<div class="sm-row' + (p.missing ? ' missing' : '') + '" data-i="' + i + '" role="button" title="' + (p.missing ? 'File missing — click to remove' : 'Open this project') + '">' +
+          '<span class="sm-dot" style="background:' + folderColor(file) + '"></span>' +
+          '<span class="sm-col"><span class="sm-nm">' + esc(p.name || file) + (p.missing ? ' <span class="sm-miss">missing</span>' : '') + '</span>' +
+          '<span class="sm-sub">' + esc(sub) + '</span>' +
+          '<span class="sm-file mono">' + esc(file) + '</span></span>' +
+          '<span class="sm-del" data-del="' + i + '" title="Remove from recent">×</span></div>';
+      }).join('');
+    }).catch(function () { smList.innerHTML = '<div class="sm-empty">Projects unavailable.</div>'; });
   }
   function openLayoutMenu(anchor) {
     renderLayouts();
-    smName.value = 'Layout ' + (layouts().length + 1);
+    var cur = readCurrent();
+    smName.value = cur ? cur.name : '';
+    smName.placeholder = 'Name this project';
     sessmenu.setAttribute('data-open', '');
     if (currentMode === 'narrow') {
       // On the phone this is a bottom sheet like every other menu, not a desktop
@@ -3385,45 +3425,79 @@
   function toggleLayoutMenu(anchor) {
     if (sessmenu.hasAttribute('data-open')) closeLayoutMenu(); else openLayoutMenu(anchor);
   }
-  function doSaveLayout() {
-    var name = (smName.value || ('Layout ' + (layouts().length + 1))).trim();
-    if (!name) return;
-    var list = layouts().filter(function (l) { return l.name !== name; });
-    // A saved layout is a template you might load days later, so it must not carry
-    // live session ids — restoring one always spawns fresh shells.
-    var desc = snapshot();
-    desc.cols.forEach(function (col) { col.forEach(function (pd) { (pd.tabs || []).forEach(function (td) { td.sid = ''; }); }); });
-    list.unshift({ name: name, when: Date.now(), desc: desc });
-    writeLayouts(list);
-    renderLayouts();
-    smName.value = '';
-    notify('Layout saved', name);
+  var PROJECT_DIRTY = false;   // Task 3 hooks this to save-on-close; false for now.
+  function doSaveProject() {
+    var cur = readCurrent();
+    var name = (smName.value || (cur && cur.name) || '').trim();
+    if (!name) { smName.focus(); return; }
+    Projects.save(name, cur ? cur.path : null, projectLayout()).then(function (r) {
+      if (!r || !r.path) { notify('Save failed', (r && r.error) || 'could not write the project file'); return; }
+      setCurrent(r.path, name);
+      PROJECT_DIRTY = false;
+      if (typeof updateProjectRow === 'function') updateProjectRow();
+      renderLayouts();
+      notify('Project saved', name);
+    });
   }
-  document.getElementById('sm-save').addEventListener('click', doSaveLayout);
-  smName.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Enter') doSaveLayout(); if (e.key === 'Escape') closeLayoutMenu(); });
+  document.getElementById('sm-save').addEventListener('click', doSaveProject);
+  smName.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Enter') doSaveProject(); if (e.key === 'Escape') closeLayoutMenu(); });
   smList.addEventListener('click', function (e) {
     var del = e.target.closest ? e.target.closest('[data-del]') : null;
     if (del) {
       e.stopPropagation();
-      var li = layouts(); li.splice(parseInt(del.getAttribute('data-del'), 10), 1);
-      writeLayouts(li); renderLayouts();
+      var d = recentsCache[parseInt(del.getAttribute('data-del'), 10)];
+      if (d) Projects.forget(d.path).then(renderLayouts);
       return;
     }
     var row = e.target.closest ? e.target.closest('[data-i]') : null;
     if (!row) return;
-    var l = layouts()[parseInt(row.getAttribute('data-i'), 10)];
-    if (!l) return;
+    var p = recentsCache[parseInt(row.getAttribute('data-i'), 10)];
+    if (!p) return;
+    if (p.missing) { Projects.forget(p.path).then(renderLayouts); return; }
     closeLayoutMenu();
-    openSavedLayout(l);
+    Projects.read(p.path).then(function (r) {
+      if (!r || !r.layout) { notify('Open failed', (r && r.error) || 'could not read the project'); return; }
+      openSavedLayout({ name: r.name || p.name, desc: r.layout, path: p.path });
+    });
   });
-  // Restore a saved workspace by object — shared by the save/load menu and the
-  // command palette. Restoring ends whatever is running now, so it asks first.
+  // New project — end the current workspace (asking first if it is live) and start
+  // clean, unbound to any file.
+  function newProject() {
+    closeLayoutMenu();
+    var start = function () {
+      setCurrent(null); PROJECT_DIRTY = false;
+      restoreLayout({ v: SCHEMA_VERSION, cols: [[{ active: 0, tabs: [{ type: 'terminal', shell: startShell(), cwd: '' }] }]], group: '' });
+      if (typeof updateProjectRow === 'function') updateProjectRow();
+    };
+    var live = allTerms().filter(function (t) { return t.state === 'open'; }).length;
+    if (S.confirmClose && live) confirmDialog('Start a new project?', live + ' running terminal' + (live > 1 ? 's' : '') + ' will be ended.', 'New project', start);
+    else start();
+  }
+  document.getElementById('pj-new').addEventListener('click', newProject);
+  // Open a project file by typed path — the browser cannot hand us an absolute path
+  // from a native picker, so we ask for one (the winmux CLI's `open` is the richer path).
+  document.getElementById('pj-openfile').addEventListener('click', function () {
+    var p = prompt('Open project file — full path to a .json:', (readCurrent() || {}).path || '');
+    if (!p) return;
+    Projects.read(p.trim()).then(function (r) {
+      if (!r || !r.layout) { notify('Open failed', (r && r.error) || 'could not read that file'); return; }
+      closeLayoutMenu();
+      openSavedLayout({ name: r.name || p, desc: r.layout, path: p.trim() });
+    });
+  });
+  // Restore a saved workspace by object — shared by the projects menu, open-file, and
+  // the command palette. Restoring ends whatever is running now, so it asks first, and
+  // binds this window to the opened project file.
   function openSavedLayout(l) {
     if (!l) return;
+    var apply = function () {
+      restoreLayout(l.desc);
+      if (l.path) { setCurrent(l.path, l.name); PROJECT_DIRTY = false; if (typeof updateProjectRow === 'function') updateProjectRow(); }
+    };
     var live = allTerms().filter(function (t) { return t.state === 'open'; }).length;
     if (S.confirmClose && live) {
-      confirmDialog('Restore “' + l.name + '”?', live + ' running terminal' + (live > 1 ? 's' : '') + ' will be ended and the saved panes rebuilt.', 'Restore layout', function () { restoreLayout(l.desc); });
-    } else restoreLayout(l.desc);
+      confirmDialog('Open “' + l.name + '”?', live + ' running terminal' + (live > 1 ? 's' : '') + ' will be ended and the saved panes rebuilt.', 'Open project', apply);
+    } else apply();
   }
   document.addEventListener('mousedown', function (e) {
     if (!sessmenu.hasAttribute('data-open')) return;
@@ -3874,8 +3948,8 @@
       { cat: 'View', name: 'Theme: match system', run: function () { applyTheme('system'); } },
       { cat: 'View', name: 'Theme: dark', run: function () { applyTheme('dark'); } },
       { cat: 'View', name: 'Theme: light', run: function () { applyTheme('light'); } },
-      { cat: 'Layout', name: 'Save layout', kbd: 'Ctrl+Alt+S', run: saveLayoutDialog },
-      { cat: 'Layout', name: 'Load layout', kbd: 'Ctrl+Alt+O', run: loadLayoutDialog },
+      { cat: 'Project', name: 'Save project', kbd: 'Ctrl+Alt+S', run: saveLayoutDialog },
+      { cat: 'Project', name: 'Open project', kbd: 'Ctrl+Alt+O', run: loadLayoutDialog },
       { cat: 'App', name: 'Settings', kbd: 'Ctrl+,', run: function () { openSettings(); } },
       { cat: 'App', name: 'Keyboard shortcuts', kbd: 'F1', run: openCheat },
       { cat: 'App', name: 'Diagnostics', run: openDiag },
@@ -3888,9 +3962,14 @@
       list.push({ cat: 'Go to', name: t.tabEl.querySelector('.tt').textContent + (t.cwd ? ' — ' + t.cwd : ''), run: function () { focusTerm(t.id); } });
     });
     // Phase 6 — one search reaches the whole app, not just the active pane: open any
-    // saved workspace by name, switch to any other project, or open remote access.
-    layouts().forEach(function (l) {
-      list.push({ cat: 'Workspace', name: 'Open workspace: ' + l.name, run: function () { openSavedLayout(l); } });
+    // recent project by name, switch to any other group, or open remote access. The
+    // recents come from the last time the Projects panel was opened (recentsCache);
+    // "Open project" itself is always available above to refresh the full list.
+    recentsCache.forEach(function (p) {
+      if (p.missing) return;
+      list.push({ cat: 'Project', name: 'Open project: ' + (p.name || p.path), run: function () {
+        Projects.read(p.path).then(function (r) { if (r && r.layout) openSavedLayout({ name: r.name || p.name, desc: r.layout, path: p.path }); });
+      } });
     });
     groups.forEach(function (g) {
       if (g.id !== activeGroupId) list.push({ cat: 'Project', name: 'Switch to project: ' + g.name, run: function () { switchGroup(g.id); } });
@@ -3997,8 +4076,8 @@
     { id: 'toggle-dock', label: 'Toggle dock', def: 'Ctrl+Alt+D', run: function () { toggleDock(); } },
     { id: 'notifications', label: 'Notifications', def: 'Ctrl+Alt+N', run: function () { toggleNotif(document.getElementById('open-notif')); } },
     { id: 'broadcast', label: 'Broadcast to all panes', def: 'Ctrl+Alt+B', run: function () { setBroadcast(!broadcastOn); } },
-    { id: 'save-layout', label: 'Save layout', def: 'Ctrl+Alt+S', run: function () { saveLayoutDialog(); } },
-    { id: 'load-layout', label: 'Load layout', def: 'Ctrl+Alt+O', run: function () { loadLayoutDialog(); } },
+    { id: 'save-layout', label: 'Save project', def: 'Ctrl+Alt+S', run: function () { saveLayoutDialog(); } },
+    { id: 'load-layout', label: 'Open project', def: 'Ctrl+Alt+O', run: function () { loadLayoutDialog(); } },
     { id: 'find', label: 'Find in terminal', def: 'Ctrl+F', run: function () { var p = paneById(activePaneId); if (p) openFind(p); } },
     { id: 'copy', label: 'Copy selection', def: 'Ctrl+Shift+C', run: function () { var t = activeTerm(); if (t) copySel(t); } },
     { id: 'paste', label: 'Paste', def: 'Ctrl+Shift+V', run: function () { var t = activeTerm(); if (t) pasteInto(t); } },

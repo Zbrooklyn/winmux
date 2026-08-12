@@ -802,8 +802,8 @@
     <div class="sx-foot">
       <span class="sxbtn" id="open-new" title="New terminal (Alt+T)" role="button" aria-label="New terminal"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>
       <span class="sxbtn" id="open-newgroup" title="New group" role="button" aria-label="New group"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><path d="M12 10v6M9 13h6"/></svg></span>
-      <span class="sxbtn" id="open-save" title="Save layout (Ctrl+Alt+S)" role="button" aria-label="Save layout"><svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg></span>
-      <span class="sxbtn" id="open-load" title="Load layout (Ctrl+Alt+O)" role="button" aria-label="Load layout"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg></span>
+      <span class="sxbtn" id="open-save" title="Save project (Ctrl+Alt+S)" role="button" aria-label="Save project"><svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg></span>
+      <span class="sxbtn" id="open-load" title="Open project (Ctrl+Alt+O)" role="button" aria-label="Open project"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg></span>
       <span class="sxsp"></span>
       <span class="sxbtn" id="open-diag" title="Diagnostics" role="button" aria-label="Diagnostics"><svg viewBox="0 0 24 24"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg></span>
       <span class="sxbtn" id="open-help" title="Keyboard shortcuts (F1)" role="button" aria-label="Keyboard shortcuts"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 015.8 1c0 2-3 2.5-3 2.5"/><path d="M12 17h.01"/></svg></span>
@@ -849,11 +849,16 @@
   <div class="npanel" id="npanel"></div>
 
   <div class="sessmenu" id="sessmenu">
-    <div class="sm-title">Layouts</div>
+    <div class="sm-title">Projects</div>
+    <div class="sm-actions">
+      <button class="sm-act" id="pj-new"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>New project</span></button>
+      <button class="sm-act" id="pj-openfile"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span>Open file…</span></button>
+    </div>
     <div class="sm-save">
-      <input class="sm-in" id="sm-name" placeholder="Name this layout" spellcheck="false" autocomplete="off">
+      <input class="sm-in" id="sm-name" placeholder="Name this project" spellcheck="false" autocomplete="off">
       <button class="sm-btn" id="sm-save">Save</button>
     </div>
+    <div class="sm-seclbl">Recent</div>
     <div class="sm-list" id="sm-list"></div>
   </div>
 
