@@ -2226,17 +2226,17 @@ check('footer', PORT_FOOTER, async ({ browser, base, t, shot }) => {
   t('New group actually creates the group', (await n('.prow')) === groups0 + 1, { before: groups0, after: await n('.prow') });
   await shot(page, 'footer-newgroup');
 
-  // Save layout → the layout popover opens.
+  // Save project → the Projects overlay opens.
   await page.click('#open-save');
   await page.waitForTimeout(300);
-  t('Save layout opens the layout popover', await openSel('.sessmenu[data-open]'), 'sessmenu');
+  t('Save project opens the Projects overlay', await openSel('#projects-ovl[data-open]'), 'projects-ovl');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
 
-  // Load layout → same popover opens.
+  // Open project → same overlay opens.
   await page.click('#open-load');
   await page.waitForTimeout(300);
-  t('Load layout opens the layout popover', await openSel('.sessmenu[data-open]'), 'sessmenu');
+  t('Open project opens the Projects overlay', await openSel('#projects-ovl[data-open]'), 'projects-ovl');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
 

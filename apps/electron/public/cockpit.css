@@ -316,6 +316,52 @@
   .sessmenu .sm-row .sm-file{font-size:10px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
   .sessmenu .sm-row.missing{opacity:.55}
   .sessmenu .sm-miss{font-size:9px;color:var(--err);text-transform:uppercase;letter-spacing:.05em;margin-left:5px}
+  /* Projects overlay — the real, spacious panel (replaces the sidebar popover) */
+  .modal.proj-modal{width:640px;max-width:94vw;height:auto;max-height:82vh}
+  .mhead .proj-brand{width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;background:var(--accent-soft);margin-right:10px;flex:none}
+  .mhead .proj-brand svg{width:15px;height:15px;fill:none;stroke:var(--accent);stroke-width:2}
+  .proj-body{display:flex;flex-direction:column;gap:14px;padding:16px 18px 18px;overflow-y:auto}
+  .proj-actions{display:flex;gap:10px}
+  .proj-act{flex:1;display:flex;align-items:center;gap:11px;padding:12px 14px;border-radius:10px;background:var(--bg2);border:1px solid var(--border);color:var(--text);cursor:pointer;text-align:left}
+  .proj-act:hover{border-color:var(--border-s);background:var(--bg3)}
+  .proj-act.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .proj-act.primary:hover{filter:brightness(1.06)}
+  .proj-act svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;flex:none}
+  .proj-act-txt{display:flex;flex-direction:column;gap:1px;min-width:0}
+  .proj-act-t{font-size:13px;font-weight:600}
+  .proj-act-s{font-size:11px;opacity:.72}
+  .proj-save{display:flex;gap:8px}
+  .proj-in{flex:1;min-width:0;background:var(--bg0);border:1px solid var(--border);border-radius:8px;padding:9px 12px;font-size:12.5px;color:var(--text);outline:none}
+  .proj-in:focus{border-color:var(--accent)}
+  .proj-in::placeholder{color:var(--faint)}
+  .proj-savebtn{padding:9px 18px;border-radius:8px;background:var(--accent);color:#fff;font-size:12.5px;font-weight:600;border:0;cursor:pointer}
+  .proj-savebtn:hover{filter:brightness(1.06)}
+  .proj-seclbl{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:2px 2px 0}
+  .proj-list{display:flex;flex-direction:column;gap:3px;min-height:56px}
+  .proj-empty{padding:26px 12px;text-align:center;color:var(--faint);font-size:12px}
+  .pjrow{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:10px;cursor:pointer;border:1px solid transparent}
+  .pjrow:hover{background:color-mix(in srgb,var(--text) 5%,transparent);border-color:var(--border)}
+  .pjrow.missing{opacity:.5}
+  .pjrow-dot{width:9px;height:9px;border-radius:3px;flex:none}
+  .pjrow-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+  .pjrow-top{display:flex;align-items:center;gap:8px}
+  .pjrow-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pjrow-badge{font-size:10px;color:var(--muted);background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:1px 7px;flex:none}
+  .pjrow-dir{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pjrow-chips{display:flex;gap:9px;flex-wrap:wrap}
+  .pjrow-chip{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px;white-space:nowrap}
+  .pjrow-chip::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--idle);flex:none}
+  .pjrow-meta{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex:none;text-align:right}
+  .pjrow-when{font-size:11px;color:var(--faint)}
+  .pjrow-file{font-size:10px;color:var(--faint);max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pjrow-del{width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:var(--faint);opacity:0;font-size:16px;flex:none}
+  .pjrow:hover .pjrow-del{opacity:1}
+  .pjrow-del:hover{background:color-mix(in srgb,var(--err) 14%,transparent);color:var(--err)}
+  .pjrow-miss{font-size:9px;color:var(--err);text-transform:uppercase;letter-spacing:.05em}
+  .proj-note{display:flex;align-items:center;gap:9px;font-size:11.5px;color:var(--muted);padding:11px 13px;background:var(--bg0);border:1px solid var(--border);border-radius:9px}
+  .proj-note svg{width:15px;height:15px;fill:none;stroke:var(--faint);stroke-width:2;flex:none}
+  .cockpit[data-mode="narrow"] .proj-modal{width:96vw;max-height:88vh}
+  .cockpit[data-mode="narrow"] .proj-actions{flex-direction:column}
   /* modal overlay (settings / dialogs / cheat) */
   .ovl{display:none;position:fixed;inset:0;z-index:110;background:color-mix(in srgb,#000 45%,transparent);backdrop-filter:blur(2px);align-items:center;justify-content:center}
   .ovl[data-open]{display:flex}

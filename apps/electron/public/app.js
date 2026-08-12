@@ -3340,7 +3340,7 @@
   }
   // Layouts live in a small popover anchored to the sidebar button — saving and
   // loading are the same short list, so they are one surface, not two modals.
-  var sessmenu = document.getElementById('sessmenu');
+  var sessmenu = document.getElementById('projects-ovl');   // the Projects overlay (data-open toggled)
   var smName = document.getElementById('sm-name');
   var smList = document.getElementById('sm-list');
   // ---- projects: workspaces saved as real files on disk (server owns the disk) ----
@@ -3398,48 +3398,37 @@
   function renderLayouts() {
     Projects.list().then(function (r) {
       recentsCache = (r && r.recents) || [];
-      if (!recentsCache.length) { smList.innerHTML = '<div class="sm-empty">No projects yet. Name this workspace and hit Save.</div>'; return; }
+      if (!recentsCache.length) { smList.innerHTML = '<div class="proj-empty">No projects yet. Name this workspace above and hit Save.</div>'; return; }
       smList.innerHTML = recentsCache.map(function (p, i) {
         var file = baseName(p.path);
-        var sub = (p.tabs || 0) + ' tab' + (p.tabs === 1 ? '' : 's') + (p.opened ? ' · ' + ago(p.opened) : '');
-        return '<div class="sm-row' + (p.missing ? ' missing' : '') + '" data-i="' + i + '" role="button" title="' + (p.missing ? 'File missing — click to remove' : 'Open this project') + '">' +
-          '<span class="sm-dot" style="background:' + folderColor(file) + '"></span>' +
-          '<span class="sm-col"><span class="sm-nm">' + esc(p.name || file) + (p.missing ? ' <span class="sm-miss">missing</span>' : '') + '</span>' +
-          '<span class="sm-sub">' + esc(sub) + '</span>' +
-          '<span class="sm-file mono">' + esc(file) + '</span></span>' +
-          '<span class="sm-del" data-del="' + i + '" title="Remove from recent">×</span></div>';
+        var chips = (p.shells || []).map(function (s) { return '<span class="pjrow-chip">' + esc(s) + '</span>'; }).join('');
+        var badge = p.missing
+          ? '<span class="pjrow-miss">missing</span>'
+          : '<span class="pjrow-badge">' + (p.tabs || 0) + ' tab' + (p.tabs === 1 ? '' : 's') + '</span>';
+        return '<div class="pjrow' + (p.missing ? ' missing' : '') + '" data-i="' + i + '" role="button" title="' + (p.missing ? 'File missing — click to remove' : 'Open this project') + '">' +
+          '<span class="pjrow-dot" style="background:' + folderColor(file) + '"></span>' +
+          '<div class="pjrow-main">' +
+            '<div class="pjrow-top"><span class="pjrow-name">' + esc(p.name || file) + '</span>' + badge + '</div>' +
+            (p.dir ? '<div class="pjrow-dir mono">' + esc(p.dir) + '</div>' : '') +
+            (chips ? '<div class="pjrow-chips">' + chips + '</div>' : '') +
+          '</div>' +
+          '<div class="pjrow-meta"><span class="pjrow-when">' + (p.opened ? esc(ago(p.opened)) : '') + '</span>' +
+            '<span class="pjrow-file mono">' + esc(file) + '</span></div>' +
+          '<span class="pjrow-del" data-del="' + i + '" title="Remove from recent">×</span></div>';
       }).join('');
-    }).catch(function () { smList.innerHTML = '<div class="sm-empty">Projects unavailable.</div>'; });
+    }).catch(function () { smList.innerHTML = '<div class="proj-empty">Projects unavailable.</div>'; });
   }
+  // The Projects panel is a proper centered overlay now (not a sidebar popover), so it
+  // never collides with the footer and reads as the real surface it is. Same open verb
+  // the footer icons / Ctrl+Alt+O / palette all call.
   function openLayoutMenu(anchor) {
     renderLayouts();
     var cur = readCurrent();
     smName.value = cur ? cur.name : '';
-    smName.placeholder = 'Name this project';
-    sessmenu.setAttribute('data-open', '');
-    if (currentMode === 'narrow') {
-      // On the phone this is a bottom sheet like every other menu, not a desktop
-      // popover anchored beside a footer icon. Don't auto-focus the name field —
-      // that would slam the soft keyboard up over the sheet the instant it opens.
-      sessmenu.style.left = ''; sessmenu.style.top = '';
-      sessmenu.classList.add('sheet');
-      var bd = document.createElement('div'); bd.className = 'sheet-backdrop'; bd.id = 'sess-backdrop';
-      bd.addEventListener('click', closeLayoutMenu); document.body.appendChild(bd);
-      void sessmenu.offsetHeight; sessmenu.classList.add('in');
-      return;
-    }
-    if (anchor) {
-      var r = anchor.getBoundingClientRect();
-      sessmenu.style.left = Math.round(r.right + 8) + 'px';
-      sessmenu.style.top = Math.min(window.innerHeight - 320, Math.round(r.top)) + 'px';
-    }
-    smName.focus(); smName.select();
+    openOvl('projects-ovl');
+    if (currentMode !== 'narrow') setTimeout(function () { try { smName.focus(); } catch (e) {} }, 30);
   }
-  function closeLayoutMenu() {
-    sessmenu.removeAttribute('data-open');
-    sessmenu.classList.remove('sheet', 'in');
-    var bd = document.getElementById('sess-backdrop'); if (bd) bd.remove();
-  }
+  function closeLayoutMenu() { closeOvl('projects-ovl'); }
   function toggleLayoutMenu(anchor) {
     if (sessmenu.hasAttribute('data-open')) closeLayoutMenu(); else openLayoutMenu(anchor);
   }
@@ -3517,11 +3506,8 @@
       confirmDialog('Open “' + l.name + '”?', live + ' running terminal' + (live > 1 ? 's' : '') + ' will be ended and the saved panes rebuilt.', 'Open project', apply);
     } else apply();
   }
-  document.addEventListener('mousedown', function (e) {
-    if (!sessmenu.hasAttribute('data-open')) return;
-    if (sessmenu.contains(e.target) || (e.target.closest && e.target.closest('#open-save,#open-load'))) return;
-    closeLayoutMenu();
-  });
+  // Click the dimmed backdrop (outside the card) to close the Projects overlay.
+  sessmenu.addEventListener('mousedown', function (e) { if (e.target === sessmenu) closeLayoutMenu(); });
   function saveLayoutDialog() { openLayoutMenu(document.getElementById('open-save')); }
   function loadLayoutDialog() { openLayoutMenu(document.getElementById('open-load')); }
 
@@ -4345,7 +4331,7 @@
   // the observer means a control added later is covered without a second edit.
   var EXPANDERS = [
     ['open-palette', 'palette-wrap'], ['open-notif', 'npanel'],
-    ['open-save', 'sessmenu'], ['open-load', 'sessmenu'],
+    ['open-save', 'projects-ovl'], ['open-load', 'projects-ovl'],
     ['open-diag', 'diag-ovl'], ['open-help', 'cheat-ovl'],
     ['open-settings', 'settings-ovl']
   ];

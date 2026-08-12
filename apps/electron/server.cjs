@@ -346,6 +346,18 @@ function tabCount(layout) {
   try { return (layout.cols || []).reduce((a, c) => a + c.reduce((b, pd) => b + (pd.tabs || []).length, 0), 0); }
   catch (e) { return 0; }
 }
+// The recents row wants more than a count: the project's primary folder and the
+// shells/leaf-types it opens, so the panel can show folder + chips like a real card.
+function projectMeta(layout) {
+  let dir = ''; const shells = [];
+  try {
+    (layout.cols || []).forEach((c) => (c || []).forEach((pd) => (pd.tabs || []).forEach((t) => {
+      if (!dir && t.cwd) dir = t.cwd;
+      shells.push(t.type && t.type !== 'terminal' ? t.type : (t.shell || 'shell'));
+    })));
+  } catch (e) {}
+  return { dir, shells: shells.slice(0, 6) };
+}
 
 // Start WinMux at logon. A copy of a tiny launcher in the user's Startup folder
 // makes the app simply present after a reboot instead of "not running until
@@ -888,7 +900,8 @@ function handle(req, res, viaPhone) {
           fs.writeFileSync(tmp, JSON.stringify(doc, null, 2));
           fs.renameSync(tmp, p);
         } catch (e) { return sendJson(500, { error: 'write failed: ' + e.message }); }
-        const rec = { path: p, name, tabs: tabCount(incoming.layout || {}), opened: now };
+        const meta = projectMeta(incoming.layout || {});
+        const rec = { path: p, name, tabs: tabCount(incoming.layout || {}), dir: meta.dir, shells: meta.shells, opened: now };
         writeRecents([rec].concat(readRecents().filter((r) => r.path !== p)));
         return sendJson(200, { path: p });
       });
