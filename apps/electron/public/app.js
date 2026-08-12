@@ -3372,6 +3372,24 @@
     d.cols.forEach(function (c) { c.forEach(function (pd) { (pd.tabs || []).forEach(function (td) { td.sid = ''; }); }); });
     return d;
   }
+  // One-time migration: fold any browser-storage layouts (the retired system) into
+  // real project files, so nothing a returning user saved is lost. Runs once, guarded
+  // by a marker; the ct-layouts blob is left untouched as a silent safety copy — we
+  // just stop surfacing it. Idempotent and non-destructive.
+  function migrateLayoutsOnce() {
+    try {
+      if (localStorage.getItem('ct-projects-migrated')) return;
+      var old = layouts();
+      if (!old.length) { localStorage.setItem('ct-projects-migrated', '1'); return; }
+      var pending = old.length;
+      var done = function () { if (--pending <= 0) { try { localStorage.setItem('ct-projects-migrated', '1'); } catch (e) {} } };
+      old.forEach(function (l) {
+        var d = l.desc || {};
+        (d.cols || []).forEach(function (c) { (c || []).forEach(function (pd) { (pd.tabs || []).forEach(function (td) { td.sid = ''; }); }); });
+        Projects.save(l.name || 'Project', null, d).then(done, done);
+      });
+    } catch (e) {}
+  }
   // Basename of a project path, for the row's file badge and the folder-colour hash.
   function baseName(p) { return (p || '').split(/[\\/]/).pop() || p; }
   var FOLDER_COLORS = ['#8a5cf5', '#e9973f', '#44cf6e', '#fb464c', '#3f9ae9', '#d05ce9'];
@@ -4366,6 +4384,7 @@
   // old. Any session the server no longer holds simply returns as a fresh shell in its
   // slot. First-ever open (no saved state) gets the default single shell.
   window.addEventListener('beforeunload', persistLive);
+  migrateLayoutsOnce();   // fold any old browser-storage layouts into project files, once
   var restored = false;
   try {
     var liveState = JSON.parse(localStorage.getItem('ct-live') || 'null');
