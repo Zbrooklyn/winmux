@@ -89,7 +89,7 @@ npm run dev:electron
 
 This opens WinMux in a frameless native window. The same server keeps serving your phone over Tailscale — the desktop app and the phone are two clients of one server.
 
-> **Building your own installer:** `npm run dist` compiles and packages a fresh `WinMux Setup <version>.exe` (NSIS) into the off-repo output folder printed at the end. See [PLAN.md](PLAN.md) for the release checklist.
+> **Building your own installer:** `npm run dist` compiles and packages a fresh `WinMux Setup <version>.exe` (NSIS) into the off-repo output folder printed at the end. See [PLAN.md](apps/electron/PLAN.md) for the release checklist.
 
 ### As a plain server (browser + phone)
 
@@ -137,7 +137,7 @@ The CLI works only at the PC (`127.0.0.1`), never over the phone link.
 
 Every WinMux shell exports `WINMUX_SID`/`WINMUX_PORT`, so a Claude Code agent's hooks can flip
 its own session's row to **WORKING** / **NEEDS YOU** / done as it runs — even from your phone.
-Merge [`agent/claude-code-hooks.json`](agent/claude-code-hooks.json) into your Claude Code
+Merge [`agent/claude-code-hooks.json`](apps/electron/agent/claude-code-hooks.json) into your Claude Code
 settings; see [`docs/agent-integration.md`](docs/agent-integration.md).
 
 ## Verify
