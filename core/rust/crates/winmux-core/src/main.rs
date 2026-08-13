@@ -239,6 +239,8 @@ async fn main() {
         .route("/api/findpath", get(api_findpath))
         .route("/api/clip", get(api_clip_get).post(api_clip_post))
         .route("/api/config", get(api_config_get).post(api_config_post))
+        .route("/api/projects", get(api_projects_list))
+        .route("/api/project", get(api_project_get).post(api_project_post).delete(api_project_delete))
         .route("/api/update", get(api_update))
         .route("/shells", get(api_shells))
         .route("/api/claude-sessions", get(api_claude_sessions))
@@ -648,6 +650,7 @@ async fn api_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         (map.len(), d)
     };
     Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
         "host": "127.0.0.1",
         "port": state.port,
         "pid": std::process::id(),
@@ -902,6 +905,8 @@ fn phone_router(state: Arc<AppState>) -> Router {
         .route("/api/md", get(phone_denied))
         .route("/api/findpath", get(phone_denied))
         .route("/api/claude-sessions", get(phone_denied))
+        .route("/api/projects", get(phone_denied))
+        .route("/api/project", get(phone_denied))
         .fallback_service(serve)
         .layer(axum::middleware::from_fn(no_store_html))
         .layer(axum::middleware::from_fn_with_state(state.clone(), phone_gate))
@@ -1071,6 +1076,167 @@ async fn api_config_post(Json(incoming): Json<Value>) -> impl IntoResponse {
     let tmp = file.with_extension(format!("{}.tmp", std::process::id()));
     let ok = std::fs::write(&tmp, cur.to_string()).and_then(|_| std::fs::rename(&tmp, &file)).is_ok();
     Json(json!({"ok": ok}))
+}
+
+// ---- /api/projects + /api/project (desk-door only) ----------------------
+// Save/open a workspace layout as a .winmux.json file the same way the Node server
+// does, over /api/project(s). Faithful port of server.cjs: the recents index lives
+// beside config (WINMUX_CONFIG_FILE) so tests never pollute the real home; the
+// default folder honours WINMUX_PROJECTS_DIR. Desk-door only — a phone attaches to
+// an already-open workspace and has no business writing .json onto the PC, so the
+// phone router serves phone_denied for these.
+fn projects_dir() -> PathBuf {
+    let d = std::env::var("WINMUX_PROJECTS_DIR").map(PathBuf::from).unwrap_or_else(|_| {
+        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
+        PathBuf::from(home).join("Documents").join("WinMux Projects")
+    });
+    let _ = std::fs::create_dir_all(&d);
+    d
+}
+fn recents_file() -> PathBuf {
+    config_file().parent().map(|p| p.join("recents.json")).unwrap_or_else(|| PathBuf::from("recents.json"))
+}
+fn read_recents() -> Vec<Value> {
+    std::fs::read_to_string(recents_file()).ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.get("recents").and_then(|r| r.as_array()).cloned())
+        .unwrap_or_default()
+}
+fn write_recents(list: &[Value]) {
+    let file = recents_file();
+    if let Some(dir) = file.parent() { let _ = std::fs::create_dir_all(dir); }
+    let trimmed: Vec<Value> = list.iter().take(30).cloned().collect();
+    let body = serde_json::to_string_pretty(&json!({ "recents": trimmed })).unwrap_or_default();
+    let tmp = file.with_extension(format!("{}.tmp", std::process::id()));
+    let _ = std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, &file));
+}
+// Only ever touch a real .json file — reject anything without the extension so a bad
+// path can't be steered at an arbitrary host file. Resolves relative -> absolute
+// WITHOUT requiring existence (a fresh save names a file that isn't there yet).
+fn safe_project_path(p: &str) -> Option<PathBuf> {
+    if p.trim().is_empty() { return None; }
+    let pb = PathBuf::from(p);
+    let abs = if pb.is_absolute() { pb } else { std::env::current_dir().unwrap_or_default().join(pb) };
+    if abs.extension().map(|e| e.eq_ignore_ascii_case("json")).unwrap_or(false) { Some(abs) } else { None }
+}
+fn slugify(name: &str) -> String {
+    let kept: String = name.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-' | ' '))
+        .collect();
+    let dashed = kept.split_whitespace().collect::<Vec<_>>().join("-").to_lowercase();
+    if dashed.is_empty() { "project".to_string() } else { dashed }
+}
+fn tab_count(layout: &Value) -> u64 {
+    let mut n = 0u64;
+    if let Some(cols) = layout.get("cols").and_then(|c| c.as_array()) {
+        for c in cols {
+            if let Some(col) = c.as_array() {
+                for pd in col {
+                    if let Some(tabs) = pd.get("tabs").and_then(|t| t.as_array()) { n += tabs.len() as u64; }
+                }
+            }
+        }
+    }
+    n
+}
+fn project_meta(layout: &Value) -> (String, Vec<String>) {
+    let mut dir = String::new();
+    let mut shells: Vec<String> = Vec::new();
+    if let Some(cols) = layout.get("cols").and_then(|c| c.as_array()) {
+        for c in cols {
+            if let Some(col) = c.as_array() {
+                for pd in col {
+                    if let Some(tabs) = pd.get("tabs").and_then(|t| t.as_array()) {
+                        for t in tabs {
+                            if dir.is_empty() {
+                                if let Some(cwd) = t.get("cwd").and_then(|v| v.as_str()) { dir = cwd.to_string(); }
+                            }
+                            let typ = t.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            if !typ.is_empty() && typ != "terminal" {
+                                shells.push(typ.to_string());
+                            } else {
+                                shells.push(t.get("shell").and_then(|v| v.as_str()).unwrap_or("shell").to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    shells.truncate(6);
+    (dir, shells)
+}
+// GET /api/projects — recents (with missing flags) + the default folder.
+async fn api_projects_list() -> impl IntoResponse {
+    let list: Vec<Value> = read_recents().into_iter().map(|mut r| {
+        let missing = r.get("path").and_then(|p| p.as_str())
+            .map(|p| !std::path::Path::new(p).exists()).unwrap_or(true);
+        if let Some(o) = r.as_object_mut() { o.insert("missing".into(), json!(missing)); }
+        r
+    }).collect();
+    Json(json!({ "dir": projects_dir().to_string_lossy(), "recents": list }))
+}
+// GET /api/project?path= — one project's contents.
+async fn api_project_get(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    match q.get("path").and_then(|s| safe_project_path(s)) {
+        Some(path) if path.exists() => {
+            match std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) {
+                Some(j) => {
+                    let name = j.get("name").and_then(|v| v.as_str()).map(|s| s.to_string())
+                        .unwrap_or_else(|| path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
+                    let layout = j.get("layout").cloned().unwrap_or_else(|| j.clone());
+                    let modified = j.get("modified").and_then(|v| v.as_u64()).unwrap_or(0);
+                    (StatusCode::OK, Json(json!({ "name": name, "layout": layout, "modified": modified })))
+                }
+                None => (StatusCode::BAD_REQUEST, Json(json!({ "error": "unreadable" }))),
+            }
+        }
+        _ => (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))),
+    }
+}
+// POST /api/project { name, path?, layout } — write the file, upsert recents.
+async fn api_project_post(Json(incoming): Json<Value>) -> impl IntoResponse {
+    let name = {
+        let n = incoming.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled").trim().to_string();
+        if n.is_empty() { "Untitled".to_string() } else { n }
+    };
+    let layout = incoming.get("layout").cloned().unwrap_or_else(|| json!({}));
+    let path = incoming.get("path").and_then(|v| v.as_str()).and_then(safe_project_path)
+        .unwrap_or_else(|| projects_dir().join(format!("{}.winmux.json", slugify(&name))));
+    let now = now_ms() as u64;
+    let created = std::fs::read_to_string(&path).ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|j| j.get("created").and_then(|v| v.as_u64()))
+        .unwrap_or(now);
+    let doc = json!({ "winmuxProject": 1, "name": name, "created": created, "modified": now, "layout": layout });
+    if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+    let body = serde_json::to_string_pretty(&doc).unwrap_or_default();
+    if std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, &path)).is_err() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "write failed" })));
+    }
+    let (dir, shells) = project_meta(&layout);
+    let ps = path.to_string_lossy().to_string();
+    let rec = json!({ "path": ps, "name": name, "tabs": tab_count(&layout), "dir": dir, "shells": shells, "opened": now });
+    let mut next = vec![rec];
+    next.extend(read_recents().into_iter().filter(|r| r.get("path").and_then(|v| v.as_str()) != Some(ps.as_str())));
+    write_recents(&next);
+    (StatusCode::OK, Json(json!({ "path": ps })))
+}
+// DELETE /api/project?path=&trash=1 — drop from recents; unlink only with trash.
+async fn api_project_delete(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    match q.get("path").and_then(|s| safe_project_path(s)) {
+        None => (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad path" }))),
+        Some(path) => {
+            let ps = path.to_string_lossy().to_string();
+            let kept: Vec<Value> = read_recents().into_iter()
+                .filter(|r| r.get("path").and_then(|v| v.as_str()) != Some(ps.as_str())).collect();
+            write_recents(&kept);
+            let trash = q.get("trash").map(|t| t == "1" || t == "true").unwrap_or(false);
+            if trash { let _ = std::fs::remove_file(&path); }
+            (StatusCode::OK, Json(json!({ "ok": true })))
+        }
+    }
 }
 
 // ---- /api/clip ----------------------------------------------------------
