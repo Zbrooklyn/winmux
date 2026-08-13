@@ -111,6 +111,7 @@ const PORT_PREDICT = 9958;    // Phase 2: pwsh PSReadLine inline history predict
 const PORT_IMAGES = 9959;     // Phase 3: inline images (addon-image) + `winmux image` verb
 const PORT_DPRFIX = 9977;     // MR-1: a devicePixelRatio-stuck WebGL canvas is resynced (prompt-float fix)
 const PORT_AGENTJOB = 9968;   // Stage 3: server-side agent-job store (spawn/wait/result), no browser needed
+const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
 // never drops a "Verify Project.winmux.json" into the real Documents\WinMux Projects.
@@ -1913,6 +1914,38 @@ check('agentjob', PORT_AGENTJOB, async ({ t }) => {
   // jobId isolation — the second job's state is independent of the first.
   const iso = parse((await winmux(['agent', 'status', '--job', reg2.job.jobId, '--json'])).out);
   t('jobs are isolated by id (no cross-talk)', iso && iso.job.state === 'working' && iso.job.jobId !== jobId, iso && iso.job);
+});
+
+// --- agentspawn: one session spawns another and gets its result (Stage 3) -
+// The full orchestration loop through a REAL terminal: `winmux agent spawn`
+// opens a tab, runs a command in it, the launcher self-reports done + the
+// command's output to the job store, and `winmux agent wait` receives that
+// output as data. Swap the --cmd for a prompt and it's a real Claude driving
+// another; this proves the plumbing without needing Claude auth in CI.
+check('agentspawn', PORT_AGENTSPAWN, async ({ browser, base, t }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_AGENTSPAWN), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => o += d);
+    proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+  const parse = (s) => { try { return JSON.parse(s); } catch (e) { return null; } };
+
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);        // the app connects to /control (spawn needs new-tab + send)
+
+  const marker = 'HELLO_FROM_B_' + PORT_AGENTSPAWN;
+  const sp = parse((await winmux(['agent', 'spawn', '--cmd', "Write-Output '" + marker + "'", '--name', 'btask', '--json'])).out);
+  t('spawn opens a session and returns a job to wait on', sp && /^job_/.test(sp.jobId) && sp.sid != null, sp);
+
+  const w = await winmux(['agent', 'wait', '--job', sp && sp.jobId, '--timeout', '25', '--json']);
+  const wj = parse(w.out);
+  t('the spawned task ran and its output came back through the wait as data',
+    wj && wj.job && wj.job.state === 'done' && (wj.job.result || '').indexOf(marker) >= 0, { code: w.code, job: wj && wj.job });
+  t('wait exits 0 once the spawned job is done', w.code === 0, w.code);
 });
 
 // --- cli: the `winmux` command-line drives the live app -------------------

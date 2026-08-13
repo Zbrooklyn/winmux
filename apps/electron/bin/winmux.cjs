@@ -250,6 +250,37 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
         if (resultFile) { try { return fs.readFileSync(resultFile, 'utf8'); } catch (e) { die('cannot read --result-file ' + resultFile + ': ' + e.message); } }
         return flag(argv, '--result');
       };
+      if (state === 'spawn') {
+        // Open a fresh tab, launch a task in it, and hand back a job to wait on.
+        // The launcher runs the task, captures its output, and reports done/failed
+        // to the server itself — so completion + result are data, not screen-scrape.
+        // A prompt runs `claude -p` (headless Claude); --cmd runs an arbitrary shell
+        // command (scripts, tests, and the harness). PowerShell-family shells.
+        const os = require('os');
+        const psq = (s) => "'" + String(s).replace(/'/g, "''") + "'";   // PowerShell single-quote escape
+        const cliPath = path.join(__dirname, 'winmux.cjs');
+        const rawCmd = flag(argv, '--cmd');
+        const prompt = (argv[2] && !argv[2].startsWith('--')) ? argv[2] : null;
+        if (!rawCmd && !prompt) die('spawn needs a prompt or --cmd: winmux agent spawn "fix the failing test"  |  winmux agent spawn --cmd "npm test"');
+        const nt = await rpc('new-tab', { shell: flag(argv, '--shell') });
+        const sid = nt && nt.id;
+        if (sid == null) die('could not open a tab for the spawned session');
+        const name = flag(argv, '--name') || (prompt || rawCmd).slice(0, 48);
+        const reg = await rpc('job-register', { sid: String(sid), name });
+        const jobId = reg.job.jobId;
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'winmux-job-'));
+        const rf = path.join(dir, 'result.txt');
+        let taskExpr = rawCmd;
+        if (!rawCmd) { const pf = path.join(dir, 'prompt.txt'); fs.writeFileSync(pf, prompt, 'utf8'); taskExpr = 'Get-Content -Raw -LiteralPath ' + psq(pf) + ' | claude -p'; }
+        const parts = [];
+        if (flag(argv, '--cwd')) parts.push('Set-Location -LiteralPath ' + psq(flag(argv, '--cwd')));
+        parts.push('& { ' + taskExpr + ' } *>&1 | Tee-Object -FilePath ' + psq(rf) + ' | Out-Host');
+        parts.push('$__x = $LASTEXITCODE');
+        parts.push('if ($null -eq $__x -or $__x -eq 0) { & node ' + psq(cliPath) + ' agent done --job ' + jobId + ' --result-file ' + psq(rf) +
+          ' } else { & node ' + psq(cliPath) + ' agent failed --job ' + jobId + ' --exit $__x --result-file ' + psq(rf) + ' }');
+        await rpc('send', { data: parts.join('; '), enter: true, target: String(sid) });
+        return emit('spawned job ' + jobId + ' in session ' + sid + '  —  winmux agent wait --job ' + jobId, { jobId, sid, job: reg.job });
+      }
       if (JOB_VERBS.indexOf(state) >= 0 || ((state === 'done' || state === 'failed') && flag(argv, '--job'))) {
         if (state === 'register') {
           const r = await rpc('job-register', { sid: flag(argv, '--sid') || process.env.WINMUX_SID || null, name: flag(argv, '--name') || null });
