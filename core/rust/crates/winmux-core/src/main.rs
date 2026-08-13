@@ -33,7 +33,7 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::{mpsc::UnboundedSender, oneshot};
+use tokio::sync::{mpsc::UnboundedSender, oneshot, Notify};
 use tower_http::services::ServeDir;
 
 mod phonedoor;
@@ -61,6 +61,34 @@ struct SinkState {
     attached: Option<UnboundedSender<Vec<u8>>>,
 }
 
+// ── Agent job store (Stage 3) — parity with the Node server ─────────────────
+// One session can register a job, another waits until it finishes and gets its
+// result as data. jobId (not sid) is the unit of work; terminal states are the
+// first report to win, then immutable. In-memory, per-instance.
+const JOB_RESULT_CAP: usize = 64 * 1024;
+const JOB_MAX: usize = 200;
+const JOB_TTL_MS: u64 = 6 * 60 * 60 * 1000;
+struct JobRec {
+    job_id: String,
+    sid: Option<String>,
+    name: Option<String>,
+    state: String,
+    result: Option<String>,
+    truncated: bool,
+    exit_code: Option<i64>,
+    started_at: u64,
+    updated_at: u64,
+    ended_at: Option<u64>,
+}
+impl JobRec {
+    fn public(&self) -> Value {
+        json!({"jobId": self.job_id, "sid": self.sid, "name": self.name, "state": self.state,
+            "result": self.result, "truncated": self.truncated, "exitCode": self.exit_code,
+            "startedAt": self.started_at, "updatedAt": self.updated_at, "endedAt": self.ended_at})
+    }
+    fn is_terminal(&self) -> bool { self.state == "done" || self.state == "failed" }
+}
+
 struct AppState {
     controllers: Mutex<HashMap<u64, UnboundedSender<Message>>>,
     control_seq: AtomicU64,
@@ -74,6 +102,9 @@ struct AppState {
     phone_conns: Mutex<HashMap<u64, (String, UnboundedSender<()>)>>,
     phone_conn_seq: AtomicU64,
     port: u16,
+    jobs: Mutex<HashMap<String, JobRec>>,   // Stage 3 agent-job store
+    job_seq: AtomicU64,
+    job_notify: Notify,                      // woken on any terminal transition; waiters re-check
 }
 impl AppState {
     fn new(port: u16) -> Self {
@@ -88,6 +119,77 @@ impl AppState {
             phone_conns: Mutex::new(HashMap::new()),
             phone_conn_seq: AtomicU64::new(1),
             port,
+            jobs: Mutex::new(HashMap::new()),
+            job_seq: AtomicU64::new(1),
+            job_notify: Notify::new(),
+        }
+    }
+
+    // Handle a job verb server-side (register/report/status/list). Returns None if
+    // `cmd` is not a job verb (the caller then relays it to the app). job-wait is
+    // async and handled separately in rpc_post.
+    fn agent_job_dispatch(&self, cmd: &str, args: &Value) -> Option<Result<Value, String>> {
+        match cmd {
+            "job-register" => {
+                let n = self.job_seq.fetch_add(1, Ordering::Relaxed);
+                let job_id = format!("job_{:x}_{:x}", now_ms(), n);
+                let now = now_ms() as u64;
+                let rec = JobRec {
+                    job_id: job_id.clone(),
+                    sid: args.get("sid").and_then(|v| v.as_str()).map(String::from),
+                    name: args.get("name").and_then(|v| v.as_str()).map(String::from),
+                    state: "working".into(), result: None, truncated: false, exit_code: None,
+                    started_at: now, updated_at: now, ended_at: None,
+                };
+                let out = rec.public();
+                let mut m = self.jobs.lock().unwrap();
+                m.insert(job_id, rec);
+                // Evict aged-out terminals, then cap the oldest.
+                let cutoff = now.saturating_sub(JOB_TTL_MS);
+                let stale: Vec<String> = m.iter().filter(|(_, r)| r.ended_at.map(|e| e < cutoff).unwrap_or(false)).map(|(k, _)| k.clone()).collect();
+                for k in stale { m.remove(&k); }
+                while m.len() > JOB_MAX {
+                    let oldest = m.iter().min_by_key(|(_, r)| r.started_at).map(|(k, _)| k.clone());
+                    match oldest { Some(k) => { m.remove(&k); } None => break }
+                }
+                Some(Ok(json!({"job": out})))
+            }
+            "job-report" => {
+                let job_id = match args.get("jobId").and_then(|v| v.as_str()) { Some(s) => s.to_string(), None => return Some(Err("missing jobId".into())) };
+                let mut m = self.jobs.lock().unwrap();
+                let rec = match m.get_mut(&job_id) { Some(r) => r, None => return Some(Err(format!("unknown jobId: {job_id}"))) };
+                if rec.is_terminal() { return Some(Ok(json!({"job": rec.public()}))); }   // first terminal report wins
+                let mut st = args.get("state").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if st == "needs-you" { st = "needsyou".into(); }
+                if !["working", "needsyou", "done", "failed"].contains(&st.as_str()) { return Some(Err(format!("bad job state: {st}"))); }
+                rec.state = st.clone();
+                if let Some(r) = args.get("result") {
+                    if !r.is_null() {
+                        let mut s = r.as_str().map(String::from).unwrap_or_else(|| r.to_string());
+                        if s.len() > JOB_RESULT_CAP { let mut end = JOB_RESULT_CAP; while end > 0 && !s.is_char_boundary(end) { end -= 1; } s.truncate(end); rec.truncated = true; }
+                        rec.result = Some(s);
+                    }
+                }
+                if let Some(c) = args.get("exitCode").and_then(|v| v.as_i64()) { rec.exit_code = Some(c); }
+                rec.updated_at = now_ms() as u64;
+                let terminal = rec.is_terminal();
+                if terminal { rec.ended_at = Some(rec.updated_at); }
+                let out = rec.public();
+                drop(m);
+                if terminal { self.job_notify.notify_waiters(); }
+                Some(Ok(json!({"job": out})))
+            }
+            "job-status" => {
+                let job_id = args.get("jobId").and_then(|v| v.as_str()).unwrap_or("");
+                let m = self.jobs.lock().unwrap();
+                match m.get(job_id) { Some(r) => Some(Ok(json!({"job": r.public()}))), None => Some(Err(format!("unknown jobId: {job_id}"))) }
+            }
+            "job-list" => {
+                let m = self.jobs.lock().unwrap();
+                let arr: Vec<Value> = m.values().map(|r| r.public()).collect();
+                Some(Ok(json!({"jobs": arr})))
+            }
+            _ => None,
         }
     }
     fn pick_controller(&self) -> Option<UnboundedSender<Message>> {
@@ -1379,12 +1481,66 @@ fn drop_controller(state: &Arc<AppState>, id: u64) {
     }
 }
 
+// Block until a job reaches a terminal state or the bounded, resumable timeout.
+// On timeout it returns the current (working) record so the caller can wait again.
+// Lost-wakeup-safe: the Notified future is enabled before each state check.
+async fn agent_job_wait(state: &Arc<AppState>, args: &Value) -> Result<Value, String> {
+    let job_id = match args.get("jobId").and_then(|v| v.as_str()) { Some(s) => s.to_string(), None => return Err("missing jobId".into()) };
+    {
+        let m = state.jobs.lock().unwrap();
+        match m.get(&job_id) {
+            None => return Err(format!("unknown jobId: {job_id}")),
+            Some(r) => if r.is_terminal() { return Ok(json!({"job": r.public(), "waited": false})); }
+        }
+    }
+    let timeout_ms = args.get("timeoutMs").and_then(|v| v.as_u64()).unwrap_or(90_000).clamp(500, 570_000);
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let notified = state.job_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();   // register interest before checking, so no wakeup is missed
+        {
+            let m = state.jobs.lock().unwrap();
+            if let Some(r) = m.get(&job_id) { if r.is_terminal() { return Ok(json!({"job": r.public(), "waited": true})); } }
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            let m = state.jobs.lock().unwrap();
+            let j = m.get(&job_id).map(|r| r.public()).unwrap_or(Value::Null);
+            return Ok(json!({"job": j, "waited": true}));
+        }
+        tokio::select! {
+            _ = &mut notified => {}
+            _ = tokio::time::sleep(remaining) => {
+                let m = state.jobs.lock().unwrap();
+                let j = m.get(&job_id).map(|r| r.public()).unwrap_or(Value::Null);
+                return Ok(json!({"job": j, "waited": true}));
+            }
+        }
+    }
+}
+
 async fn rpc_post(State(state): State<Arc<AppState>>, Json(body): Json<Value>) -> impl IntoResponse {
     let cmd = match body.get("cmd").and_then(|x| x.as_str()) {
         Some(c) => c.to_string(),
         None => return (StatusCode::BAD_REQUEST, Json(json!({"ok":false,"error":"missing cmd"}))),
     };
     let args = body.get("args").cloned().unwrap_or(json!({}));
+
+    // Agent-job verbs (Stage 3) are handled by the server itself so a wait works
+    // with no app attached; everything else is relayed to the app below.
+    if cmd == "job-wait" {
+        return match agent_job_wait(&state, &args).await {
+            Ok(v) => (StatusCode::OK, Json(json!({"ok":true,"result": v}))),
+            Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"ok":false,"error": e}))),
+        };
+    }
+    if let Some(r) = state.agent_job_dispatch(&cmd, &args) {
+        return match r {
+            Ok(v) => (StatusCode::OK, Json(json!({"ok":true,"result": v}))),
+            Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"ok":false,"error": e}))),
+        };
+    }
 
     let sender = match state.pick_controller() {
         Some(s) => s,
