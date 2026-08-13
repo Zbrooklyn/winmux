@@ -1109,7 +1109,11 @@ function handle(req, res, viaPhone) {
       let msg; try { msg = JSON.parse(body || '{}'); } catch (e) { res.writeHead(400); return res.end(JSON.stringify({ ok: false, error: 'bad JSON' })); }
       if (!msg || typeof msg.cmd !== 'string') { res.writeHead(400); return res.end(JSON.stringify({ ok: false, error: 'missing cmd' })); }
       try {
-        const result = await callApp(msg.cmd, msg.args);
+        // Agent-job verbs (Stage 3) are handled by the server itself so a wait
+        // works with no browser attached; everything else is relayed to the app.
+        let result;
+        if (msg.cmd === 'job-wait') result = await agentJobWait(msg.args);
+        else { const jr = agentJobDispatch(msg.cmd, msg.args); result = (jr !== null) ? jr : await callApp(msg.cmd, msg.args); }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, result }));
       } catch (e) {
@@ -1336,6 +1340,86 @@ function callApp(cmd, args) {
     c.ws.send(JSON.stringify({ rpc: reqId, cmd, args: args || {} }));
   });
 }
+
+// ── Agent job store (Stage 3) ───────────────────────────────────────────────
+// A server-side record of orchestrated agent jobs, so one session (A) can spawn
+// another (B), wait until B actually finishes, and get B's result as data — not
+// by screen-scraping. Lives in the server (not the renderer) so a wait works with
+// no browser attached. In-memory, per-instance, keyed by a minted jobId (a session
+// runs many jobs over its life, so the SID is not the unit of work). Desk-door
+// only — /rpc already refuses the phone. Terminal states (done/failed) are the
+// first report to win and are then immutable, so a stale report can't satisfy a
+// new wait. The Rust core mirrors this exactly (WINMUX_CORE=rust).
+const AGENT_JOBS = new Map();        // jobId -> job record
+const AGENT_WAITERS = new Map();     // jobId -> Set<fn> resolvers blocked on it
+let agentJobSeq = 0;
+const JOB_RESULT_CAP = 64 * 1024;    // a result payload larger than this is truncated + flagged
+const JOB_MAX = 200;                 // keep at most this many jobs (oldest evicted)
+const JOB_TTL_MS = 6 * 60 * 60 * 1000;
+const JOB_TERMINAL = new Set(['done', 'failed']);
+function mintJobId() { return 'job_' + Date.now().toString(36) + '_' + (++agentJobSeq).toString(36); }
+function jobPublic(j) {
+  return j ? { jobId: j.jobId, sid: j.sid, name: j.name, state: j.state, result: j.result,
+    truncated: !!j.truncated, exitCode: j.exitCode, startedAt: j.startedAt, updatedAt: j.updatedAt, endedAt: j.endedAt } : null;
+}
+function evictJobs() {
+  const now = Date.now();
+  for (const [id, j] of AGENT_JOBS) if (j.endedAt && now - j.endedAt > JOB_TTL_MS) AGENT_JOBS.delete(id);
+  while (AGENT_JOBS.size > JOB_MAX) { const first = AGENT_JOBS.keys().next().value; AGENT_JOBS.delete(first); }
+}
+function wakeJobWaiters(jobId) { const s = AGENT_WAITERS.get(jobId); if (s) for (const fn of [...s]) fn(); }
+// Handle a job verb server-side. Returns a result object, or null if `cmd` is not
+// a job verb (the caller then relays it to the app as before).
+function agentJobDispatch(cmd, args) {
+  args = args || {};
+  if (cmd === 'job-register') {
+    const jobId = mintJobId(); const now = Date.now();
+    const j = { jobId, sid: args.sid || null, name: args.name || null, state: 'working',
+      result: null, truncated: false, exitCode: null, startedAt: now, updatedAt: now, endedAt: null };
+    AGENT_JOBS.set(jobId, j); evictJobs();
+    return { job: jobPublic(j) };
+  }
+  if (cmd === 'job-report') {
+    const j = AGENT_JOBS.get(args.jobId);
+    if (!j) throw new Error('unknown jobId: ' + args.jobId);
+    if (JOB_TERMINAL.has(j.state)) return { job: jobPublic(j) };   // first terminal report wins; then immutable
+    let st = String(args.state || '');
+    if (st === 'needs-you') st = 'needsyou';
+    if (['working', 'needsyou', 'done', 'failed'].indexOf(st) < 0) throw new Error('bad job state: ' + st);
+    j.state = st;
+    if (args.result != null) { let r = String(args.result); if (r.length > JOB_RESULT_CAP) { r = r.slice(0, JOB_RESULT_CAP); j.truncated = true; } j.result = r; }
+    if (args.exitCode != null) j.exitCode = Number(args.exitCode);
+    j.updatedAt = Date.now();
+    if (JOB_TERMINAL.has(j.state)) { j.endedAt = j.updatedAt; wakeJobWaiters(j.jobId); }
+    return { job: jobPublic(j) };
+  }
+  if (cmd === 'job-status') { const j = AGENT_JOBS.get(args.jobId); if (!j) throw new Error('unknown jobId: ' + args.jobId); return { job: jobPublic(j) }; }
+  if (cmd === 'job-list') { return { jobs: [...AGENT_JOBS.values()].map(jobPublic) }; }
+  return null;
+}
+// Block until a job reaches a terminal state or the (bounded, resumable) timeout.
+// On timeout it returns the current record (state still 'working'), so the caller
+// can immediately wait again — the default sits well under a Claude Bash-tool
+// ceiling so `winmux agent wait` never gets killed mid-call.
+function agentJobWait(args) {
+  args = args || {};
+  const j = AGENT_JOBS.get(args.jobId);
+  if (!j) return Promise.reject(new Error('unknown jobId: ' + args.jobId));
+  if (JOB_TERMINAL.has(j.state)) return Promise.resolve({ job: jobPublic(j), waited: false });
+  const timeoutMs = Math.min(Math.max(Number(args.timeoutMs) || 90000, 500), 570000);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return; settled = true; clearTimeout(timer);
+      const set = AGENT_WAITERS.get(args.jobId); if (set) { set.delete(finish); if (!set.size) AGENT_WAITERS.delete(args.jobId); }
+      resolve({ job: jobPublic(AGENT_JOBS.get(args.jobId)), waited: true });
+    };
+    if (!AGENT_WAITERS.has(args.jobId)) AGENT_WAITERS.set(args.jobId, new Set());
+    AGENT_WAITERS.get(args.jobId).add(finish);
+    const timer = setTimeout(finish, timeoutMs);
+  });
+}
+
 // How long an unattended shell waits for you before giving up. Long enough to
 // cover a commute or a meeting; short enough that a forgotten tab doesn't leave
 // a PowerShell running on this PC all week.

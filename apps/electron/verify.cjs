@@ -110,6 +110,7 @@ const PORT_LEAFPERSIST = 9957; // ST6: non-terminal leaves survive a page reload
 const PORT_PREDICT = 9958;    // Phase 2: pwsh PSReadLine inline history prediction + RightArrow accept
 const PORT_IMAGES = 9959;     // Phase 3: inline images (addon-image) + `winmux image` verb
 const PORT_DPRFIX = 9977;     // MR-1: a devicePixelRatio-stuck WebGL canvas is resynced (prompt-float fix)
+const PORT_AGENTJOB = 9968;   // Stage 3: server-side agent-job store (spawn/wait/result), no browser needed
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
 // never drops a "Verify Project.winmux.json" into the real Documents\WinMux Projects.
@@ -1857,6 +1858,61 @@ check('electron', PORT_GROUPS, async ({ t }) => {
   t('the "+" button opens a New-tab type menu', Array.isArray(menu) && menu.length >= 4, menu);
   t('the menu offers Terminal / Browser / Markdown / Changes',
     ['Terminal', 'Browser', 'Markdown', 'Changes'].every((k) => menu.indexOf(k) >= 0), menu);
+});
+
+// --- agentjob: server-side agent-job store (Stage 3) ----------------------
+// The orchestration core: one session registers a job, another waits until it
+// finishes and gets its result as data. Handled by the server itself, so this
+// check needs NO browser — it proves a wait works with no app attached, which
+// is the whole point. Mechanism proof (a synthetic reporter); a real Claude
+// spawning another is the separate local E2E gate.
+check('agentjob', PORT_AGENTJOB, async ({ t }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_AGENTJOB), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => o += d);
+    proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+  const parse = (s) => { try { return JSON.parse(s); } catch (e) { return null; } };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const reg = parse((await winmux(['agent', 'register', '--name', 'build-x', '--json'])).out);
+  t('register mints a job in working state', reg && reg.job && /^job_/.test(reg.job.jobId) && reg.job.state === 'working', reg);
+  const jobId = reg && reg.job && reg.job.jobId;
+
+  const st0 = parse((await winmux(['agent', 'status', '--job', jobId, '--json'])).out);
+  t('status reads the job back by id', st0 && st0.job && st0.job.jobId === jobId, st0);
+
+  // Start a wait WITHOUT awaiting, then report done+result — the wait must unblock with the data.
+  const waitP = winmux(['agent', 'wait', '--job', jobId, '--timeout', '20', '--json']);
+  await sleep(600);
+  const rep = await winmux(['agent', 'done', '--job', jobId, '--result', 'the answer is 42']);
+  t('report done exits clean', rep.code === 0, rep.err);
+  const waited = await waitP;
+  const wj = parse(waited.out);
+  t('a blocked wait unblocks with the reported result', wj && wj.job && wj.job.state === 'done' && wj.job.result === 'the answer is 42', wj && wj.job);
+  t('wait exits 0 when the job is done', waited.code === 0, waited.code);
+
+  // Terminal state is immutable — a later report cannot overwrite done/result.
+  await winmux(['agent', 'failed', '--job', jobId, '--result', 'nope']);
+  const st2 = parse((await winmux(['agent', 'status', '--job', jobId, '--json'])).out);
+  t('the first terminal report wins (immutable)', st2 && st2.job.state === 'done' && st2.job.result === 'the answer is 42', st2 && st2.job);
+
+  const unk = await winmux(['agent', 'status', '--job', 'job_does_not_exist', '--json']);
+  t('an unknown jobId is rejected, not invented', unk.code !== 0, unk.out || unk.err);
+
+  // A wait that times out returns the still-working job with a resumable exit code (3),
+  // never hanging past the caller's tool ceiling.
+  const reg2 = parse((await winmux(['agent', 'register', '--json'])).out);
+  const w2 = await winmux(['agent', 'wait', '--job', reg2.job.jobId, '--timeout', '1', '--json']);
+  const w2j = parse(w2.out);
+  t('a timed-out wait is resumable (still working, exit 3)', w2j && w2j.job.state === 'working' && w2.code === 3, { code: w2.code, job: w2j && w2j.job });
+
+  // jobId isolation — the second job's state is independent of the first.
+  const iso = parse((await winmux(['agent', 'status', '--job', reg2.job.jobId, '--json'])).out);
+  t('jobs are isolated by id (no cross-talk)', iso && iso.job.state === 'working' && iso.job.jobId !== jobId, iso && iso.job);
 });
 
 // --- cli: the `winmux` command-line drives the live app -------------------

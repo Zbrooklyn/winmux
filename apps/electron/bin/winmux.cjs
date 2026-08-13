@@ -240,8 +240,53 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
       // --sid targets a session (defaults to $WINMUX_SID so a hook needs no args);
       // --id also works; else the active session.
       const state = (argv[1] || '').toLowerCase();
+
+      // Stage 3 — orchestration: a server-side job so one session can spawn another,
+      // wait until it finishes, and get its result as data. jobId (not sid) is the
+      // unit of work. These verbs are handled by the server, not the app.
+      const JOB_VERBS = ['register', 'wait', 'result', 'status', 'list'];
+      const resultFile = flag(argv, '--result-file');
+      const readResult = () => {
+        if (resultFile) { try { return fs.readFileSync(resultFile, 'utf8'); } catch (e) { die('cannot read --result-file ' + resultFile + ': ' + e.message); } }
+        return flag(argv, '--result');
+      };
+      if (JOB_VERBS.indexOf(state) >= 0 || ((state === 'done' || state === 'failed') && flag(argv, '--job'))) {
+        if (state === 'register') {
+          const r = await rpc('job-register', { sid: flag(argv, '--sid') || process.env.WINMUX_SID || null, name: flag(argv, '--name') || null });
+          return emit(r.job.jobId, r);
+        }
+        if (state === 'list') {
+          const r = await rpc('job-list');
+          if (has(argv, '--json')) return out(r);
+          if (!r.jobs.length) return out('(no agent jobs)');
+          return out(r.jobs.map((j) => j.jobId + '  ' + j.state + (j.name ? '  ' + j.name : '') + (j.sid ? '  sid=' + j.sid : '')).join('\n'));
+        }
+        const jobId = flag(argv, '--job');
+        if (!jobId) die('this needs --job <id> (from `winmux agent register` / `spawn`)');
+        if (state === 'wait') {
+          const timeoutMs = flag(argv, '--timeout') ? Math.round(Number(flag(argv, '--timeout')) * 1000) : undefined;
+          const r = await rpc('job-wait', { jobId, timeoutMs });
+          const st = r.job && r.job.state;
+          // Exit codes so a caller (or agent) can branch: 0 done, 2 failed, 3 still working / timed out.
+          process.exitCode = st === 'done' ? 0 : st === 'failed' ? 2 : 3;
+          if (has(argv, '--json')) return out(r);
+          return out(st === 'done' ? (r.job.result != null ? r.job.result : '(done, no result)')
+            : st === 'failed' ? '(failed' + (r.job.exitCode != null ? ' exit ' + r.job.exitCode : '') + ')' + (r.job.result ? '\n' + r.job.result : '')
+            : '(still working — wait again)');
+        }
+        if (state === 'result' || state === 'status') {
+          const r = await rpc('job-status', { jobId });
+          if (has(argv, '--json')) return out(r);
+          if (state === 'result') return out(r.job.result != null ? r.job.result : '(' + r.job.state + ', no result yet)');
+          return out(r.job.jobId + '  ' + r.job.state + (r.job.exitCode != null ? '  exit ' + r.job.exitCode : ''));
+        }
+        // done | failed --job J [--result R | --result-file F] [--exit N]
+        const r = await rpc('job-report', { jobId, state, result: readResult(), exitCode: flag(argv, '--exit') != null ? Number(flag(argv, '--exit')) : undefined });
+        return emit('job ' + jobId + ' → ' + r.job.state, r);
+      }
+
       if (['working', 'needs-you', 'needsyou', 'blocked', 'done', 'idle'].indexOf(state) < 0)
-        die('agent needs a state: working | needs-you | done | idle');
+        die('agent needs a state: working | needs-you | done | idle — or a job verb: register | wait | result | list');
       const words = [];
       for (let i = 2; i < argv.length; i++) {
         if (argv[i] === '--sid' || argv[i] === '--id') { i++; continue; }
