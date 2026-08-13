@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-8a5cf5.svg)](LICENSE)
 ![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078d4.svg)
 ![Node](https://img.shields.io/badge/Node-%E2%89%A518-339933.svg)
-![Harness](https://img.shields.io/badge/harness-225%2F225%20green-44cf6e.svg)
+[![CI](https://github.com/Zbrooklyn/winmux/actions/workflows/ci.yml/badge.svg)](https://github.com/Zbrooklyn/winmux/actions/workflows/ci.yml)
 
 <img src="docs/screenshots/hero.png" alt="WinMux desktop cockpit running a live PowerShell session" width="820">
 
