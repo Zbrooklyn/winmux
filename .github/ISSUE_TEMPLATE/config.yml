@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Read the docs first
+    url: https://github.com/Zbrooklyn/winmux#readme
+    about: The README covers install, phone access, the CLI, and how to verify a build.
+  - name: Report a security issue privately
+    url: https://github.com/Zbrooklyn/winmux/security/advisories/new
+    about: Do not file security problems as public issues. Report them here instead.

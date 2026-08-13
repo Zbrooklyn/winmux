@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in WinMux is broken or behaving wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report. The more specific the repro, the faster it gets fixed.
+  - type: input
+    id: version
+    attributes:
+      label: WinMux version
+      description: Shown in the first-run screen and in Settings.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did it happen
+      options:
+        - Desktop app
+        - Browser
+        - Phone (over Tailscale)
+    validations:
+      required: true
+  - type: input
+    id: shell
+    attributes:
+      label: Shell
+      description: Which shell the terminal was running.
+      placeholder: "PowerShell 7 / Windows PowerShell / cmd"
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open WinMux
+        2. ...
+        3. See the problem
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected vs what happened
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Diagnostics
+      description: Use the copy-logs action (Settings) and paste the output here.
+      render: text
