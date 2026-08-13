@@ -109,6 +109,7 @@ const PORT_DIFF = 9956;       // ST5: git diff opens as a pane tab (leaf), not a
 const PORT_LEAFPERSIST = 9957; // ST6: non-terminal leaves survive a page reload
 const PORT_PREDICT = 9958;    // Phase 2: pwsh PSReadLine inline history prediction + RightArrow accept
 const PORT_IMAGES = 9959;     // Phase 3: inline images (addon-image) + `winmux image` verb
+const PORT_DPRFIX = 9977;     // MR-1: a devicePixelRatio-stuck WebGL canvas is resynced (prompt-float fix)
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
 // never drops a "Verify Project.winmux.json" into the real Documents\WinMux Projects.
@@ -2382,6 +2383,60 @@ check('gpu', PORT_GPU, async ({ browser, base, t }) => {
   await page2.close();
 });
 
+// --- dprfix (MR-1): a devicePixelRatio-stuck WebGL canvas gets resynced ---
+// xterm's WebGL renderer resizes its canvas backing store only on a column/row
+// change — a pure devicePixelRatio change (Electron's startup dpr settle on a scaled
+// Windows display, or a monitor-to-monitor move) leaves the canvas stuck at the old
+// scale, so the whole grid renders wrong-sized and the first prompt strands mid-pane.
+// The buffer is correct the whole time; it's purely canvas geometry. The app now
+// detects canvas-backing != render-service device dims and forces a resync
+// (resyncRenderer, wired into open/show/fit and a dpr-change watcher). This guard
+// simulates the stuck state by doubling the canvas backing, then drives the resize
+// path and proves the canvas heals. Needs the shipping WebGL default (see the
+// WINMUX_FORCE_DOM exemption), so it gets its own raw page like gpu/ligature.
+check('dprfix', PORT_DPRFIX, async ({ browser, base, t }) => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+
+  const read = () => {
+    const at = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
+    if (!at || !at.term) return { err: 'no term' };
+    const term = at.term, rs = term._core && term._core._renderService;
+    let r = rs && rs._renderer; r = r && (r.value || r);
+    const canvas = r && r._canvas;
+    const dims = rs && rs.dimensions && rs.dimensions.device && rs.dimensions.device.canvas;
+    if (!canvas || !dims) return { err: 'no canvas/dims', renderer: term.__winmuxRenderer };
+    return {
+      renderer: term.__winmuxRenderer,
+      cw: canvas.width, ch: canvas.height, dw: Math.round(dims.width), dh: Math.round(dims.height),
+      matched: canvas.width === Math.round(dims.width) && canvas.height === Math.round(dims.height),
+    };
+  };
+
+  const before = await page.evaluate(read);
+  t('WebGL canvas backing matches render dims on open (healthy baseline)', before.renderer === 'webgl' && before.matched === true, before);
+
+  // Force the dpr-stuck state: double the canvas backing store out from under xterm.
+  const stuck = await page.evaluate(() => {
+    const at = window.__winmuxActiveTerm(); const term = at.term;
+    const rs = term._core._renderService; let r = rs._renderer; r = r && (r.value || r);
+    const c = r._canvas; c.width *= 2; c.height *= 2;
+    const dims = rs.dimensions.device.canvas;
+    return { matched: c.width === Math.round(dims.width) && c.height === Math.round(dims.height) };
+  });
+  t('Simulated dpr-stuck state creates a real canvas/dims mismatch', stuck.matched === false, stuck);
+
+  // Drive the app's resync path (window resize -> fitActive -> resyncRenderer).
+  await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+  await page.waitForTimeout(400);
+
+  const after = await page.evaluate(read);
+  t('resyncRenderer heals the canvas backing back to the render dims', after.matched === true, after);
+  await page.close();
+});
+
 // --- ligature: the switch really shapes operators, and pays the renderer price ---
 // Shaping "=>" into one arrow needs a text run the browser can shape, and only the
 // DOM renderer emits one — WebGL draws cell by cell out of a glyph atlas, so under
@@ -3672,12 +3727,13 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   // A check can carry a per-port server env override (e.g. the update check).
   const envByPort = {};
   for (const c of run) if (c.env) envByPort[c.port] = Object.assign({}, envByPort[c.port], c.env);
-  // Force the DOM renderer on every server EXCEPT the gpu and ligature checks' —
-  // those two must run the shipping WebGL default, since what they prove is the
-  // renderer itself (it engages; the ligature switch forks it). Everything else
-  // reads .xterm-rows text, which only the DOM renderer fills.
+  // Force the DOM renderer on every server EXCEPT the gpu, ligature and dprfix
+  // checks' — those must run the shipping WebGL default, since what they prove is
+  // the renderer itself (it engages; the ligature switch forks it; a dpr-stuck
+  // canvas resyncs). Everything else reads .xterm-rows text, which only the DOM
+  // renderer fills.
   for (const port of ports) {
-    const env = Object.assign({}, envByPort[port], (port === PORT_GPU || port === PORT_LIG) ? {} : { WINMUX_FORCE_DOM: '1' });
+    const env = Object.assign({}, envByPort[port], (port === PORT_GPU || port === PORT_LIG || port === PORT_DPRFIX) ? {} : { WINMUX_FORCE_DOM: '1' });
     servers[port] = await server(port, env);
   }
   for (const port of ports) {

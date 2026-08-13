@@ -246,6 +246,30 @@
       term.__winmuxRenderer = 'webgl';   // measured 12x fewer event-loop stalls under load
     } catch (e) { term.__winmuxRenderer = 'dom'; /* DOM renderer stays — perfectly fine, just slower */ }
   }
+  // devicePixelRatio resync. xterm's WebGL renderer only resizes its canvas backing
+  // store on a COLUMN/ROW change — a pure devicePixelRatio change does NOT resize it.
+  // On Windows with display scaling (125/150%) Electron paints the first frame at
+  // dpr 1, then the real dpr kicks in once the window lands on the scaled monitor: a
+  // dpr change with no col/row change. The canvas stays stuck at the old scale, so the
+  // whole grid renders at the wrong size and the first prompt is stranded mid-pane
+  // (the buffer is correct — it's purely a canvas-geometry bug). The DOM renderer
+  // positions rows with CSS and never has this. Detect the mismatch (canvas backing !=
+  // what the render service's dimensions want) and force the renderer to resize; a
+  // no-op equality check when healthy, so it costs nothing in the normal case.
+  function resyncRenderer(term) {
+    if (!term || term.__winmuxRenderer !== 'webgl') return;
+    try {
+      var rs = term._core && term._core._renderService;
+      var r = rs && rs._renderer; r = r && (r.value || r);
+      if (!rs || !r || typeof r.handleResize !== 'function') return;
+      var canvas = r._canvas;
+      var dims = rs.dimensions && rs.dimensions.device && rs.dimensions.device.canvas;
+      if (!canvas || !dims || !dims.width || !dims.height) return;
+      if (canvas.width === Math.round(dims.width) && canvas.height === Math.round(dims.height)) return;
+      r.handleResize(term.cols, term.rows);
+      term.refresh(0, term.rows - 1);
+    } catch (e) {}
+  }
   function applyLigatures() {
     if (S.ligatures) document.body.setAttribute('data-ligatures', '');
     else document.body.removeAttribute('data-ligatures');
@@ -1427,7 +1451,7 @@
     try { if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'x' })); } catch (e) {}
     try { if (t.ws) t.ws.close(); } catch (e) {}
   }
-  function fitActive(p) { var t = activeTermOf(p); if (t && t.fit) { try { t.fit.fit(); } catch (e) {} sendResize(t); } }
+  function fitActive(p) { var t = activeTermOf(p); if (t && t.fit) { try { t.fit.fit(); } catch (e) {} sendResize(t); resyncRenderer(t.term); } }
   function setFontSize(px) {
     px = Math.max(8, Math.min(28, px));
     if (px === S.fontSize) return;
@@ -1494,7 +1518,7 @@
       if (on) {
         // Terminal leaves fit + focus the xterm; a non-terminal leaf (browser,
         // markdown) has no term — it shows its own body via onShow instead.
-        if (t.term) { try { t.fit.fit(); } catch (e) {} sendResize(t); t.term.focus(); }
+        if (t.term) { try { t.fit.fit(); } catch (e) {} sendResize(t); resyncRenderer(t.term); t.term.focus(); }
         else if (t.onShow) { try { t.onShow(); } catch (e) {} }
         if (t.status === 'needsyou') setStatus(t, 'idle');
       }
@@ -1833,6 +1857,12 @@
     }
     term.open(host);
     applyRenderer(term);   // GPU vs DOM — see the function; must run AFTER open()
+    // Catch the Electron startup dpr settle (dpr 1 first paint -> real dpr once placed
+    // on a scaled monitor), which otherwise strands the very first prompt. Cheap no-op
+    // once the canvas already matches. rAF for the next frame + a short timeout for the
+    // slower place-on-monitor case.
+    requestAnimationFrame(function () { resyncRenderer(term); });
+    setTimeout(function () { resyncRenderer(term); }, 250);
     // WebGL scroll repaint. The GPU renderer can leave stale/torn rows behind after
     // a scroll (the buffer is correct — proven by the scroll torture test — but the
     // canvas doesn't always redraw the newly-exposed rows). Force a viewport refresh
@@ -1880,7 +1910,7 @@
     // Cheap no-op once the font is cached.
     if (document.fonts && document.fonts.ready) {
       document.fonts.ready.then(function () {
-        try { if (host.style.display !== 'none') { fit.fit(); term.refresh(0, term.rows - 1); } } catch (e) {}
+        try { if (host.style.display !== 'none') { fit.fit(); resyncRenderer(term); term.refresh(0, term.rows - 1); } } catch (e) {}
       });
     }
     // Instant skeleton. Opening a tab has an unavoidable sub-second gap (socket open
@@ -4324,6 +4354,25 @@
   });
   if (window.matchMedia) {
     try { window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function () { if (S.theme === 'system') applyTheme('system'); }); } catch (e) {}
+  }
+  // Watch for devicePixelRatio changes (monitor-to-monitor moves, OS scaling changes,
+  // and the Electron startup dpr settle) and resync every WebGL terminal's canvas —
+  // the one thing xterm's renderer doesn't do on its own (see resyncRenderer). A dpr
+  // media query matches only the CURRENT ratio, so re-arm after each change.
+  if (window.matchMedia) {
+    (function watchDpr() {
+      function arm() {
+        var mq;
+        try { mq = window.matchMedia('(resolution: ' + (window.devicePixelRatio || 1) + 'dppx)'); } catch (e) { return; }
+        function onChange() {
+          try { mq.removeEventListener('change', onChange); } catch (e) { try { mq.removeListener(onChange); } catch (e2) {} }
+          eachTerm(function (t) { resyncRenderer(t.term); });
+          arm();
+        }
+        try { mq.addEventListener('change', onChange); } catch (e) { try { mq.addListener(onChange); } catch (e2) {} }
+      }
+      arm();
+    })();
   }
 
   // ------------------------------------------------------------------- boot
