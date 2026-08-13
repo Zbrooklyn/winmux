@@ -283,6 +283,7 @@
   function startShell() { return S.defaultShell || DEFAULT_SHELL; }
   function labelFor(key) { for (var i = 0; i < SHELLS.length; i++) if (SHELLS[i].key === key) return SHELLS[i].label; return 'Terminal'; }
   var HOME = '';
+  var APP_VERSION = '';   // filled from /api/info; the single source for the shown version
 
   var NEW_SVG = '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>';
   var CARET_SVG = '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
@@ -1476,7 +1477,9 @@
     if (p) {
       reflect(p);
       var t = activeTermOf(p);
-      if (t) { t.term.focus(); if (t.status === 'needsyou') setStatus(t, 'idle'); }
+      // A non-terminal leaf (markdown / browser / diff) has no .term, so guard the
+      // focus call — clicking back to it must not throw and strand the pane.
+      if (t) { if (t.term) t.term.focus(); if (t.status === 'needsyou') setStatus(t, 'idle'); }
     }
     renderSidebar();
   }
@@ -3616,7 +3619,7 @@
       return rows +
         '<div style="margin-top:14px"><span class="btn" data-act="reset-keys">Reset all shortcuts</span> <span class="btn" data-act="cheat">Full list (F1)</span></div>';
     }
-    return '<div style="font-size:13px;margin-bottom:6px">WinMux v1.0</div>' +
+    return '<div style="font-size:13px;margin-bottom:6px">WinMux ' + (APP_VERSION ? 'v' + esc(APP_VERSION) : '') + '</div>' +
       '<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:14px">A terminal multiplexer for Windows. Runs real shells on this machine. It always listens on 127.0.0.1, where only this PC can reach it. Reaching it from your phone is off until you switch it on in Settings → Phone.</div>' +
       '<div><span class="btn" data-act="diag">Diagnostics</span> <span class="btn" data-act="reset">Reset settings</span></div>';
   }
@@ -4311,6 +4314,7 @@
 
   fetch('/api/info').then(function (r) { return r.json(); }).then(function (d) {
     HOME = d.home || '';
+    if (d.version) APP_VERSION = d.version;   // one source of truth for the version string
     var ver = document.getElementById('wc-ver');
     if (ver && d.version) ver.textContent = 'v' + d.version;
   }).catch(function () {});

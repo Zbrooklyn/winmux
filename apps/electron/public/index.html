@@ -301,7 +301,9 @@
      positioned by scroll fraction from app.js (updateScrollbar) — always visible
      while there's scrollback, independent of the browser's scrollbar mode and the
      WebGL renderer. Hide the native bar so there's no double. */
-  .term-host { position: relative; }
+  /* NB: the thumb's positioning context comes from `.term-host { position:absolute }`
+     above — do NOT re-declare position:relative here; it drops the `inset:0` fill and
+     collapses the host to content height, leaving the terminal floating in a half pane. */
   .xterm-viewport::-webkit-scrollbar { width: 0; height: 0; }
   .termsb-thumb {
     position: absolute; top: 0; right: 2px; width: 6px; border-radius: 6px;

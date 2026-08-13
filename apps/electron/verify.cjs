@@ -498,7 +498,12 @@ check('brand', PORT_BUSY, async ({ browser, base, t, shot }) => {
 
   await settings(p, 'About');
   const about = (await p.locator('#settings-pane').textContent()).replace(/\s+/g, ' ').trim();
-  t('About says WinMux, not cockpit-terminal', /WinMux v1\.0/.test(about) && !/cockpit-terminal/i.test(about));
+  // The About version must be the real one (from /api/info), matching every other
+  // surface — no hardcoded string that can drift out of sync with the release.
+  const infoVer = await p.evaluate(() => fetch('/api/info').then((r) => r.json()).then((d) => d.version || '').catch(() => ''));
+  t('About shows the live version (matches /api/info), not cockpit-terminal',
+    !!infoVer && about.indexOf('WinMux v' + infoVer) !== -1 && !/cockpit-terminal/i.test(about),
+    { infoVer, about: about.slice(0, 40) });
   await shot(p, 'about');
   await p.keyboard.press('Escape');
   await p.waitForTimeout(400);
