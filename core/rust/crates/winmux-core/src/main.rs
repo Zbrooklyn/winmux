@@ -431,6 +431,10 @@ async fn handle_pty(
     });
 
     let mut explicit_kill = false;
+    // A fresh shell prints its first prompt into the blind 80x24 spawn buffer; the
+    // first client resize below repaints it top-anchored (see the "r" handler).
+    // Never on a resumed session — that would wipe the replayed scrollback.
+    let mut needs_clear = !resumed;
     loop {
         // A forced close (door off / device forgotten) breaks the loop, dropping
         // the socket so the phone's terminal stops answering. Otherwise read the
@@ -461,6 +465,16 @@ async fn handle_pty(
                         let cols = v.get("c").and_then(|x| x.as_u64()).unwrap_or(80) as u16;
                         let rows = v.get("r").and_then(|x| x.as_u64()).unwrap_or(24) as u16;
                         let _ = session.master.lock().unwrap().resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+                        // Fresh shell only, once: the prompt rendered blind at 80x24; now that
+                        // the real size has landed, send Ctrl+L (PSReadLine ClearScreen) so it
+                        // repaints top-anchored instead of stranded mid-screen. Mirrors the Node
+                        // core's fix in server.cjs (inject \f on the first resize of a fresh pty).
+                        if needs_clear {
+                            needs_clear = false;
+                            let mut w = session.writer.lock().unwrap();
+                            let _ = w.write_all(b"\x0c");
+                            let _ = w.flush();
+                        }
                     }
                     Some("x") => { explicit_kill = true; break; }
                     _ => {}
