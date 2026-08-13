@@ -36,7 +36,10 @@ jobs:
         run: npm run build:electron
 
       - name: Run harness (serial, CI-safe scenarios)
-        run: node verify.cjs port config cli remote agent-state paste
+        # Curated set that runs clean on a headless runner. Tailscale-, display-,
+        # and installed-app-dependent scenarios stay out and run locally via
+        # `npm run verify`. WINMUX_VERIFY_CONCURRENCY=1 removes the load-flakes.
+        run: node verify.cjs port config cli remote agent-state keybindings theme-import paste migrate markdown diff-tab md-rich marks cmdtag approvecard resume
         env:
           WINMUX_VERIFY_CONCURRENCY: "1"
           WINMUX_CHECK_TIMEOUT_MS: "300000"
