@@ -437,8 +437,12 @@
   .sxbtn:focus-visible, .pc:focus-visible, .upbadge:focus-visible { outline-offset: 1px; }
   /* The tab close glyph was dimmed with opacity to .45, which put it at 2.8:1.
      Same step down, done in the colour ramp instead, where it stays readable. */
-  .ptab .x { opacity: 1; color: var(--faint); }
-  .ptab .x:hover { color: var(--text); }
+  /* Give the desktop close a real hit area — the glyph itself is ~10px, too small
+     to aim a cursor at reliably. A centred 20x20 box with a hover chip makes it a
+     comfortable target and reads as a button, without enlarging the mark. */
+  .ptab .x { opacity: 1; color: var(--faint); width: 20px; height: 20px; border-radius: 5px;
+    display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+  .ptab .x:hover { color: var(--text); background: var(--hover); }
   /* On the phone the primary input is a thumb, so the controls it has to hit are
      sized for one: the mockup's 28px icons and its 10x14 close glyph are not. */
   .cockpit[data-mode="narrow"] .ptab { min-height: 44px; }

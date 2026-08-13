@@ -1410,7 +1410,16 @@ function attach(s, ws) {
     if (isBinary) return;
     let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
     if (msg.t === 'i' && typeof msg.d === 'string') s.term.write(msg.d);
-    else if (msg.t === 'r' && msg.c > 0 && msg.r > 0) { try { s.term.resize(msg.c, msg.r); } catch {} }
+    else if (msg.t === 'r' && msg.c > 0 && msg.r > 0) {
+      try { s.term.resize(msg.c, msg.r); } catch {}
+      // A fresh shell rendered its first prompt into the blind 80x24 spawn buffer
+      // (a pre-warmed spare has been sitting at that prompt for a while). Now that
+      // the client's true size has landed, ask PSReadLine to repaint via Ctrl+L
+      // (its default ClearScreen binding) so the prompt lands top-anchored at the
+      // real width instead of stranded mid-screen where the 24-row coordinates put
+      // it. Once only, and never on a resumed session — that would wipe scrollback.
+      if (s.needsClear) { s.needsClear = false; try { s.term.write('\f'); } catch {} }
+    }
     // Closing a tab on purpose is the one close that still means "kill it".
     // Everything else is treated as an interruption worth waiting out.
     else if (msg.t === 'x') endSession(s, 'closed by you');
@@ -1596,6 +1605,9 @@ function onShellConnection(ws, req) {
   // `lost` says we were asked for a session that is no longer here, so the app
   // can say that plainly instead of pretending this fresh shell is the old one.
   ws.send(JSON.stringify({ type: 'meta', sid: s.id, shell: s.shell, cwd: s.cwd, resumed: false, lost: !!sid }));
+  // A brand-new shell printed its prompt blind at 80x24; the first client resize
+  // will trigger a clean top-anchored repaint (see the resize handler in attach()).
+  s.needsClear = true;
   attach(s, ws);
 }
 

@@ -1102,7 +1102,7 @@
     var g = groupById(t.groupId) || {};
     var stat = statusLine(t), tone = statusTone(t);
     var chip = tone === 'hot' ? 'hot' : (tone === 'work' ? 'work' : 'mut');
-    var sub = esc(g.name || 'Session') + (t.shell ? ' · ' + esc(labelFor(t.shell)) : '');
+    var sub = esc(g.name || 'Session') + ' · ' + esc(leafKind(t));
     var primary;
     if (t.status === 'needsyou') {
       // The phone approval card (Phase 8, Option-B direction): lead with the plain
@@ -1244,7 +1244,7 @@
         var attn = t.status === 'needsyou' || t.status === 'closed';
         // An unrenamed terminal is already named after its shell, so printing the
         // shell again on the same line just reads "PowerShell   PowerShell".
-        var nm = termName(t), kind = labelFor(t.shell);
+        var nm = termName(t), kind = leafKind(t);
         return '<div class="ncard' + (attn ? ' attn' : '') + '" data-open="' + t.id + '">' +
           '<span class="dot ' + dotClass(t) + ' sd"></span>' +
           '<div class="sb"><div class="r1">' +
@@ -1736,6 +1736,17 @@
     if (k === 'diff') return '±';       // ±
     return '>_';
   }
+  // The human kind of a leaf, for the session lists (sidebar previews, the mobile
+  // fleet cards). A non-terminal leaf has no shell, so labelFor(t.shell) falls back
+  // to "Terminal" — a mislabel that read the same on a Markdown or Changes tab. Name
+  // the surface instead; only a real terminal defers to its shell label.
+  function leafKind(t) {
+    var k = leafType(t);
+    if (k === 'browser') return 'Browser';
+    if (k === 'markdown') return 'Markdown';
+    if (k === 'diff') return 'Changes';
+    return labelFor(t && t.shell);
+  }
 
   // Paint a dead session's kept scrollback back into a fresh terminal after a
   // restart, bracketed so it reads as history, not live output. Async (the server
@@ -1990,8 +2001,15 @@
       return true;
     });
     // OSC 0/2 auto-title: the shell names the tab, unless the user renamed it by hand.
+    // But PowerShell/pwsh's *default* window title is its own executable path
+    // (…\pwsh.exe) — useless as a tab label, and it comes back on every resume when
+    // the scrollback replays that sequence, clobbering the friendly "PowerShell 7".
+    // Drop any title that is just a path to an .exe; honour real, semantic titles a
+    // program sets on purpose (vim, ssh, a custom prompt) and keep the shell label
+    // otherwise.
     term.onTitleChange(function (title) {
       if (!title || t.renamed) return;
+      if (/[\\/][^\\/]+\.exe\s*$/i.test(title)) return;
       t.autoTitle = title;
       if (ttEl) ttEl.textContent = title;
     });
