@@ -54,8 +54,50 @@ That's the whole setup. Start `claude` in any WinMux terminal and the cockpit fo
 its lifecycle — including the phone over Tailscale, so you can approve a blocked agent
 from anywhere.
 
+## Orchestration: one session drives another
+
+The states above let the cockpit *watch* an agent. WinMux can also let one agent
+**run** another and use what it produces. A session opens a second session, gives it a
+task, waits until it finishes, and gets the result back as data.
+
+```
+winmux agent spawn "fix the failing test in verify.cjs"   # open a session, run the task, get a job id
+winmux agent wait --job <id>                              # block until it finishes; prints its result
+winmux agent result --job <id>                            # read a finished job's result later
+```
+
+`spawn` mints a server-side **job id**, opens a fresh session, and launches the task in
+it (a Claude prompt by default, or any command with `--cmd`). The task's output is
+captured to a file and the session reports its own completion back to the server. `wait`
+blocks on that job and returns its result the moment it lands.
+
+How it fits together:
+
+- **The job id is the unit of work, not the session id.** A session id addresses a
+  terminal; a job id addresses one task run in it. Report, wait, and result all carry the
+  job id, so a stale report can never satisfy a newer wait.
+- **Completion is cooperative.** The spawned task reports `done` (or `failed`) with its
+  result by calling `winmux agent done --job <id> --result-file <file>` when it finishes.
+  The `spawn` launcher wires this up automatically. WinMux does not guess that a
+  session "finished" from its output, because the shell stays alive at a prompt after the
+  task ends.
+- **The result is data.** Up to 64 KB of the task's captured output, stored verbatim and
+  returned as one JSON envelope (`jobId`, `sid`, `state`, `result`, `exitCode`, and
+  timestamps). The shape is identical on the Node and Rust engines.
+- **The wait never hangs.** It resolves within about a second of the report, defaults to a
+  90-second bound, and is resumable: on timeout it returns the current state so the caller
+  can wait again or go do other work. Exit codes are `0` done, `2` failed, `3` still
+  working, `4` unknown job.
+- **Local only.** Orchestration verbs run at the PC over the local RPC surface; the phone
+  link cannot drive them.
+
+What this does not do yet: **supervise** a spawned session (detect a crash that never
+reports, and optionally restart it). That is a separate, safety-sensitive follow-on;
+restarting a task can repeat its side effects, so any auto-restart will be off by default
+and opt-in.
+
 ## Scope
 
-This is the hooks → cockpit-state bridge. A richer **transcript/fleet reader** (parsing
-Claude Code session `.jsonl` for per-turn history) is a separate, larger follow-on and
-is not part of this integration.
+This is the hooks → cockpit-state bridge plus the orchestration verbs above. A richer
+**transcript/fleet reader** (parsing Claude Code session `.jsonl` for per-turn history) is
+a separate, larger follow-on and is not part of this integration.

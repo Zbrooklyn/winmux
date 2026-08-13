@@ -127,7 +127,16 @@ winmux browser click @e1         # click one of them
 winmux markdown README.md        # open a file in the live markdown viewer
 winmux open workspace.json       # open a saved set of terminals (cwd/shell/command each)
 winmux agent needs-you "..."     # set this session's agent state (working|needs-you|done)
+winmux agent spawn "fix the test"# open a new session, run Claude on the task, get a job to wait on
+winmux agent wait --job <id>     # block until that session finishes; prints its result
+winmux agent result --job <id>   # print a finished session's result
 ```
+
+An agent can also **orchestrate** other agents. `winmux agent spawn` opens a fresh session,
+runs a task in it (a Claude prompt, or any `--cmd`), and returns a job id. `winmux agent wait
+--job <id>` blocks until that session finishes and hands back its result as data — the spawned
+session reports completion to the server itself, so nothing is screen-scraped. That lets one
+Claude session start another, wait for it, and use what it produced.
 
 An agent (e.g. Claude) uses these to open terminals and run tools for you. The browser panel is
 the desktop app's Electron `<webview>`; the markdown viewer follows a file live as it's written.

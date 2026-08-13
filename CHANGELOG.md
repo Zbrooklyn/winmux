@@ -4,6 +4,16 @@ All notable changes to WinMux are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Agent orchestration. One session can spawn another, run a task in it (a Claude prompt or any
+  command), and block until it finishes, getting the result back as data. `winmux agent spawn`
+  opens the session and returns a job id; `winmux agent wait --job <id>` waits for it and prints
+  the result; `winmux agent result --job <id>` reads a finished job. The spawned session reports
+  its own completion to the server, so nothing is screen-scraped, and the wait is bounded and
+  resumable so it never hangs. Built into both the Node and Rust engines with identical behaviour.
+
 ## [0.1.0] - 2026-08-13
 
 First public release.
