@@ -73,7 +73,41 @@ const TOOLS = [
   { name: 'winmux_agent', desc: "Set a session's agent state in the cockpit: working | needs-you | done | idle. Omit id/sid for the active session; needs-you raises the NEEDS YOU alarm + Approve, done/idle clear it.",
     schema: { type: 'object', properties: { state: { type: 'string', enum: ['working', 'needs-you', 'done', 'idle'] }, message: { type: 'string' }, id: { type: 'number' } }, required: ['state'] },
     cmd: 'agent', map: (a) => ({ state: a.state, message: a.message, target: a.id }) },
+  // --- orchestration: spawn a worker session and track its job as data ------
+  { name: 'winmux_agent_spawn', desc: 'Spawn a worker Claude Code session in a new WinMux tab (or split pane) to do a task, registered as a job. Streams live in the pane; the worker reports its own completion + result. Returns { jobId, sid }. split: "right"|"down" opens a split pane of the current tab (use when the user wants sessions side by side); omit for a new tab. headless runs `claude -p` instead of the interactive session.',
+    schema: { type: 'object', properties: { task: { type: 'string' }, name: { type: 'string' }, cwd: { type: 'string' }, split: { type: 'string', enum: ['right', 'down'] }, headless: { type: 'boolean' } }, required: ['task'] },
+    run: async (a) => {
+      const args = ['agent', 'spawn', a.task, '--json'];
+      if (!a.headless) args.push('--tui');
+      if (a.name) args.push('--name', a.name);
+      if (a.cwd) args.push('--cwd', a.cwd);
+      if (a.split) args.push('--split', a.split);
+      const r = await cli(args, 120000);
+      if (r.code !== 0) throw new Error(r.err || r.out || 'spawn failed');
+      const j = JSON.parse(r.out);
+      return { jobId: j.jobId, sid: j.sid };
+    } },
+  { name: 'winmux_agent_wait', desc: 'Wait for a spawned job to finish (bounded). Returns the job {state, result?}. state "working" means the timeout elapsed — call again with the same jobId.',
+    schema: { type: 'object', properties: { jobId: { type: 'string' }, timeoutSec: { type: 'number' } }, required: ['jobId'] },
+    run: (a) => rpc('job-wait', { jobId: a.jobId, timeoutMs: Math.round((a.timeoutSec || 120) * 1000) }) },
+  { name: 'winmux_agent_result', desc: "Read a spawned job's state and result.",
+    schema: { type: 'object', properties: { jobId: { type: 'string' } }, required: ['jobId'] },
+    run: (a) => rpc('job-status', { jobId: a.jobId }) },
 ];
+
+// Run the winmux CLI as a child process (for tools that are client-side flows,
+// not single /rpc commands — e.g. spawn's tab+register+launcher sequence).
+function cli(args, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const { execFile } = require('child_process');
+    execFile(process.execPath, [path.join(__dirname, 'winmux.cjs')].concat(args),
+      { timeout: timeoutMs || 60000, env: process.env, windowsHide: true },
+      (err, so, se) => {
+        if (err && err.killed) return reject(new Error('winmux CLI timed out'));
+        resolve({ code: err ? (err.code || 1) : 0, out: String(so || '').trim(), err: String(se || '').trim() });
+      });
+  });
+}
 const BY_NAME = {}; TOOLS.forEach((t) => { BY_NAME[t.name] = t; });
 
 function send(msg) { process.stdout.write(JSON.stringify(msg) + '\n'); }
@@ -99,7 +133,7 @@ async function handle(msg) {
     if (!t) return replyErr(msg.id, -32602, 'unknown tool: ' + name);
     const args = (msg.params && msg.params.arguments) || {};
     try {
-      const result = await rpc(t.cmd, t.map ? t.map(args) : args);
+      const result = t.run ? await t.run(args) : await rpc(t.cmd, t.map ? t.map(args) : args);
       return reply(msg.id, { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] });
     } catch (e) {
       return reply(msg.id, { content: [{ type: 'text', text: 'error: ' + e.message }], isError: true });

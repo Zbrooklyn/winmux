@@ -2515,6 +2515,7 @@
     if (panes.length <= 1) return;
     clearZoom();
     p.terms.forEach(function (t) { killShell(t); try { t.term.dispose(); } catch (e) {} });
+    if (p._ro) { try { p._ro.disconnect(); } catch (e) {} clearTimeout(p._roT); }
     var col = p.col;
     var prev = p.el.previousElementSibling;
     var next = p.el.nextElementSibling;
@@ -2642,6 +2643,17 @@
       nbarName: el.querySelector('.nbar .nm'),
       terms: [], activeTermId: null, mru: [], pinned: false,
     };
+    // Refit whenever THIS pane's box changes — splits, pane closes, sidebar/dock
+    // toggles, and divider drags all resize panes without a window resize, and a
+    // terminal fitted against a mid-layout box keeps a stale canvas (tiny squished
+    // text) until something refits it. The observer is that something.
+    if (window.ResizeObserver) {
+      p._ro = new ResizeObserver(function () {
+        clearTimeout(p._roT);
+        p._roT = setTimeout(function () { fitActive(p); }, 60);
+      });
+      p._ro.observe(p.termArea);
+    }
     p.railBtn.addEventListener('click', function (e) { e.stopPropagation(); toggleSidebar(); });
     p.newBtn.addEventListener('click', function (e) { e.stopPropagation(); focusPane(p.id); showTypeMenu(p, p.newBtn); });
     p.newMenuBtn.addEventListener('click', function (e) {

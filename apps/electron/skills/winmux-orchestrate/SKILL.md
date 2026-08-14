@@ -5,38 +5,28 @@ description: Orchestrate sibling Claude Code sessions in WinMux tabs — spawn w
 
 # WinMux orchestration
 
-You are running inside a WinMux tab (`WINMUX_SID` = your tab id, `WINMUX_PORT` = the control port). WinMux ships a control CLI. All commands below are Bash commands.
+You are running inside a WinMux tab (`WINMUX_SID` = your tab id, `WINMUX_PORT` = the control port). WinMux gives you three moves: spawn a worker session, wait for its job, read its result. The worker streams live in its own pane, writes its final answer to a result file, and marks its own job done — you never manage that part.
 
-## Spawn a worker session (the main move)
+## Preferred: the winmux MCP tools
 
-Use the bundled spawner — it opens a new WinMux tab, registers a job for it, launches a real Claude Code session there with your task, and wires up completion reporting automatically:
+If tools named `winmux_agent_spawn`, `winmux_agent_wait`, and `winmux_agent_result` are available, use them — no shell commands needed:
 
-    node "C:/Users/EDWAR/Dropbox/AI_Projects_Claude/projects/winmux/apps/electron/scripts/spawn-claude-worker.cjs" --name "<short label>" --cwd "<working directory>" --task "<what the worker should do>"
+1. `winmux_agent_spawn` with `{ task, name, cwd, split }` → returns `{ jobId }`. `split: "right"` for the first worker and `"down"` for later ones opens them in split panes of the current tab (use when the user wants to watch sessions side by side); omit `split` for new tabs.
+2. `winmux_agent_wait` with `{ jobId, timeoutSec: 300 }` → job state. `"working"` means the timeout elapsed — call it again with the same jobId.
+3. `winmux_agent_result` with `{ jobId }` → the worker's full result.
 
-It prints ONLY the worker's jobId. The worker writes its final answer to a result file and marks its own job done when finished — you do not manage that part.
+## Fallback: the winmux CLI (Bash)
 
-By default the worker opens in a new tab. When the user wants to watch sessions side by side (split screen), add `--split right` for the first worker and `--split down` for each later one — the workers then open in split panes of the current tab, visible alongside you.
+    node "C:/Users/EDWAR/Dropbox/AI_Projects_Claude/projects/winmux/apps/electron/bin/winmux.cjs" agent spawn "<task>" --tui --name "<short label>" --cwd "<dir>" [--split right|down] --json
 
-Keep `--task` on one line. Put any safety constraints (for example "read-only on the repo: do not modify, create, or commit anything") inside the task text — the worker only knows what you tell it.
+Returns `{"jobId": ...}`. Then wait / read with the same CLI:
 
-## Wait for a worker
-
-    node "C:/Users/EDWAR/Dropbox/AI_Projects_Claude/projects/winmux/apps/electron/bin/winmux.cjs" agent wait --job <jobId> --timeout 300
-
-Exit codes: 0 = done, 2 = failed, 3 = still working (run the same command again), 4 = unknown job.
-
-## Read a worker's result
-
-    node "C:/Users/EDWAR/Dropbox/AI_Projects_Claude/projects/winmux/apps/electron/bin/winmux.cjs" agent result --job <jobId>
-
-## Report your own status (usually automatic via hooks)
-
-    node "C:/Users/EDWAR/Dropbox/AI_Projects_Claude/projects/winmux/apps/electron/bin/winmux.cjs" agent working
-    node "C:/Users/EDWAR/Dropbox/AI_Projects_Claude/projects/winmux/apps/electron/bin/winmux.cjs" agent done
-    node "C:/Users/EDWAR/Dropbox/AI_Projects_Claude/projects/winmux/apps/electron/bin/winmux.cjs" agent needs-you "<message>"
+    node ".../bin/winmux.cjs" agent wait --job <jobId> --timeout 300     (exit 3 = still working, run again)
+    node ".../bin/winmux.cjs" agent result --job <jobId>
 
 ## Rules
 
+- Put any safety constraints (e.g. "read-only on the repo: do not modify, create, or commit anything") inside the task text — the worker only knows what you tell it.
 - Wait for every job you spawn and read its result — never leave one unread.
+- Spawn workers back-to-back when their tasks are independent, then wait on each job in turn.
 - Do not close tabs you did not create.
-- Spawn workers in parallel when the tasks are independent, then wait on each job in turn.

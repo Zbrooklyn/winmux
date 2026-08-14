@@ -251,34 +251,80 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
         return flag(argv, '--result');
       };
       if (state === 'spawn') {
-        // Open a fresh tab, launch a task in it, and hand back a job to wait on.
-        // The launcher runs the task, captures its output, and reports done/failed
-        // to the server itself — so completion + result are data, not screen-scrape.
-        // A prompt runs `claude -p` (headless Claude); --cmd runs an arbitrary shell
-        // command (scripts, tests, and the harness). PowerShell-family shells.
+        // Open a fresh tab (or split pane), launch a task in it, and hand back a job
+        // to wait on. The whole launch sequence lives in a temp job.ps1, so the
+        // terminal shows ONE short line — never the task text. The launcher runs the
+        // task and reports done/failed + the result to the server itself, so
+        // completion + result are data, not screen-scrape.
+        //   --cmd "<shell cmd>"      run an arbitrary command (scripts, tests, CI)
+        //   "<prompt>"               run headless Claude (`claude -p`)
+        //   "<prompt>" --tui         run interactive Claude Code, streaming in the pane
+        //   --split right|down       open in a split pane of the current tab
+        // PowerShell-family shells.
         const os = require('os');
         const psq = (s) => "'" + String(s).replace(/'/g, "''") + "'";   // PowerShell single-quote escape
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         const cliPath = path.join(__dirname, 'winmux.cjs');
         const rawCmd = flag(argv, '--cmd');
         const prompt = (argv[2] && !argv[2].startsWith('--')) ? argv[2] : null;
+        const tui = has(argv, '--tui');
+        const splitDir = flag(argv, '--split');
         if (!rawCmd && !prompt) die('spawn needs a prompt or --cmd: winmux agent spawn "fix the failing test"  |  winmux agent spawn --cmd "npm test"');
-        const nt = await rpc('new-tab', { shell: flag(argv, '--shell') });
-        const sid = nt && nt.id;
-        if (sid == null) die('could not open a tab for the spawned session');
+        if (tui && !prompt) die('--tui runs interactive Claude Code and needs a prompt, not --cmd');
+        let sid = null;
+        if (splitDir) {
+          // `split` returns no id — detect the new terminal by diffing the session list.
+          const before = new Set((((await rpc('list')) || {}).sessions || []).map((s) => s.id));
+          await rpc('split', { dir: splitDir === 'down' ? 'down' : 'right', shell: flag(argv, '--shell') });
+          for (let i = 0; i < 20 && sid == null; i++) {
+            await sleep(500);
+            const now = (((await rpc('list')) || {}).sessions || []).map((s) => s.id);
+            const fresh = now.filter((x) => !before.has(x));
+            if (fresh.length) sid = fresh[fresh.length - 1];
+          }
+          if (sid == null) die('split produced no new terminal');
+        } else {
+          const nt = await rpc('new-tab', { shell: flag(argv, '--shell') });
+          sid = nt && nt.id;
+          if (sid == null) die('could not open a tab for the spawned session');
+        }
         const name = flag(argv, '--name') || (prompt || rawCmd).slice(0, 48);
         const reg = await rpc('job-register', { sid: String(sid), name });
         const jobId = reg.job.jobId;
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'winmux-job-'));
         const rf = path.join(dir, 'result.txt');
-        let taskExpr = rawCmd;
-        if (!rawCmd) { const pf = path.join(dir, 'prompt.txt'); fs.writeFileSync(pf, prompt, 'utf8'); taskExpr = 'Get-Content -Raw -LiteralPath ' + psq(pf) + ' | claude -p'; }
-        const parts = [];
-        if (flag(argv, '--cwd')) parts.push('Set-Location -LiteralPath ' + psq(flag(argv, '--cwd')));
-        parts.push('& { ' + taskExpr + ' } *>&1 | Tee-Object -FilePath ' + psq(rf) + ' | Out-Host');
-        parts.push('$__x = $LASTEXITCODE');
-        parts.push('if ($null -eq $__x -or $__x -eq 0) { & node ' + psq(cliPath) + ' agent done --job ' + jobId + ' --result-file ' + psq(rf) +
-          ' } else { & node ' + psq(cliPath) + ' agent failed --job ' + jobId + ' --exit $__x --result-file ' + psq(rf) + ' }');
-        await rpc('send', { data: parts.join('; '), enter: true, target: String(sid) });
+        const lines = [];
+        if (flag(argv, '--cwd')) lines.push('Set-Location -LiteralPath ' + psq(flag(argv, '--cwd')));
+        if (tui) {
+          // Interactive Claude Code streaming in the pane. The prompt carries its own
+          // completion contract: write the result file, then report the job done.
+          // Worker hooks (working/done lanes, no idle-notification noise) when present.
+          const hooks = path.join(__dirname, '..', 'config', 'claude-hooks-worker.json');
+          const pf = path.join(dir, 'prompt.txt');
+          fs.writeFileSync(pf, prompt +
+            ' When you are completely done: 1) write your full final answer to the file ' + rf.replace(/\\/g, '/') +
+            ' using the Write tool, 2) then run this exact Bash command: node "' + cliPath.replace(/\\/g, '/') + '" agent done --job ' + jobId + ' --result-file "' + rf.replace(/\\/g, '/') + '"', 'utf8');
+          lines.push('[Console]::OutputEncoding=[System.Text.Encoding]::UTF8');
+          lines.push('$__p = Get-Content -Raw -LiteralPath ' + psq(pf));
+          lines.push((fs.existsSync(hooks) ? 'claude --settings ' + psq(hooks) + ' ' : 'claude ') + '--dangerously-skip-permissions $__p');
+        } else {
+          let taskExpr = rawCmd;
+          if (!rawCmd) { const pf = path.join(dir, 'prompt.txt'); fs.writeFileSync(pf, prompt, 'utf8'); taskExpr = 'Get-Content -Raw -LiteralPath ' + psq(pf) + ' | claude -p'; }
+          lines.push('& { ' + taskExpr + ' } *>&1 | Tee-Object -FilePath ' + psq(rf) + ' | Out-Host');
+          lines.push('$__x = $LASTEXITCODE');
+          lines.push('if ($null -eq $__x -or $__x -eq 0) { & node ' + psq(cliPath) + ' agent done --job ' + jobId + ' --result-file ' + psq(rf) +
+            ' } else { & node ' + psq(cliPath) + ' agent failed --job ' + jobId + ' --exit $__x --result-file ' + psq(rf) + ' }');
+        }
+        const launcher = path.join(dir, 'job.ps1');
+        fs.writeFileSync(launcher, lines.join('\r\n') + '\r\n', 'utf8');
+        // A fresh shell (split panes especially) spawns cold: wait for its prompt
+        // before typing, so the launch line lands in a ready shell.
+        for (let i = 0; i < 40; i++) {
+          const sc = await rpc('read-screen', { target: String(sid), lines: 20 }).catch(() => null);
+          if (sc && /PS [A-Z]:.*>/.test(sc.screen || '')) break;
+          await sleep(750);
+        }
+        await rpc('send', { data: '& ' + psq(launcher), enter: true, target: String(sid) });
         return emit('spawned job ' + jobId + ' in session ' + sid + '  —  winmux agent wait --job ' + jobId, { jobId, sid, job: reg.job });
       }
       if (JOB_VERBS.indexOf(state) >= 0 || ((state === 'done' || state === 'failed') && flag(argv, '--job'))) {

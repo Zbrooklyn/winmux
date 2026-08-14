@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "winmux": {
+      "command": "node",
+      "args": ["C:\\Users\\EDWAR\\Dropbox\\AI_Projects_Claude\\projects\\winmux\\apps\\electron\\bin\\winmux-mcp.cjs"]
+    }
+  }
+}
