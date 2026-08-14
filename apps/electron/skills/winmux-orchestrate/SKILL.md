@@ -15,6 +15,8 @@ Use the bundled spawner — it opens a new WinMux tab, registers a job for it, l
 
 It prints ONLY the worker's jobId. The worker writes its final answer to a result file and marks its own job done when finished — you do not manage that part.
 
+By default the worker opens in a new tab. When the user wants to watch sessions side by side (split screen), add `--split right` for the first worker and `--split down` for each later one — the workers then open in split panes of the current tab, visible alongside you.
+
 Keep `--task` on one line. Put any safety constraints (for example "read-only on the repo: do not modify, create, or commit anything") inside the task text — the worker only knows what you tell it.
 
 ## Wait for a worker
