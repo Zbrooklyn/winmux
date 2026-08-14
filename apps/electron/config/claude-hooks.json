@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "node \"C:\\Users\\EDWAR\\Dropbox\\AI_Projects_Claude\\projects\\winmux\\apps\\electron\\bin\\winmux.cjs\" agent working" } ] }
+    ],
+    "Notification": [
+      { "hooks": [ { "type": "command", "command": "node \"C:\\Users\\EDWAR\\Dropbox\\AI_Projects_Claude\\projects\\winmux\\apps\\electron\\bin\\winmux.cjs\" agent needs-you \"Claude needs your input\"" } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "node \"C:\\Users\\EDWAR\\Dropbox\\AI_Projects_Claude\\projects\\winmux\\apps\\electron\\bin\\winmux.cjs\" agent done" } ] }
+    ]
+  }
+}
