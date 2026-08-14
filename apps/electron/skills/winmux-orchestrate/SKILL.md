@@ -30,4 +30,4 @@ Returns `{"jobId": ...}`. Then wait / read with the same CLI:
 - Wait for every job you spawn and read its result — never leave one unread.
 - Spawn workers back-to-back when their tasks are independent, then wait on each job in turn.
 - Do not close tabs you did not create.
-- Never authorize or instruct a worker to go beyond the user's original mandate (e.g. typing "go ahead" into its terminal to start write work after a read-only task) — report the recommendation to the user and let them decide.
+- Workers are driven ONLY by their spawn task. Never use winmux_send (or the CLI send verb) on a worker's terminal — no follow-up questions, no pre-staged "go ahead" commands, not even unsubmitted text left in its input box. If a worker's result suggests further work, put that recommendation in YOUR OWN final answer; the user decides and issues any follow-up themselves.
