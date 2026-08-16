@@ -29,6 +29,13 @@ Same law as the instant-feel arc: feel is measured, not argued. Every unit ships
   **Done:** action table stays **≤40ms** at 5× today's scale; scorecard Q5 (instant-feel plan) lifts to ≥9 honestly.
 - **SP-6 — Corner measurements.** Split-drag + window-resize frame rate; scrollback search at 100k lines; tab switch with 30 heavy sessions. Fix only what the numbers indict.
   **Done:** each measured with a committed probe; anything over budget fixed or ticketed with its number.
+## Progress ledger
+
+- **SP-1 ✅ (2026-08-16, commit 6e95d06).** Instant typing live: predicted paint **0ms to DOM / ≤1 frame to pixels** (was 85ms); `localecho` check 5/5 on Node AND Rust (instant paint, truthful reconcile, no password leak, recovery after secure prompt, honest off switch); screenshot to Edward showing predicted type-ahead over a sleeping shell. perf-echo now reports FELT latency alongside shell echo.
+- **SP-2 ✅ (commit c8916b0).** The Phase-7 quake drop already existed — the arc added the number: summon measured **49ms** hidden→visible+focused, asserted ≤100ms in the electron smoke on every run. Default stays OFF (no system-wide key grabbed without consent); Settings toggle + hotkey field already shipped.
+- **SP-3 ✅ (commit 90b3097).** Launch de-serialized: window paints FIRST. Measured (dev): **window-shown 98–130ms** (target ≤300), **page-loaded 457–475ms** typical (target ≤700 warm), deep first-ever cold 1,559ms (engine spawn dominates — and the window is up at 130ms instead of nothing until 1.7s). `[boot]` phase marks committed; resolve poll 200→50ms; engine-failure now shows an error dialog instead of a dead dark window. Tauri cold comparison: 1,251ms launch→engine-answering (external timing).
+- **SP-4 ✅.** Identical self-timed 9.3MB drain, head-to-head: **WinMux (installed, WebGL) 415ms = 22.5 MB/s, worst frame gap 33ms · Windows Terminal 476ms = 19.6 MB/s · conhost 499ms = 18.7 MB/s.** WinMux is the fastest of the three — no tuning warranted ("tune only if losing"). Probe committed as perf-throughput.cjs. Alacritty not installed on this machine — noted, not measured.
+
 - **SP-7 — Ship + hand-feel gate.** Full harness green (with the new checks), action table + echo probe re-run on the installed build, release (v0.2.4), Edward's hands on the real app.
   **Done:** release live; Edward says it feels instant — the box only he can check.
 
