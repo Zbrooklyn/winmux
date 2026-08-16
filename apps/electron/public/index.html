@@ -757,6 +757,18 @@
   .wc-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .wc-btn.primary:hover { filter: brightness(1.08); }
   .wc-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* A welcome point that goes somewhere: same row, plus an affordance. */
+  .wc-pt.link { cursor: pointer; margin: -6px; padding: 6px; border-radius: 10px;
+    transition: background .14s ease; }
+  .wc-pt.link:hover { background: var(--bg2); }
+  .wc-pt.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .wc-more { color: var(--accent-ink); font-weight: 600; white-space: nowrap; }
+  #agents-ovl { display: none; }
+  #agents-ovl[data-open] { display: flex; align-items: center; justify-content: center; }
+  .wc-cmd { display: block; margin-top: 6px; padding: 6px 9px; border-radius: 7px;
+    background: var(--bg2); border: 1px solid var(--border);
+    font: 12px "Cascadia Code", Consolas, monospace; color: var(--text);
+    overflow-x: auto; white-space: nowrap; }
   /* On a phone the card is the whole screen's worth; let it breathe and stack. */
   .cockpit[data-mode="narrow"] ~ #welcome-ovl .welcome,
   #welcome-ovl .welcome { }
@@ -911,15 +923,45 @@
           <span class="wc-ic"><svg viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/></svg></span>
           <div><div class="wc-h">Reach it from your phone</div><div class="wc-s">Turn on phone access and scan a QR — the same session, in your hand over Tailscale.</div></div>
         </div>
-        <div class="wc-pt">
+        <div class="wc-pt link" id="wc-agents" role="button" tabindex="0" aria-label="Open the agents guide">
           <span class="wc-ic"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></span>
-          <div><div class="wc-h">Built for agents</div><div class="wc-s">Peek at what Claude or Codex is doing across every session, without opening each one.</div></div>
+          <div><div class="wc-h">Built for agents</div><div class="wc-s">Peek at what Claude or Codex is doing across every session, without opening each one. <span class="wc-more">Show me →</span></div></div>
         </div>
       </div>
       <div class="wc-actions">
         <span class="wc-btn primary" id="wc-start" role="button" tabindex="0">Start using WinMux</span>
         <span class="wc-btn" id="wc-phone" role="button" tabindex="0">Add my phone</span>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Agents guide: the path from the welcome card's promise to the live feature.
+     Same card language as the welcome so it reads as one continued thought. -->
+<div class="ovl" id="agents-ovl" role="dialog" aria-modal="true" aria-label="Agents guide">
+  <div class="welcome">
+    <div class="wc-brand">Win<b>Mux</b> · Agents</div>
+    <h2 class="wc-title">Your agents, one cockpit</h2>
+    <p class="wc-lede">Run Claude or Codex in any tab. WinMux watches all of them so you don’t have to.</p>
+    <div class="wc-points">
+      <div class="wc-pt">
+        <span class="wc-ic"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></span>
+        <div><div class="wc-h">Watch without switching</div><div class="wc-s">Every session lives in the left sidebar. Hover a row and click the eye to peek at what it’s doing without leaving your tab.</div></div>
+      </div>
+      <div class="wc-pt">
+        <span class="wc-ic"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg></span>
+        <div><div class="wc-h">Approve from anywhere</div><div class="wc-s">When an agent needs a yes, its row turns amber. <span class="kbd sm">Approve</span> or <span class="kbd sm">Deny</span> right from the sidebar, on this PC or your phone.</div></div>
+      </div>
+      <div class="wc-pt">
+        <span class="wc-ic"><svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg></span>
+        <div><div class="wc-h">Hand an agent a task</div><div class="wc-s">From any WinMux terminal:
+          <span class="wc-cmd">winmux agent spawn "fix the failing test"</span>
+          It opens a worker session, runs Claude on the task, and reports back when it’s done.</div></div>
+      </div>
+    </div>
+    <div class="wc-actions">
+      <span class="wc-btn primary" id="wc-ag-fleet" role="button" tabindex="0">Show me the sidebar</span>
+      <span class="wc-btn" id="wc-ag-close" role="button" tabindex="0">Close</span>
     </div>
   </div>
 </div>

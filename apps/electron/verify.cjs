@@ -310,7 +310,7 @@ const desktop = async (browser, extraSettings) => {
   // 'gpu' check separately proves the WebGL path + its DOM fallback.
   await page.addInitScript((extra) => {
     try {
-      localStorage.setItem('ct-onboard', '1');
+      localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1');
       const s = JSON.parse(localStorage.getItem('ct-settings') || '{}'); s.gpuRenderer = false;
       if (extra) Object.assign(s, extra);
       localStorage.setItem('ct-settings', JSON.stringify(s));
@@ -329,7 +329,7 @@ async function phoneCtx(browser, colorScheme) {
   // renderer too (same reason as desktop(): these checks read .xterm-rows text).
   await ctx.addInitScript(() => {
     try {
-      localStorage.setItem('ct-onboard', '1');
+      localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1');
       const s = JSON.parse(localStorage.getItem('ct-settings') || '{}'); s.gpuRenderer = false;
       localStorage.setItem('ct-settings', JSON.stringify(s));
     } catch (e) {}
@@ -1029,7 +1029,7 @@ check('trust', PORT_TRUST, async ({ browser, base, t, shot, skip }) => {
     t('no key is on screen', await redact(d));
     await shot(d, 'devices-dark');
     const dl = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
-    await dl.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+    await dl.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1'); } catch (e) {} });
     await dl.goto(base + '/', { waitUntil: 'domcontentloaded' });
     await dl.waitForTimeout(1200);
     await settings(dl, 'Phone');
@@ -1537,7 +1537,7 @@ check('colour', PORT_COLOUR, async ({ browser, base, t, shot }) => {
   // (or races the async DOM->WebGL swap, making this flaky).
   const lightPage = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
   await lightPage.addInitScript(() => { try {
-    localStorage.setItem('ct-onboard', '1');
+    localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1');
     const s = JSON.parse(localStorage.getItem('ct-settings') || '{}'); s.gpuRenderer = false;
     localStorage.setItem('ct-settings', JSON.stringify(s));
   } catch (e) {} });
@@ -2444,7 +2444,7 @@ check('gpu', PORT_GPU, async ({ browser, base, t }) => {
   // it off) — a raw page that only dismisses onboarding runs the real shipping
   // default. WebGL available -> the active terminal paints to a <canvas>.
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
-  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1'); } catch (e) {} });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(4000);
   const renderer = await page.evaluate(() => {
@@ -2457,7 +2457,7 @@ check('gpu', PORT_GPU, async ({ browser, base, t }) => {
   // Fallback path: force WebglAddon absent before load -> DOM renderer, still paints.
   const page2 = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
   await page2.addInitScript(() => {
-    try { localStorage.setItem('ct-onboard', '1'); } catch (e) {}
+    try { localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1'); } catch (e) {}
     // Make the WebGL addon look unavailable so the try/catch falls back to DOM.
     Object.defineProperty(window, 'WebglAddon', { value: undefined, configurable: true });
   });
@@ -2485,7 +2485,7 @@ check('gpu', PORT_GPU, async ({ browser, base, t }) => {
 // WINMUX_FORCE_DOM exemption), so it gets its own raw page like gpu/ligature.
 check('dprfix', PORT_DPRFIX, async ({ browser, base, t }) => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
-  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1'); } catch (e) {} });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(4000);
 
@@ -2538,7 +2538,7 @@ check('dprfix', PORT_DPRFIX, async ({ browser, base, t }) => {
 // page rather than desktop() (which pins gpuRenderer off).
 check('ligature', PORT_LIG, async ({ browser, base, t }) => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
-  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1'); } catch (e) {} });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(4000);
 
@@ -2821,7 +2821,7 @@ check('osnotify', PORT_OSNOTIFY, async ({ browser, base, t }) => {
   });
   const stub = (focused) => {
     // eslint-disable-next-line no-undef
-    try { localStorage.setItem('ct-onboard', '1'); } catch (e) {}
+    try { localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1'); } catch (e) {}
     window.__osNotes = [];
     function FakeNote(title, opts) { window.__osNotes.push({ title: title, body: opts && opts.body }); this.onclick = null; }
     FakeNote.permission = 'granted';
@@ -2867,7 +2867,7 @@ check('parity', PORT_PARITY, async ({ browser, base, t, shot }) => {
   // shipping WebGL default — this is the "forced DOM renderer here" the header notes.
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
   await page.addInitScript(() => { try {
-    localStorage.setItem('ct-onboard', '1');
+    localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1');
     const s = JSON.parse(localStorage.getItem('ct-settings') || '{}'); s.gpuRenderer = false;
     localStorage.setItem('ct-settings', JSON.stringify(s));
   } catch (e) {} });
@@ -2936,7 +2936,7 @@ check('parity', PORT_PARITY, async ({ browser, base, t, shot }) => {
 // run the real (throttled) capture, and assert the rendered row echoes the marker.
 check('doing', PORT_DOING, async ({ browser, base, t, shot }) => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
-  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1'); } catch (e) {} });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(4000);
 
@@ -3005,7 +3005,7 @@ check('config', PORT_CONFIG, async ({ base, browser, t, shot }) => {
   // A fresh install (empty localStorage) must still come up wearing the on-disk
   // settings — the whole point of moving off localStorage-only.
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 }, colorScheme: 'dark' });
-  await page.addInitScript(() => { try { localStorage.clear(); localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.addInitScript(() => { try { localStorage.clear(); localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1'); } catch (e) {} });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(4800);
   const applied = await page.evaluate(() => {
@@ -3025,7 +3025,7 @@ check('config', PORT_CONFIG, async ({ base, browser, t, shot }) => {
 // coloured sample so the screenshot shows the scheme applied.
 check('theme-import', PORT_THEME, async ({ browser, base, t, shot }) => {
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 }, colorScheme: 'dark' });
-  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.addInitScript(() => { try { localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1'); } catch (e) {} });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(4000);
   const scheme = {
@@ -3061,7 +3061,7 @@ check('theme-import', PORT_THEME, async ({ browser, base, t, shot }) => {
 check('keybindings', PORT_KEYS, async ({ browser, base, t, shot }) => {
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 }, colorScheme: 'dark' });
   // Clear any stored keymap so the default-chord assertion tests a real default.
-  await page.addInitScript(() => { try { localStorage.clear(); localStorage.setItem('ct-onboard', '1'); } catch (e) {} });
+  await page.addInitScript(() => { try { localStorage.clear(); localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1'); } catch (e) {} });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(4000);
   const res = await page.evaluate(() => {
@@ -3100,7 +3100,7 @@ check('migrate', PORT_MIGRATE, async ({ browser, base, t }) => {
   const oneTab = { active: 0, tabs: [{ shell: 'powershell', cwd: '', group: '', title: '', sid: '' }] };
   const boot = async (blob) => {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
-    await ctx.addInitScript((b) => { try { localStorage.setItem('ct-live', JSON.stringify(b)); localStorage.setItem('ct-onboard', '1'); } catch (e) {} }, blob);
+    await ctx.addInitScript((b) => { try { localStorage.setItem('ct-live', JSON.stringify(b)); localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1'); } catch (e) {} }, blob);
     const p = await ctx.newPage();
     await p.goto(base, { waitUntil: 'domcontentloaded' });
     await p.waitForTimeout(4500);

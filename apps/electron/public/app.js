@@ -3020,6 +3020,19 @@
   // directly; the live state is restored on relaunch either way, still showing dirty).
   function doWindowClose() { var b = winBridge(); if (b && b.close) { b.close(); return; } window.close(); }
   function requestWindowClose() {
+    // First close ever (desktop app only): closing is not quitting — the engine
+    // and shells stay alive in the background. Unexplained, that persistence
+    // reads as suspicious to a stranger; said once, it's the feature it is.
+    var noticed; try { noticed = localStorage.getItem('ct-close-notice'); } catch (e) { noticed = '1'; }
+    if (!noticed && winBridge()) {
+      try { localStorage.setItem('ct-close-notice', '1'); } catch (e) {}
+      confirmDialog3('Your terminals keep running',
+        'Closing this window leaves your shells and agents running in the background, so reopening WinMux lands you right back on them. To end everything instead, choose Quit completely (always available in Settings).',
+        'Close window', 'Quit completely',
+        function () { requestWindowClose(); },
+        function () { var done = function () { doWindowClose(); }; try { fetch('/api/shutdown', { method: 'POST' }).then(done, done); } catch (e) { done(); } });
+      return;
+    }
     if (!projectDirty()) { doWindowClose(); return; }
     var cur = readCurrent();
     confirmDialog3('Save changes to “' + (cur ? cur.name : 'this project') + '”?',
@@ -3715,6 +3728,12 @@
           '<div class="phone-warn">Your phone must be signed in to the same Tailscale account. Anyone who gets this link gets your PC — don’t paste it into a chat, and switch this off when you’re done.</div>' +
         '</div>' +
       '</div>';
+    } else if (!p.tailscale) {
+      // The stranger's biggest wall: the word "Tailscale" with no explanation.
+      // Say what it is, why it's the transport, and hand them the install link —
+      // never a dead end that assumes they already run it.
+      out += '<div class="phone-off">Phone access rides on <b>Tailscale</b> — a free app that builds a private network between your own devices, so nothing is ever exposed to the open internet. Install it on this PC and on your phone, sign in to the <b>same account</b> on both, then come back and flip this switch.' +
+        '<div style="margin-top:10px"><span class="btn" data-act="get-tailscale">Get Tailscale (free)</span></div></div>';
     } else {
       out += '<div class="phone-off">Switch this on and you’ll get a square to scan. Your phone opens the same terminals you see here, over Tailscale — nothing is exposed to the open internet, and the link stops working the moment you switch it back off.</div>';
     }
@@ -3927,6 +3946,11 @@
     if (a === 'diag') { closeOvl('settings-ovl'); openDiag(); }
     if (a === 'import-theme') { importThemeDialog(); }
     if (a === 'reset-keys') { KEYMAP = {}; saveKeymap(); renderSettings(); }
+    if (a === 'get-tailscale') {
+      var tsUrl = 'https://tailscale.com/download';
+      if (window.winmux && window.winmux.openExternal) window.winmux.openExternal(tsUrl);
+      else window.open(tsUrl, '_blank', 'noopener');
+    }
     if (a === 'phone-copy' && phoneS && phoneS.url) {
       // The copy itself works, but writeText is async and notify() only pings the
       // (silent) bell — so a click looked like nothing happened. Confirm right on
@@ -3996,12 +4020,25 @@
   var CHEAT = {
     Tabs: KEYS.slice(0, 5), Panes: KEYS.slice(5, 11), Terminal: KEYS.slice(11, 15), View: KEYS.slice(15),
   };
+  // The five nouns WinMux leans on, defined once where people already come for
+  // help. A stranger meets all of them in their first hour; nothing else in the
+  // product says what they mean.
+  var VOCAB = [
+    ['Tab', 'One terminal (or browser / markdown / diff view) inside a pane.'],
+    ['Group', 'A named set of tabs in the sidebar, like a workspace folder.'],
+    ['Session', 'The live shell process behind a tab. It belongs to the engine, not the window.'],
+    ['Detached session', 'A session whose window went away. It keeps running; reopen WinMux to pick it up.'],
+    ['Project', 'A saved layout on disk (.winmux.json): groups, tabs, folders, shells. Open it to restore everything.'],
+  ];
   function openCheat() {
     document.getElementById('cheat-body').innerHTML = '<h2>Keyboard shortcuts</h2>' +
       Object.keys(CHEAT).map(function (sec) {
         return '<div class="csec">' + sec + '</div>' + CHEAT[sec].map(function (r) {
           return '<div class="crow"><span class="ca">' + r[0] + '</span><span class="kbd">' + r[1] + '</span></div>';
         }).join('');
+      }).join('') +
+      '<div class="csec">Words WinMux uses</div>' + VOCAB.map(function (r) {
+        return '<div class="crow"><span class="ca"><b>' + r[0] + '</b></span><span style="font-size:12px;color:var(--muted);text-align:right;max-width:34ch">' + r[1] + '</span></div>';
       }).join('');
     openOvl('cheat-ovl');
   }
@@ -4090,6 +4127,7 @@
       { cat: 'Project', name: 'Open project', kbd: 'Ctrl+Alt+O', run: loadLayoutDialog },
       { cat: 'App', name: 'Settings', kbd: 'Ctrl+,', run: function () { openSettings(); } },
       { cat: 'App', name: 'Keyboard shortcuts', kbd: 'F1', run: openCheat },
+      { cat: 'App', name: 'Agents guide', run: function () { openAgentsGuide(); } },
       { cat: 'App', name: 'Diagnostics', run: openDiag },
     ];
     SHELLS.forEach(function (s) {
@@ -4555,16 +4593,39 @@
     function dismiss() { closeOvl('welcome-ovl'); try { localStorage.setItem('ct-onboard', '1'); } catch (e) {} }
     var startBtn = document.getElementById('wc-start');
     var phoneBtn = document.getElementById('wc-phone');
+    var agentsPt = document.getElementById('wc-agents');
     if (startBtn) startBtn.addEventListener('click', dismiss);
     if (phoneBtn) phoneBtn.addEventListener('click', function () {
       dismiss();
       openSettings();
       setTimeout(function () { var tab = document.querySelector('[data-settab="Phone"]'); if (tab) tab.click(); }, 60);
     });
-    [startBtn, phoneBtn].forEach(function (b) {
+    // The "Built for agents" point is the product's whole reason to exist, so
+    // the promise leads somewhere: click it and the guide opens.
+    if (agentsPt) agentsPt.addEventListener('click', function () { dismiss(); openAgentsGuide(); });
+    [startBtn, phoneBtn, agentsPt].forEach(function (b) {
       if (b) b.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); b.click(); } });
     });
     if (!seen) setTimeout(function () { openOvl('welcome-ovl'); }, 400);
+  })();
+
+  // --- Agents guide: from the welcome promise to the live feature -----------
+  function openAgentsGuide() { openOvl('agents-ovl'); }
+  (function () {
+    var ovl = document.getElementById('agents-ovl');
+    if (!ovl) return;
+    var closeBtn = document.getElementById('wc-ag-close');
+    var fleetBtn = document.getElementById('wc-ag-fleet');
+    if (closeBtn) closeBtn.addEventListener('click', function () { closeOvl('agents-ovl'); });
+    if (fleetBtn) fleetBtn.addEventListener('click', function () {
+      closeOvl('agents-ovl');
+      var root = document.getElementById('root');
+      if (root && root.getAttribute('data-sidebar') !== 'open') toggleSidebar();
+    });
+    ovl.addEventListener('click', function (e) { if (e.target === ovl) closeOvl('agents-ovl'); });
+    [closeBtn, fleetBtn].forEach(function (b) {
+      if (b) b.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); b.click(); } });
+    });
   })();
 
   // --- Control channel: let the local `winmux` CLI drive this app -----------
