@@ -3622,7 +3622,13 @@
     if (del) {
       e.stopPropagation();
       var d = recoverCache[parseInt(del.getAttribute('data-rdel'), 10)];
-      if (d) fetch('/api/backlog?sid=' + encodeURIComponent(d.sid), { method: 'DELETE' }).then(renderRecoverables, renderRecoverables);
+      // Dismiss deletes the saved output for good — the one irreversible verb on
+      // this list, so it gets the same confirm gate as deleting a project file.
+      if (d) confirmDialog('Dismiss this saved output?',
+        'Its scrollback is deleted for good — there is no way back after this.',
+        'Dismiss', function () {
+          fetch('/api/backlog?sid=' + encodeURIComponent(d.sid), { method: 'DELETE' }).then(renderRecoverables, renderRecoverables);
+        });
       return;
     }
     var row = e.target.closest ? e.target.closest('[data-ri]') : null;
@@ -4186,6 +4192,16 @@
     ['Detached session', 'A session whose window went away. It keeps running; reopen WinMux to pick it up.'],
     ['Project', 'A saved layout on disk (.winmux.json): groups, tabs, folders, shells. Open it to restore everything.'],
   ];
+  // Where your stuff lives — the four stores, one honest sentence each, with the
+  // REAL paths for this identity filled in from /api/info after the sheet opens
+  // (PT-7). This is the in-app answer to "where is my stuff saved?": the model
+  // sentence a stranger can hold, then the exact files.
+  var STORES = [
+    ['Workspace', 'Your open tabs + layout, saved automatically on every change. One per app identity — a new window picks it up.', 'workspaceFile'],
+    ['Projects', 'Named layouts you save on purpose. Plain files — copy them (plus the settings file) to move your setup to another machine.', 'projectsDir'],
+    ['Recovery', 'Saved output of sessions that lost their window, kept 7 days. Restore or dismiss them under Projects › Recent & recoverable.', 'backlogDir'],
+    ['Settings', 'Options + keyboard map. This file is the source of truth; every window only caches it.', 'configFile'],
+  ];
   function openCheat() {
     document.getElementById('cheat-body').innerHTML = '<h2>Keyboard shortcuts</h2>' +
       Object.keys(CHEAT).map(function (sec) {
@@ -4195,8 +4211,21 @@
       }).join('') +
       '<div class="csec">Words WinMux uses</div>' + VOCAB.map(function (r) {
         return '<div class="crow"><span class="ca"><b>' + r[0] + '</b></span><span style="font-size:12px;color:var(--muted);text-align:right;max-width:34ch">' + r[1] + '</span></div>';
+      }).join('') +
+      '<div class="csec">Where your stuff lives</div>' +
+      '<div style="font-size:12px;color:var(--muted);margin:2px 0 6px">Your workspace is always saved automatically. A Project is a named snapshot you can reopen anytime. Sessions keep running until you end them.</div>' +
+      STORES.map(function (r) {
+        return '<div class="crow" style="flex-direction:column;align-items:flex-start;gap:2px">' +
+          '<span class="ca"><b>' + r[0] + '</b> <span style="font-size:12px;color:var(--muted)">' + r[1] + '</span></span>' +
+          '<span class="mono" data-store-path="' + r[2] + '" style="font-size:11px;color:var(--faint);word-break:break-all">…</span></div>';
       }).join('');
     openOvl('cheat-ovl');
+    fetch('/api/info').then(function (r) { return r.json(); }).then(function (d) {
+      STORES.forEach(function (r) {
+        var el = document.querySelector('#cheat-body [data-store-path="' + r[2] + '"]');
+        if (el && d[r[2]]) el.textContent = d[r[2]];
+      });
+    }).catch(function () {});
   }
   document.getElementById('cheat-ovl').addEventListener('click', function (e) { if (e.target.id === 'cheat-ovl') closeOvl('cheat-ovl'); });
 
@@ -4226,6 +4255,12 @@
         ['Uptime', Math.floor(d.uptime / 60) + 'm ' + (d.uptime % 60) + 's'],
         ['Live shells', d.sessions + ' connected'],
         ['Shells found', (d.shells || []).join(', ')],
+        // Where this identity's state lives — the real files, so "where is my
+        // stuff?" has a copyable answer right here (PT-7).
+        ['Workspace file', d.workspaceFile || '—'],
+        ['Projects folder', d.projectsDir || '—'],
+        ['Recovery folder', (d.backlogDir || '—') + (typeof d.recoverable === 'number' ? ' · ' + d.recoverable + ' recoverable' : '')],
+        ['Settings file', d.configFile || '—'],
         ['Home folder', d.home], ['CPU cores', d.cpus], ['Memory', d.mem],
         ['Terminals open', totalTerms() + ' in ' + panes.length + ' pane' + (panes.length > 1 ? 's' : '')],
         ['Browser', navigator.userAgent],

@@ -928,6 +928,14 @@ async fn api_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 let n = e.file_name().to_string_lossy().to_string();
                 n.ends_with(".json") && !state.sessions.lock().unwrap().contains_key(n.trim_end_matches(".json"))
             }).count()).unwrap_or(0),
+        // Where this identity's state actually lives on disk — real paths, so the
+        // Diagnostics panel and the cheat-sheet "Where your stuff lives" card can
+        // answer the question without a docs hunt (PT-7). Parity with server.cjs.
+        "workspaceFile": workspace_file().map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "(memory only)".into()),
+        "projectsDir": projects_dir().to_string_lossy().to_string(),
+        "backlogDir": backlog_dir().to_string_lossy().to_string(),
+        "configFile": config_file().to_string_lossy().to_string(),
         "phone": "off",
         "shells": ["powershell", "pwsh", "cmd", "bash", "wsl"],
         "core": "rust",
@@ -1365,8 +1373,15 @@ fn workspace_file() -> Option<PathBuf> {
         let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
         PathBuf::from(home).join(".winmux").join("instance.json")
     });
-    let name = inst.file_name().and_then(|n| n.to_str()).unwrap_or("instance.json")
-        .replacen("instance", "workspace", 1);
+    // A custom WINMUX_INSTANCE_FILE whose name doesn't start with "instance" would
+    // make the prefix-swap a no-op — and a workspace write would then CLOBBER the
+    // instance file (port/pid discovery). Prefix instead so the two never collide.
+    let base = inst.file_name().and_then(|n| n.to_str()).unwrap_or("instance.json");
+    let name = if base.starts_with("instance") {
+        base.replacen("instance", "workspace", 1)
+    } else {
+        format!("workspace.{base}")
+    };
     Some(inst.parent().map(|p| p.join(&name)).unwrap_or_else(|| PathBuf::from(name)))
 }
 static MEM_WORKSPACE: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);

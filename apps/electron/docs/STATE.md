@@ -53,6 +53,20 @@ reopen anytime. Sessions keep running until you end them.**
   disposable; losing them only replays a welcome card.
 - **Trust/devices:** `~/.winmux/devices*.json`, engine-owned, atomic writes.
 
+## Moving your setup to another machine (PT-7)
+
+Everything portable is a plain file; Diagnostics shows the exact paths on your machine.
+
+1. **Projects** — copy `Documents\WinMux Projects\*.winmux.json` to the same folder on the
+   new machine. Each opens from the Projects overlay exactly as saved (shells relaunch;
+   running processes don't travel — they are processes).
+2. **Settings + keymap** — copy `~/.winmux/config.json`. Every window on the new machine
+   converges to it on load (it is the authority; localStorage only caches it).
+3. **Workspace** — copy `~/.winmux/workspace.<identity>.json` if you want the current
+   unnamed layout too; saving it as a Project first is the cleaner path.
+4. Not portable by design: trust/devices files (per-machine security), backlog scrollbacks
+   (recovery artifacts of this machine's sessions), one-time UI memories.
+
 ## Invariants (testable, harness-enforced)
 1. Nothing the user made is ever lost silently; anything that expires says so beforehand.
 2. Every stored thing is visible somewhere in the UI, with its recovery path next to it.

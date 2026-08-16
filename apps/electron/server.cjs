@@ -326,7 +326,12 @@ function workspaceFile() {
   if (process.env.WINMUX_WORKSPACE_FILE) return process.env.WINMUX_WORKSPACE_FILE;
   if (process.env.WINMUX_NO_INSTANCE) return null;   // memory-only
   const inst = process.env.WINMUX_INSTANCE_FILE || path.join(os.homedir(), '.winmux', 'instance.json');
-  return path.join(path.dirname(inst), path.basename(inst).replace(/^instance/, 'workspace'));
+  // A custom WINMUX_INSTANCE_FILE whose name doesn't start with "instance" would
+  // make the prefix-swap a no-op — and a workspace write would then CLOBBER the
+  // instance file (port/pid discovery). Prefix instead so the two never collide.
+  const base = path.basename(inst);
+  const wsBase = base.startsWith('instance') ? base.replace(/^instance/, 'workspace') : 'workspace.' + base;
+  return path.join(path.dirname(inst), wsBase);
 }
 let memWorkspace = null;
 function readWorkspace() {
@@ -1124,6 +1129,13 @@ function handle(req, res, viaPhone) {
         try { return fs.readdirSync(BACKLOG_DIR).filter((f) => f.endsWith('.json') && !SESSIONS.has(f.slice(0, -5))).length; }
         catch (e) { return 0; }
       })(),
+      // Where this identity's state actually lives on disk — real paths, so the
+      // Diagnostics panel and the cheat-sheet "Where your stuff lives" card can
+      // answer the question without a docs hunt (PT-7).
+      workspaceFile: workspaceFile() || '(memory only)',
+      projectsDir: projectsDir(),
+      backlogDir: BACKLOG_DIR,
+      configFile: CONFIG_FILE,
       phone: phone.on ? 'on (' + phone.ip + ')' : 'off',
     }));
     return;

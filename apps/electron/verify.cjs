@@ -1339,6 +1339,12 @@ check('recover', PORT_RECOVER, async ({ browser, base, t, shot }) => {
     list.items.every((i) => i.expiresAt > Date.now() && i.live === false), list.items);
   const info = JSON.parse((await get(base + '/api/info')).body);
   t('/api/info reports the honest recoverable count', info.recoverable === 2, { recoverable: info.recoverable });
+  // PT-7: the engine names where its state lives, so Diagnostics and the cheat
+  // sheet can answer "where is my stuff?" with real paths on both engines.
+  t('/api/info names the four stores (workspace/projects/backlog/config)',
+    typeof info.workspaceFile === 'string' && typeof info.projectsDir === 'string'
+    && typeof info.configFile === 'string' && String(info.backlogDir || '').replace(/\//g, '\\') === blDir,
+    { workspaceFile: info.workspaceFile, projectsDir: info.projectsDir, backlogDir: info.backlogDir, configFile: info.configFile });
 
   const page = await desktop(browser);
   try {
@@ -1375,6 +1381,15 @@ check('recover', PORT_RECOVER, async ({ browser, base, t, shot }) => {
     const left = await page.evaluate(() => document.querySelectorAll('#sm-recover .pjrow').length);
     t('the restored entry is gone from the list, the other remains', left === 1, { left });
     await page.click('#sm-recover .pjrow-del[data-rdel="0"]');
+    await page.waitForTimeout(500);
+    // Dismiss is irreversible, so it must ask first (PT-7, Q9): confirm dialog
+    // up, then its Dismiss button actually deletes.
+    const askFirst = await page.evaluate(() => {
+      const d = document.getElementById('dlg-body');
+      return !!(d && document.getElementById('dlg-ovl').hasAttribute('data-open') && /Dismiss/.test(d.textContent));
+    });
+    t('dismiss asks before deleting for good', askFirst);
+    await page.click('#dlg-body [data-ok]');
     await page.waitForTimeout(800);
     const afterDismiss = await page.evaluate(() => ({
       n: document.querySelectorAll('#sm-recover .pjrow').length,

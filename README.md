@@ -78,6 +78,8 @@ A **project** is a real file on disk — a saved working setup (its group and ta
 - **Open** a past project from the *Open project* icon (`Ctrl+Alt+O`) — the Recent list shows each project's folder, tab count, and shells — or *Open project file…* to pick a `.json` from anywhere. Opening rebuilds the panes with fresh shells.
 - **Save on close.** If you've changed a workspace since it was last saved to its project file, closing the window asks first — *Save* / *Don't save* / *Cancel* — so a named project isn't silently left behind. (Your live session state is always auto-restored on next launch regardless, so nothing is truly lost; this just keeps the project file current.)
 - From the CLI: `winmux open <file.json>` opens a saved project directly.
+- **Where your stuff lives** — everything is auto-saved; press `F1` in the app for the exact paths on your machine, or open Settings → Diagnostics. In short: your live layout auto-saves to `~/.winmux/workspace.<identity>.json`, named projects live in `Documents\WinMux Projects`, recovery scrollbacks in `~/.winmux/backlog` (kept 7 days, listed under *Recent & recoverable*), settings in `~/.winmux/config.json`.
+- **Moving to another machine** — copy your project files and `~/.winmux/config.json` to the same places on the new machine; that's the whole setup. (Full detail: [state contract](apps/electron/docs/STATE.md).)
 
 ## Requirements
 
