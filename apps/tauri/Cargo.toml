@@ -9,12 +9,12 @@ edition = "2021"
 # embedded browser panel (TS-7) is a separate later phase, so this shell rides
 # only stable Tauri APIs. The Tauri version is pinned by Cargo.lock.
 [dependencies]
-tauri = "2"
+tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde_json = "1"
 
 [build-dependencies]
-tauri-build = "2"
+tauri-build = { version = "2", features = [] }
 
 [profile.release]
 strip = true
