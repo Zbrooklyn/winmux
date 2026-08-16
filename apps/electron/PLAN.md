@@ -110,15 +110,22 @@ throttle is a future cleanup, not a product bug.
 "unknown publisher" warning on install (works fine; looks untrusted). A freshly built installer must
 be re-made after code changes — the installed `.exe` is a point-in-time build, not live source.
 
-**Owner-gated / not built (Edward's call, do not silently build):** code signing (costs money),
+**Owner-gated / not built (Edward's call, do not silently build):** code signing (costs money) and
 **silent auto-install** update (electron-updater — the app replacing its own binary; the *notice* is
-built, the auto-install is deliberately not), winget listing, Android companion app (Phase 14),
-the v2 Rust core. See *Build order* and *Upcoming phases*.
+built, the auto-install is deliberately not). Edward re-deferred both on 2026-08-16 ("everything that
+will not cost us money; do not do the auto update").
 
-**Edward's directive 2026-08-06 — parked for now (do not raise or build until he reopens):** stay on
-**Electron** (no v2 Rust/Tauri rebuild), **no code signing** (accept the SmartScreen "unknown publisher"
-warning for now), **no Android companion app** yet. These are deferrals, not cancellations. Unaffected:
-the in-flight surfaces-as-tabs work and the v1 launch itself.
+**Edward's directive 2026-08-16 (supersedes the 2026-08-06 park):** finish everything free — master
+promotion, the v0.2.0 release, the winget submission, the Rust-engine cutover, the Tauri spike, the
+scrollback-privacy switch, the transcript reader, clean-machine proof, and (as the final arc) the
+Android companion app. Plan: `docs/superpowers/plans/2026-08-16-winmux-finish-line.md`.
+
+**v2 Stage 4 — SHIPPED (2026-08-16).** `npm run dist` now packages THE WinMux (primary identity) on
+the native **Rust core** (`winmux-core.exe` sidecar selected by `core-rust.flag`); existing installs
+upgrade in place onto it. The Node engine remains as an explicit fallback build (`npm run dist:node`)
+and the "WinMux Rust" proof identity (`npm run dist:rust`) still exists for side-by-side installs.
+Full 409-check harness green under `WINMUX_CORE=rust`. Remaining v2 stages: Stage 0 Tauri spike
+(decides Stage 5), Stage 5 only if the spike passes.
 
 ## Proving it still works — `npm run verify`
 
