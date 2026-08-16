@@ -40,6 +40,11 @@ Same law as the instant-feel arc: feel is measured, not argued. Every unit ships
   2. Settings toggles cost **619→750ms**: `options.theme` got a fresh object each apply (xterm rebuilds its glyph atlas — even for identical colours), every hidden terminal ate ~2ms of option churn, and `applyRenderer` requested 50 WebGL contexts against a ~16-context browser cap, so contexts musical-chaired on every apply (measured 385ms). Fixes: theme guarded by signature; hidden terminals marked dirty and caught up on show; **WebGL only for visible terminals** (applied on activate, released on hide — also removes the context-eviction failure mode entirely). **Toggle at 50 tabs: 750ms → 2–35ms.**
   3. Agent last-line updates full-rendered the sidebar → `updateDoing` row patch.
   Scoreboard (50 tabs / 10 live streams, streaming the whole time): **all 13 actions ≤95ms worst — 0 offenders over the pre-registered 100ms instant bar** (was 619ms worst). Idle at 50 tabs every action ≤35ms (meets the plan's stretch 40ms); under simultaneous full-rate streaming the floor is the streams' own paint (33ms worst frame gap, SP-4), which is contention, not O(n) work — recorded honestly, no fix warranted. Settings toggles were already per-row (`data-sw` flips in place — verified, not assumed).
+- **SP-6 ✅.** All four corners measured by the new committed probe (perf-corners.cjs); nothing indicted, nothing to fix:
+  - Window resize (24 viewport steps, shell open): **55fps, worst frame gap 20ms** — no jank.
+  - Split-drag (real mouse on the divider, 40 moves): **55fps, worst gap 20ms** — the flex-only-during-drag design (refit on mouseup) holds.
+  - Search across a real 100,003-line scrollback: far hit **1ms**, dense-match average **0.1ms**, absolute worst case (zero-match full scan) **103ms** — one-time, on a miss only; not worth touching.
+  - Tab switch with 30 heavy sessions (each holding a 20k-line buffer): **median 31ms, worst 87ms** — includes the SP-5 on-activate WebGL attach, still instant.
 
 - **SP-7 — Ship + hand-feel gate.** Full harness green (with the new checks), action table + echo probe re-run on the installed build, release (v0.2.4), Edward's hands on the real app.
   **Done:** release live; Edward says it feels instant — the box only he can check.
