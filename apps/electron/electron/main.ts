@@ -23,14 +23,19 @@ const { start } = require('../server.cjs') as {
 // dist-rust.cjs) — the primary Rust-core build keeps the primary identity so
 // existing installs upgrade in place and the CLI finds it at instance.json.
 let flagContent: string | null = null;
-try { flagContent = fs.readFileSync(path.join(__dirname, 'core-rust.flag'), 'utf8'); } catch { /* no flag = Node build */ }
+try { flagContent = fs.readFileSync(path.join(__dirname, 'core-rust.flag'), 'utf8'); } catch { /* no flag = Node engine */ }
 const coreFlag = parseCoreFlag(flagContent);
 const isRustBuild = coreFlag.rustCore;
+// identity-node.flag (written only by scripts/dist-node-app.cjs, never together
+// with core-rust.flag) selects the side-by-side "WinMux Node" identity: the
+// legacy Node engine as a FOURTH coexisting app instead of a primary fallback.
+const isNodeApp = !isRustBuild && fs.existsSync(path.join(__dirname, 'identity-node.flag'));
 const profile = resolveProfile({
   isPackaged: app.isPackaged,
   appData: app.getPath('appData'),
   home: os.homedir(),
   rust: coreFlag.rustIdentity,
+  nodeApp: isNodeApp,
 });
 app.setAppUserModelId(profile.appId);
 app.setName(profile.name);

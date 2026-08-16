@@ -49,4 +49,17 @@ const rustSide = resolveProfile({ isPackaged: true, appData, home, rust: parseCo
 assert.strictEqual(rustSide.appId, 'com.zbrooklyn.winmux.rust');
 assert.strictEqual(rustSide.instanceFile, path.join(home, '.winmux', 'instance.rust.json'));
 
+// The side-by-side "WinMux Node" identity (identity-node.flag): the legacy
+// engine as a fourth coexisting app, fully disjoint from the other three.
+const nodeSide = resolveProfile({ isPackaged: true, appData, home, nodeApp: true });
+assert.strictEqual(nodeSide.appId, 'com.zbrooklyn.winmux.node');
+assert.strictEqual(nodeSide.name, 'WinMux Node');
+assert.strictEqual(nodeSide.userData, path.join(appData, 'WinMuxNode'));
+assert.strictEqual(nodeSide.instanceFile, path.join(home, '.winmux', 'instance.node.json'));
+assert.strictEqual(nodeSide.trustFile, path.join(home, '.winmux', 'devices.node.json'));
+const all = [prod, rustPrimary, rustSide, nodeSide, dev];
+const uniq = (k) => new Set(all.map((p) => p[k])).size;
+assert.strictEqual(uniq('instanceFile'), 4, 'primary+rustPrimary share; rust/node/dev disjoint');
+assert.strictEqual(uniq('userData'), 4, 'userData disjoint across identities');
+
 console.log('profile.test OK');

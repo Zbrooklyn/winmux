@@ -30,7 +30,7 @@ function instance() {
   const dir = path.join(os.homedir(), '.winmux');
   const candidates = process.env.WINMUX_INSTANCE_FILE ? [process.env.WINMUX_INSTANCE_FILE]
     : dev ? [path.join(dir, 'instance.dev.json')]
-    : [path.join(dir, 'instance.json'), path.join(dir, 'instance.rust.json'), path.join(dir, 'instance.tauri.json')];
+    : [path.join(dir, 'instance.json'), path.join(dir, 'instance.rust.json'), path.join(dir, 'instance.tauri.json'), path.join(dir, 'instance.node.json')];
   for (const f of candidates) {
     try {
       const inst = JSON.parse(fs.readFileSync(f, 'utf8'));
