@@ -402,6 +402,9 @@ async fn main() {
         .route("/api/projects", get(api_projects_list))
         .route("/api/project", get(api_project_get).post(api_project_post).delete(api_project_delete))
         .route("/api/update", get(api_update))
+        // Desk door only — deliberately absent from phone_router: a phone must
+        // never be able to kill the engine under the desktop.
+        .route("/api/shutdown", post(api_shutdown))
         .route("/shells", get(api_shells))
         .route("/api/claude-sessions", get(api_claude_sessions))
         .route("/api/backlog", get(api_backlog))
@@ -832,6 +835,20 @@ async fn api_update() -> impl IntoResponse {
             "updateAvailable": cmp_semver(&fl, version) > 0, "url": UPDATE_URL }));
     }
     Json(json!({ "current": version, "latest": Value::Null, "updateAvailable": false, "url": UPDATE_URL }))
+}
+
+// The deliberate "quit completely" path (server-host shutdownServer POSTs here,
+// same as the Node server). Kill every shell so nothing leaks, answer 200 so the
+// caller sees the ack, then exit off the request path.
+async fn api_shutdown(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    for (_, s) in state.sessions.lock().unwrap().drain() {
+        let _ = s.child.lock().unwrap().kill();
+    }
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        std::process::exit(0);
+    });
+    Json(json!({ "ok": true }))
 }
 
 // ---- /api/info ----------------------------------------------------------
