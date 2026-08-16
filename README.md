@@ -32,6 +32,19 @@ notice on first run — click **More info → Run anyway**.)*
 
 </div>
 
+### Which download?
+
+The release page lists four installers. **Almost everyone wants the first one.**
+
+| Installer | What it is | Who it's for |
+|---|---|---|
+| **`WinMux Setup <version>.exe`** | **The app. Start here.** | Everyone |
+| `WinMux-Rust-Setup-<version>.exe` | A second, fully separate copy ("WinMux Rust") that installs and runs alongside the main app — same features, its own settings and sessions | Running two independent WinMux instances side by side |
+| `WinMux-Tauri-Setup-<version>.exe` | **Beta.** A ~4 MB lightweight shell ("WinMux Tauri") on the same engine — no embedded browser panel yet, file dialogs fall back to simpler prompts | Trying the smallest possible install |
+| `WinMux-Node-Setup-<version>.exe` | **Legacy.** The original Node.js engine ("WinMux Node") kept for compatibility | Only if the main app's engine misbehaves on your machine |
+
+All four coexist cleanly — each has its own Start-menu entry, settings, and sessions, and the `winmux` CLI finds whichever is running.
+
 ---
 
 ## Why WinMux
