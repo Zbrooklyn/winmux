@@ -1,7 +1,7 @@
 const assert = require('assert');
 const path = require('path');
 // Compiled output lands in dist-electron/profile.js; test the compiled JS.
-const { resolveProfile } = require('../dist-electron/profile.js');
+const { resolveProfile, parseCoreFlag } = require('../dist-electron/profile.js');
 
 const appData = 'C:\\Users\\E\\AppData\\Roaming';
 const home = 'C:\\Users\\E';
@@ -31,5 +31,22 @@ assert.strictEqual(prod.name, 'WinMux');
 assert.strictEqual(prod.userData, path.join(appData, 'WinMux'));
 assert.strictEqual(prod.instanceFile, path.join(home, '.winmux', 'instance.json'));
 assert.strictEqual(dev.instanceFile, path.join(home, '.winmux', 'instance.dev.json'));
+
+// core-rust.flag decoupling: engine choice and identity are independent bits.
+// THE regression behind v0.2.1 — the primary installer ships the Rust engine
+// ('rust') but must KEEP the primary identity, or upgrades lose userData and
+// the CLI can't find the app at instance.json.
+assert.deepStrictEqual(parseCoreFlag(null), { rustCore: false, rustIdentity: false }, 'no flag = Node build');
+assert.deepStrictEqual(parseCoreFlag('rust\n'), { rustCore: true, rustIdentity: false }, "primary 'rust' flag = engine only");
+assert.deepStrictEqual(parseCoreFlag('rust identity\n'), { rustCore: true, rustIdentity: true }, "'rust identity' = engine + side identity");
+
+const rustPrimary = resolveProfile({ isPackaged: true, appData, home, rust: parseCoreFlag('rust\n').rustIdentity });
+assert.strictEqual(rustPrimary.appId, 'com.zbrooklyn.winmux', 'Rust-engine primary build keeps primary appId');
+assert.strictEqual(rustPrimary.userData, path.join(appData, 'WinMux'), 'Rust-engine primary build keeps primary userData');
+assert.strictEqual(rustPrimary.instanceFile, path.join(home, '.winmux', 'instance.json'), 'Rust-engine primary build keeps instance.json');
+
+const rustSide = resolveProfile({ isPackaged: true, appData, home, rust: parseCoreFlag('rust identity\n').rustIdentity });
+assert.strictEqual(rustSide.appId, 'com.zbrooklyn.winmux.rust');
+assert.strictEqual(rustSide.instanceFile, path.join(home, '.winmux', 'instance.rust.json'));
 
 console.log('profile.test OK');

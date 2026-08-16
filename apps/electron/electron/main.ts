@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, shell, dialog, globalShortcut, screen } fr
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { resolveProfile } from './profile';
+import { resolveProfile, parseCoreFlag } from './profile';
 import { resolveServer } from './server-host';
 
 // server.cjs is CommonJS at the repo root (one level up from dist-electron/).
@@ -17,15 +17,20 @@ const { start } = require('../server.cjs') as {
 // — separate %APPDATA% dirs (and separate ProcessSingleton locks), separate CLI
 // discovery files, separate trusted-device files. This is what lets both run at
 // once without stepping on each other (Phase 12 coexistence contract).
-// A packaged Rust build drops core-rust.flag next to main.js (scripts/dist-rust.cjs);
-// the Node installer never writes it. It selects both the Rust core AND the Rust
-// build's distinct identity (name/icon/profile), so the two installers coexist.
-const isRustBuild = fs.existsSync(path.join(__dirname, 'core-rust.flag'));
+// core-rust.flag next to main.js selects the Rust ENGINE (since v0.2.0 the
+// primary installer ships it too). The distinct "WinMux Rust" IDENTITY is a
+// separate bit in the flag's content ('rust identity', written only by
+// dist-rust.cjs) — the primary Rust-core build keeps the primary identity so
+// existing installs upgrade in place and the CLI finds it at instance.json.
+let flagContent: string | null = null;
+try { flagContent = fs.readFileSync(path.join(__dirname, 'core-rust.flag'), 'utf8'); } catch { /* no flag = Node build */ }
+const coreFlag = parseCoreFlag(flagContent);
+const isRustBuild = coreFlag.rustCore;
 const profile = resolveProfile({
   isPackaged: app.isPackaged,
   appData: app.getPath('appData'),
   home: os.homedir(),
-  rust: isRustBuild,
+  rust: coreFlag.rustIdentity,
 });
 app.setAppUserModelId(profile.appId);
 app.setName(profile.name);

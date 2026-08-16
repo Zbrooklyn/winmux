@@ -10,16 +10,33 @@ const http = require('http');
 function die(msg) { process.stderr.write('winmux: ' + msg + '\n'); process.exit(1); }
 function out(v) { process.stdout.write((typeof v === 'string' ? v : JSON.stringify(v, null, 2)) + '\n'); }
 
+// process.kill(pid, 0) throws ESRCH if the pid is gone, EPERM if it exists but
+// is owned by someone else (still "alive" for our purposes).
+function pidAlive(pid) {
+  if (!pid) return true; // older files may omit pid — don't reject them
+  try { process.kill(pid, 0); return true; } catch (e) { return !!(e && e.code === 'EPERM'); }
+}
+
 function instance() {
   // An explicit target wins — for scripting a specific instance (and the harness).
   if (process.env.WINMUX_PORT) return { port: Number(process.env.WINMUX_PORT), host: process.env.WINMUX_HOST || '127.0.0.1' };
   // Which copy to drive: an explicit file wins; then --dev / WINMUX_PROFILE=dev;
-  // otherwise the production instance (the installed app is the default target).
+  // otherwise whichever packaged identity is actually LIVE — the primary app
+  // (instance.json) first, then the side-by-side WinMux Rust app
+  // (instance.rust.json). A file whose pid is dead is a stale leftover, not a
+  // target, so a crashed primary never shadows a running Rust app.
   const dev = process.argv.includes('--dev') || process.env.WINMUX_PROFILE === 'dev';
-  const f = process.env.WINMUX_INSTANCE_FILE
-    || path.join(os.homedir(), '.winmux', dev ? 'instance.dev.json' : 'instance.json');
-  try { return JSON.parse(fs.readFileSync(f, 'utf8')); }
-  catch (e) { die('WinMux is not running (no ' + f + '). Start it with `npm start` or the desktop app.'); }
+  const dir = path.join(os.homedir(), '.winmux');
+  const candidates = process.env.WINMUX_INSTANCE_FILE ? [process.env.WINMUX_INSTANCE_FILE]
+    : dev ? [path.join(dir, 'instance.dev.json')]
+    : [path.join(dir, 'instance.json'), path.join(dir, 'instance.rust.json')];
+  for (const f of candidates) {
+    try {
+      const inst = JSON.parse(fs.readFileSync(f, 'utf8'));
+      if (inst && inst.port && pidAlive(inst.pid)) return inst;
+    } catch (e) { /* missing or unreadable — try the next candidate */ }
+  }
+  die('WinMux is not running (checked ' + candidates.join(', ') + '). Start it with `npm start` or the desktop app.');
 }
 
 function rpc(cmd, args) {

@@ -26,9 +26,11 @@ if (!fs.existsSync(bin)) {
 const build = spawnSync('npm', ['run', 'build:electron'], { stdio: 'inherit', shell: true, cwd: appDir });
 if (build.status !== 0) process.exit(build.status || 1);
 
+// 'rust identity' = Rust engine AND the distinct "WinMux Rust" identity
+// (userData/instance/trust files). The primary installer writes just 'rust'.
 const flag = path.join(appDir, 'dist-electron', 'core-rust.flag');
-fs.writeFileSync(flag, 'rust\n');
-console.log('Wrote ' + flag + ' — this build will boot on the Rust core.');
+fs.writeFileSync(flag, 'rust identity\n');
+console.log('Wrote ' + flag + ' — Rust core + distinct WinMux Rust identity.');
 
 const out = process.env.WINMUX_DIST_OUT || path.join(os.homedir(), 'winmux-build');
 // No spaces: electron-builder receives this as one CLI arg through the shell.

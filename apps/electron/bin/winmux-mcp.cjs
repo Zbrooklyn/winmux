@@ -14,12 +14,27 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 
+function pidAlive(pid) {
+  if (!pid) return true; // older files may omit pid — don't reject them
+  try { process.kill(pid, 0); return true; } catch (e) { return !!(e && e.code === 'EPERM'); }
+}
+
 function instance() {
   if (process.env.WINMUX_PORT) return { port: Number(process.env.WINMUX_PORT), host: process.env.WINMUX_HOST || '127.0.0.1' };
+  // Mirror the CLI's discovery: primary app first, then the side-by-side WinMux
+  // Rust app; a file whose pid is dead is a stale leftover, not a target.
   const dev = process.argv.includes('--dev') || process.env.WINMUX_PROFILE === 'dev';
-  const f = process.env.WINMUX_INSTANCE_FILE
-    || path.join(os.homedir(), '.winmux', dev ? 'instance.dev.json' : 'instance.json');
-  return JSON.parse(fs.readFileSync(f, 'utf8'));   // throws if not running — caller turns it into a tool error
+  const dir = path.join(os.homedir(), '.winmux');
+  const candidates = process.env.WINMUX_INSTANCE_FILE ? [process.env.WINMUX_INSTANCE_FILE]
+    : dev ? [path.join(dir, 'instance.dev.json')]
+    : [path.join(dir, 'instance.json'), path.join(dir, 'instance.rust.json')];
+  for (const f of candidates) {
+    try {
+      const inst = JSON.parse(fs.readFileSync(f, 'utf8'));
+      if (inst && inst.port && pidAlive(inst.pid)) return inst;
+    } catch (e) { /* missing or unreadable — try the next candidate */ }
+  }
+  throw new Error('no live instance');   // caller turns it into a tool error
 }
 
 function rpc(cmd, args) {

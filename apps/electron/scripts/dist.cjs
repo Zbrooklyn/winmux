@@ -22,7 +22,10 @@ if (!fs.existsSync(bin)) {
 }
 
 // build:electron already ran via the npm script; drop the flag so the packaged
-// app selects the Rust core at launch.
+// app selects the Rust core at launch. Content 'rust' (no 'identity') keeps the
+// PRIMARY identity — userData WinMux, instance.json — so 0.1.x installs upgrade
+// in place and the winmux CLI finds the app. Only dist-rust.cjs writes 'rust
+// identity' (the side-by-side WinMux Rust app).
 const flag = path.join(appDir, 'dist-electron', 'core-rust.flag');
 fs.writeFileSync(flag, 'rust\n');
 console.log('Wrote ' + flag + ' — this build boots on the Rust core.');

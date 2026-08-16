@@ -15,6 +15,19 @@ export interface Profile {
   trustFile: string;
 }
 
+// core-rust.flag next to main.js selects the ENGINE; whether it also selects the
+// separate "WinMux Rust" IDENTITY is a second, independent bit carried in the
+// flag's content. Since the v0.2.0 Stage-4 cutover THE primary installer ships
+// the Rust engine ('rust'), while the side-by-side proof installer additionally
+// claims the distinct identity ('rust identity'). Conflating the two made the
+// shipped primary app run under the side identity's userData/discovery/trust
+// files — invisible to the CLI and clobbering the real WinMux Rust install.
+export interface CoreFlag { rustCore: boolean; rustIdentity: boolean; }
+export function parseCoreFlag(content: string | null): CoreFlag {
+  if (content == null) return { rustCore: false, rustIdentity: false };
+  return { rustCore: true, rustIdentity: /identity/.test(content) };
+}
+
 // One computation of a copy's identity. The three copies — the from-source dev
 // copy, the packaged Node build, and the packaged Rust build — get disjoint
 // values so none share Electron's userData (and its ProcessSingleton lock), the

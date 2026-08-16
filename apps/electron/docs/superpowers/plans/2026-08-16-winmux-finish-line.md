@@ -33,6 +33,7 @@ default, hardened, and the only things left are the two deferred owner decisions
 | FL-10 | Per-turn transcript view | Backend `.jsonl` per-turn reader + CLI/MCP surface proven on real worker sessions. Any new pixels ship as screenshots for Edward's acceptance before being called done (FE gate). |
 | FL-11 | Clean-machine proof | v0.2.0 installer proven on a clean profile: install → onboarding → real shell → phone door off. Screenshots. |
 | FL-12 | Android companion | Final arc, post the above; gets its own plan file before its first commit (Phase 14: paste-link/scan-QR native client over the existing phone door). |
+| FL-13 | v0.2.1 identity fix (task #286) | The v0.2.0 primary installer conflated core-rust.flag's ENGINE choice with the "WinMux Rust" IDENTITY: the shipped primary app ran under the side identity's userData/instance/trust files — 0.1.x upgraders' settings invisible, `winmux` CLI blind to the app (looks in instance.json, app registered in instance.rust.json). Done when: flag content carries the identity bit ('rust' = engine only, 'rust identity' = side app), `parseCoreFlag` unit-tested, CLI + MCP discovery try instance.json then instance.rust.json (dead-pid files skipped), v0.2.1 released with both installers rebuilt, winget PR moved to 0.2.1 pre-merge, Edward's staged installer replaced. |
 
 ## Order
 
