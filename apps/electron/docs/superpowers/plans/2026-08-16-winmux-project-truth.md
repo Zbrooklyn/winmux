@@ -32,6 +32,23 @@ One sentence a stranger can hold: **"Your workspace is always saved automaticall
 - **PT-6** — Single-source settings: engine config.json is the source of truth, localStorage a cache; all four apps converge.
 - **PT-7** — Harness checks for every new state transition + vocab/docs update + release.
 
+## Scorecard — the questions we hold ourselves to (baseline 2026-08-16, re-rate after every unit)
+
+Ratings are strict: 10 = a stranger could not be confused or lose anything; scores reflect evidence, not intent.
+
+1. If the machine died right now, what does the user lose? — Layout lives in hidden per-app browser storage; running shells are processes (acceptable loss); zero project files exist to be safe. **4/10** → PT-3.
+2. Can the user say where their stuff is saved, in one sentence? — Five stores, five lifetimes, no model anywhere. **2/10** → PT-2.
+3. Before every action (close window / quit / close project / delete), can the user predict what survives? — Close window now explained (v0.2.2); quit clear; close-project verb does not exist; delete has no UI. **4/10** → PT-5.
+4. Can the user SEE everything that is saved? — No list of workspaces, projects, or the 235 hidden recovery files. **1/10** → PT-4, PT-5.
+5. Can the user get back everything the system claims to keep? — Reattach is implicit-only; backlog restore has no UI. **3/10** → PT-4.
+6. Is anything ever lost silently? — Backlog expires at 7 days without the user ever knowing it existed; profile wipe kills the workspace. **3/10** → PT-3, PT-4 (expiry becomes visible: "expires in N days").
+7. Does saving mean the same thing in all four apps + browser + phone? — Shared UI yes, but four separate invisible workspaces surprise. **5/10** → PT-2, PT-3.
+8. Can the user move their setup to another machine? — Project files are portable by design but unused; workspace is not. **4/10** → PT-3, PT-5.
+9. Is there a way back from a mistaken close/delete? — Reopen-closed-tab exists (good); end-session's undo (backlog) is invisible. **4/10** → PT-4.
+10. Is there exactly one source of truth per fact? — Settings/keymap live in a server file AND four localStorage copies. **3/10** → PT-6.
+
+**Baseline: 33/100.** Exit bar for the arc: every question ≥ 8, and Edward can answer Q2 and Q3 from the app alone.
+
 ## Risks
 - Both engines must implement /api/workspace identically (drift class — add parity check to harness).
 - Migration must never lose an existing ct-live layout (Rule: no silent data loss; migrate-then-verify before trusting the file).
