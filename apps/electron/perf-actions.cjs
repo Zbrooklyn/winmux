@@ -22,6 +22,10 @@ const HEADED = process.argv.includes('--headed');
 // --load: run the same probes while 10 terminals stream heavy output — the
 // "agents are working and I'm clicking around" reality, not an idle demo.
 const LOAD = process.argv.includes('--load');
+// --scale (SP-5, speed arc): 5× the load reality — 50 tabs, 10 of them
+// streaming — plus a direct fleet-tick cost measure, proving rendering cost
+// scales with what changed (one row), not with how much exists (50 rows).
+const SCALE = process.argv.includes('--scale');
 const PORT = 9944;
 // Pre-registered target, set before optimizing: a response painted within
 // 100ms reads as instant. Anything above is a named offender.
@@ -114,23 +118,26 @@ async function __probe(actName) {
   await page.evaluate(() => document.getElementById('open-new').click());
   await page.waitForTimeout(1500);
 
-  if (LOAD) {
-    // Same load recipe as perf.cjs: 10 terminals, every one streaming a long
-    // burst, actions measured while the bursts are in flight.
+  if (LOAD || SCALE) {
+    // Same load recipe as perf.cjs: extra terminals, streaming bursts, actions
+    // measured while the bursts are in flight. Scale mode raises the tab count
+    // to 50 but keeps 10 streams — "many sessions, some busy", the 5× reality.
     const winmuxOn = (args) => new Promise((resolve) => {
       const p = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
         { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT), WINMUX_HOST: '127.0.0.1' }) });
       let o = ''; p.stdout.on('data', (d) => o += d);
       p.on('exit', () => resolve(o.trim()));
     });
-    for (let i = 0; i < 8; i++) await winmuxOn(['new-tab']);
+    const extra = SCALE ? 48 : 8;
+    for (let i = 0; i < extra; i++) await winmuxOn(['new-tab']);
     await page.waitForTimeout(1800);
     let ids = [];
     try { const l = JSON.parse(await winmuxOn(['list', '--json'])); ids = (l.sessions || []).map((s) => s.id); } catch (e) {}
+    const streamIds = SCALE ? ids.slice(0, 10) : ids;
     const burst = '1..60000 | % { "perf ' + 'x'.repeat(72) + ' $_" }';
-    ids.forEach((id) => { winmuxOn(['send', burst, '--id', String(id), '--enter']); });
+    streamIds.forEach((id) => { winmuxOn(['send', burst, '--id', String(id), '--enter']); });
     await page.waitForTimeout(900);
-    console.log('load mode: ' + ids.length + ' terminals streaming');
+    console.log((SCALE ? 'scale' : 'load') + ' mode: ' + ids.length + ' terminals, ' + streamIds.length + ' streaming');
   }
 
   // Each action twice: cold (first ever) and warm (second time). The gap between
@@ -158,7 +165,30 @@ async function __probe(actName) {
     await page.waitForTimeout(250);
   }
 
+  // SP-5: the fleet-tick number — one terminal's status flips, how long does the
+  // sidebar repaint take? With per-row patching this must not grow with tab count.
+  let tick = null;
+  if (SCALE) {
+    await page.evaluate(() => { const x = document.querySelector('.pexpand'); if (x && !x.hasAttribute('data-open2')) x.click(); });
+    await page.waitForTimeout(300);
+    const samples = [];
+    for (let i = 0; i < 30; i++) {
+      const ms = await page.evaluate(() => window.__winmuxFleetTick());
+      if (ms >= 0) samples.push(ms);
+      await page.waitForTimeout(60);
+    }
+    samples.sort((a, b) => a - b);
+    tick = {
+      n: samples.length,
+      median: Math.round(samples[Math.floor(samples.length / 2)] * 100) / 100,
+      worst: Math.round(samples[samples.length - 1] * 100) / 100,
+    };
+  }
+
   await browser.close();
+  // Graceful stop so every spawned shell dies with the server (a hard kill()
+  // skips the shutdown hooks and, at 50 tabs, would strand 50 PowerShells).
+  try { await fetch('http://127.0.0.1:' + PORT + '/api/shutdown', { method: 'POST' }); await wait(1200); } catch (e) {}
   try { server.kill(); } catch (e) {}
 
   const rows = SEQ.map((n) => ({
@@ -177,6 +207,7 @@ async function __probe(actName) {
   const offenders = rows.filter((r) => !r.err && Math.max(r.coldMs, r.warmMs) > INSTANT_MS);
   const errs = rows.filter((r) => r.err);
   console.log('\noffenders over ' + INSTANT_MS + 'ms: ' + offenders.length + (errs.length ? ' · probe errors: ' + errs.length : ''));
+  if (tick) console.log('fleet tick (1 status flap, ' + tick.n + ' samples): median ' + tick.median + 'ms, worst ' + tick.worst + 'ms — SP-5 budget 40ms');
   console.log(JSON.stringify(rows));
   process.exit(errs.length ? 2 : 0);
 })().catch((e) => { console.error('perf-actions ERR', e && e.stack || e); process.exit(2); });

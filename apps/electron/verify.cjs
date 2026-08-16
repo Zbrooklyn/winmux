@@ -833,9 +833,18 @@ check('remote', PORT_REMOTE, async ({ browser, base, t, shot, skip }) => {
     await p.keyboard.type('"tailnet says " + $env:COMPUTERNAME');
     await p.keyboard.press('Enter');
     await p.waitForTimeout(3000);
-    const said = await p.evaluate(() =>
-      [].map.call(document.querySelectorAll('.xterm-rows > div'), (d) => d.textContent.trim())
-        .filter((r) => /tailnet says/.test(r)));
+    // Read the terminal BUFFER, not .xterm-rows DOM text — since SP-5 the phone
+    // terminal gets the WebGL renderer once shown (canvas paint, empty row divs).
+    const said = await p.evaluate(() => {
+      const at = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
+      if (!at || !at.term) return [];
+      const b = at.term.buffer.active, out = [];
+      for (let i = 0; i < b.length; i++) {
+        const ln = b.getLine(i);
+        if (ln) { const s = ln.translateToString(true).trim(); if (/tailnet says/.test(s)) out.push(s); }
+      }
+      return out;
+    });
     t('a real shell answers over the tailnet', said.some((r) => /tailnet says \w/i.test(r)), said);
 
     // This screenshot gets shown to people, so the key must not be in it.

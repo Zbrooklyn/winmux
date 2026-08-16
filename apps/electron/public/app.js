@@ -236,8 +236,13 @@
   function wantsWebgl() {
     return !!(window.WebglAddon && S.gpuRenderer && !S.ligatures && !window.__winmuxForceDom);
   }
-  function applyRenderer(term) {
-    var want = wantsWebgl();
+  // SP-5 (speed arc): WebGL contexts are a browser-limited resource (~16 per page).
+  // A hidden tab paints nothing, so only VISIBLE terminals get the WebGL renderer —
+  // pass visible:false to hand the context back when a tab hides. Without this, 50
+  // tabs meant 50 context requests: the browser evicted the oldest, applySettings
+  // re-created them, and every toggle became a 385ms+ musical-chairs pass (measured).
+  function applyRenderer(term, visible) {
+    var want = wantsWebgl() && visible !== false;
     if (want && term.__winmuxRenderer === 'webgl') return;
     if (!want && term.__winmuxRenderer !== 'webgl') { term.__winmuxRenderer = 'dom'; return; }
     if (!want) {
@@ -283,24 +288,59 @@
     if (S.ligatures) document.body.setAttribute('data-ligatures', '');
     else document.body.removeAttribute('data-ligatures');
   }
+  // Everything term.options.theme is derived from, as one comparable string —
+  // palette CONTENT included, so re-importing a scheme under the same name still
+  // counts as a change.
+  function themeSig() {
+    return (isLightNow() ? 'L' : 'D') + '|' + S.palette + '|' + JSON.stringify(allPalettes()[S.palette] || '');
+  }
+  // Bring one terminal's xterm options up to date with S, assigning only what
+  // actually differs. Assigning options.theme a fresh object makes xterm rebuild
+  // its glyph atlas and repaint even when every colour is identical, so the theme
+  // is guarded by its signature.
+  function applyTermOptions(t) {
+    if (!t.term) return;
+    try {
+      var o = t.term.options;
+      var want = {
+        fontFamily: FONTS[S.fontFamily] || FONTS['Cascadia Code'],
+        fontSize: S.fontSize,
+        lineHeight: S.lineHeight,
+        cursorStyle: S.cursorStyle,
+        cursorBlink: !!S.cursorBlink,
+        scrollback: S.scrollback,
+      };
+      for (var k in want) if (o[k] !== want[k]) o[k] = want[k];
+      var sig = themeSig();
+      if (t.term.__winmuxThemeSig !== sig) { o.theme = themeColors(); t.term.__winmuxThemeSig = sig; }
+      t.term.__winmuxOptsDirty = false;
+    } catch (e) {}
+  }
   function applySettings() {
+    var dbg = null;
+    try { if (localStorage.getItem('ct-perf-debug')) dbg = { t: performance.now(), m: [] }; } catch (e) {}
+    var mark = function (label) { if (dbg) { var n = performance.now(); dbg.m.push(label + ' ' + Math.round(n - dbg.t) + 'ms'); dbg.t = n; } };
     applyLigatures();
-    eachTerm(function (t) { applyRenderer(t.term); });
+    mark('ligatures');
+    eachTerm(function (t) { applyRenderer(t.term, !!(t.host && t.host.style.display !== 'none')); });
+    mark('renderer');
+    // SP-5 (speed arc): a settings change pays only for what the user can see.
+    // Visible terminals apply immediately; hidden ones are marked dirty and catch
+    // up the moment they're shown (activateTerm). Even a cheap per-option
+    // assignment costs ~2ms inside xterm — × 50 tabs that made every toggle a
+    // ~96ms click (measured), all of it spent on terminals nobody was looking at.
     eachTerm(function (t) {
-      try {
-        var o = t.term.options;
-        o.fontFamily = FONTS[S.fontFamily] || FONTS['Cascadia Code'];
-        o.fontSize = S.fontSize;
-        o.lineHeight = S.lineHeight;
-        o.cursorStyle = S.cursorStyle;
-        o.cursorBlink = !!S.cursorBlink;
-        o.scrollback = S.scrollback;
-        o.theme = themeColors();
-      } catch (e) {}
+      if (!t.term) return;
+      if (t.host && t.host.style.display === 'none') { t.term.__winmuxOptsDirty = true; return; }
+      applyTermOptions(t);
     });
+    mark('options');
     panes.forEach(fitActive);
+    mark('fit');
     saveSettings();
     pushQuake();
+    mark('save');
+    if (dbg) console.log('[perf] applySettings: ' + dbg.m.join(' · '));
   }
   // Phase 7 — tell the Electron main process whether to hold the quake hotkey, and
   // which key. A no-op in a plain browser (no bridge), so the setting just persists.
@@ -1010,6 +1050,16 @@
   // bypassing only the throttle timer, so the harness can prove a row reflects the
   // latest output deterministically.
   window.__winmuxCaptureDoing = function () { var n = 0; eachTerm(function (t) { if (captureDoing(t)) n++; }); return n; };
+  // SP-5 observability hook: flip one terminal's status and report how long the
+  // repaint work took, so the harness can prove a fleet tick costs O(row), not
+  // O(sidebar), at any scale.
+  window.__winmuxFleetTick = function () {
+    var t = null; eachTerm(function (x) { if (!t) t = x; });
+    if (!t) return -1;
+    var t0 = performance.now();
+    setStatus(t, t.status === 'working' ? 'idle' : 'working');
+    return performance.now() - t0;
+  };
   // A full path eats the row; the folder you are standing in is the useful part.
   function tailPath(cwd) {
     if (!cwd) return '';
@@ -1042,27 +1092,46 @@
     }
     return st;
   }
-  function renderSidebar() {
-    // The deck is a fleet gauge — it counts every terminal in every group, so a
-    // "needs you" in a group you are not looking at still reaches you.
+  // The group header's live half: "N sessions · 2 needs you" — everything on the
+  // line that a status change can move.
+  function groupSub(ts) {
+    var need = ts.filter(function (t) { return t.status === 'needsyou' || t.status === 'closed'; }).length;
+    var work = ts.filter(function (t) { return t.status === 'working'; }).length;
+    var n = ts.length;
+    return n + ' session' + (n === 1 ? '' : 's') + ' · ' +
+      (need ? '<span class="hot">' + need + ' needs you</span>' : (work ? work + ' working' : 'idle'));
+  }
+  // The deck is a fleet gauge — it counts every terminal in every group, so a
+  // "needs you" in a group you are not looking at still reaches you.
+  function renderDeck() {
     var counts = { working: 0, needsyou: 0, idle: 0 };
     eachTerm(function (t) {
       if (t.status === 'working') counts.working++;
       else if (t.status === 'needsyou' || t.status === 'closed') counts.needsyou++;
       else counts.idle++;
     });
+    // A zero counter still reads as loud as a three, so the eye lands on nothing
+    // in particular. Mark the empty ones and let the CSS quiet them down.
+    [['d-work', counts.working], ['d-need', counts.needsyou], ['d-idle', counts.idle]]
+      .forEach(function (pair) {
+        var el = document.getElementById(pair[0]);
+        el.textContent = String(pair[1]);
+        var box = el.parentElement;
+        if (pair[1]) box.removeAttribute('data-zero'); else box.setAttribute('data-zero', '');
+      });
+    if (countEl) countEl.textContent = String(groups.length);
+    var live = document.getElementById('nhead-live');
+    if (live) { var n2 = totalTerms(); live.textContent = n2 + ' running'; }
+  }
+  function renderSidebar() {
     var html = '';
     groups.forEach(function (g) {
       var ts = termsOfGroup(g.id);
-      var need = ts.filter(function (t) { return t.status === 'needsyou' || t.status === 'closed'; }).length;
-      var work = ts.filter(function (t) { return t.status === 'working'; }).length;
       var n = ts.length;
-      var sub = n + ' session' + (n === 1 ? '' : 's') + ' · ' +
-        (need ? '<span class="hot">' + need + ' needs you</span>' : (work ? work + ' working' : 'idle'));
       var open = !!expandedGroups[g.id];
       html += '<div class="prow" data-switch="' + g.id + '"' + (g.id === activeGroupId ? ' data-active' : '') + '>' +
         '<span class="pfolder">' + FOLDER_SVG + '<span class="pdot" style="background:' + (STATUS_COLOR[groupStatus(ts)] || 'transparent') + '"></span></span>' +
-        '<div class="pinfo"><div class="pname">' + (g.pinned ? PPIN_SVG : '') + esc(g.name) + '</div><div class="psub">' + sub + '</div></div>' +
+        '<div class="pinfo"><div class="pname">' + (g.pinned ? PPIN_SVG : '') + esc(g.name) + '</div><div class="psub">' + groupSub(ts) + '</div></div>' +
         '<span class="ptrail"><span class="pexpand" data-expand="' + g.id + '"' + (open ? ' data-open2' : '') +
         ' title="' + (open ? 'Hide sessions' : 'Show sessions') + '">' + CARET_RIGHT_SVG + '</span></span>' +
         '</div>';
@@ -1076,19 +1145,37 @@
       }
     });
     sxList.innerHTML = html;
-    // A zero counter still reads as loud as a three, so the eye lands on nothing
-    // in particular. Mark the empty ones and let the CSS quiet them down.
-    [['d-work', counts.working], ['d-need', counts.needsyou], ['d-idle', counts.idle]]
-      .forEach(function (pair) {
-        var el = document.getElementById(pair[0]);
-        el.textContent = String(pair[1]);
-        var box = el.parentElement;
-        if (pair[1]) box.removeAttribute('data-zero'); else box.setAttribute('data-zero', '');
-      });
-    if (countEl) countEl.textContent = String(groups.length);
-    var live = document.getElementById('nhead-live');
-    if (live) { var n2 = totalTerms(); live.textContent = n2 + ' running'; }
+    renderDeck();
     renderNarrowSessions();
+  }
+  // SP-5 (speed arc): a status flap touches ONE session, so it repaints one row —
+  // its srow, its group's header line, the deck counters, and its narrow card —
+  // never the whole sidebar. Same HTML generators as renderSidebar, so the patch
+  // path can't drift from the full-render path. Anything structural (rows added,
+  // removed, regrouped) still goes through renderSidebar.
+  function renderRow(t) {
+    if (!sxList) return;
+    var g = groupById(t.groupId);
+    var prow = g && sxList.querySelector('.prow[data-switch="' + g.id + '"]');
+    if (!prow) { renderSidebar(); return; }   // structure moved under us — full pass
+    var ts = termsOfGroup(g.id);
+    var pd = prow.querySelector('.pdot');
+    if (pd) pd.style.background = STATUS_COLOR[groupStatus(ts)] || 'transparent';
+    var psub = prow.querySelector('.psub');
+    if (psub) psub.innerHTML = groupSub(ts);
+    var row = sxList.querySelector('.srow[data-term="' + t.id + '"]');
+    if (row) {
+      var p = paneById(t.paneId);
+      var eye = row.classList.contains('eye-on');
+      row.outerHTML = srowHTML(t, !!p && p.activeTermId === t.id && p.id === activePaneId && g.id === activeGroupId);
+      if (eye) {
+        var nr = sxList.querySelector('.srow[data-term="' + t.id + '"]');
+        if (nr) nr.classList.add('eye-on');
+      }
+    }
+    renderDeck();
+    var nc = document.querySelector('#ns-list .ncard[data-open="' + t.id + '"]');
+    if (nc && g.id === activeGroupId) nc.outerHTML = ncardHTML(t);
   }
   sxList.addEventListener('click', function (e) {
     var appr = e.target.closest ? e.target.closest('[data-approve]') : null;
@@ -1273,23 +1360,26 @@
     }
     var ts = termsOfGroup(activeGroupId);
     list.innerHTML = ts.length
-      ? ts.map(function (t) {
-        var attn = t.status === 'needsyou' || t.status === 'closed';
-        // An unrenamed terminal is already named after its shell, so printing the
-        // shell again on the same line just reads "PowerShell   PowerShell".
-        var nm = termName(t), kind = leafKind(t);
-        return '<div class="ncard' + (attn ? ' attn' : '') + '" data-open="' + t.id + '">' +
-          '<span class="dot ' + dotClass(t) + ' sd"></span>' +
-          '<div class="sb"><div class="r1">' +
-          '<span class="nm mono">' + esc(nm) + '</span>' +
-          (kind === nm ? '' : '<span class="tm">' + esc(kind) + '</span>') + '</div>' +
-          '<div class="preview">' + statusLine(t) + (t.cwd ? ' · ' + esc(t.cwd) : '') + '</div>' +
-          '</div>' +
-          (t.status === 'needsyou' ? '<span class="sapprove nc" data-approve="' + t.id + '" role="button" tabindex="0" title="Approve — send Enter to continue" aria-label="Approve">Approve</span>' : '') +
-          '<span class="speye nceye" data-eye="' + t.id + '" role="button" tabindex="0" title="Preview session" aria-label="Preview session">' + EYE_SVG + '</span>' +
-          '<span class="nchev">' + CARET_RIGHT_SVG + '</span></div>';
-      }).join('')
+      ? ts.map(ncardHTML).join('')
       : '<div class="ncard"><div class="sb"><div class="preview">No terminals in this group yet.</div></div></div>';
+  }
+  // One session card on the phone's session screen (shared by the full render
+  // above and the SP-5 single-row patch).
+  function ncardHTML(t) {
+    var attn = t.status === 'needsyou' || t.status === 'closed';
+    // An unrenamed terminal is already named after its shell, so printing the
+    // shell again on the same line just reads "PowerShell   PowerShell".
+    var nm = termName(t), kind = leafKind(t);
+    return '<div class="ncard' + (attn ? ' attn' : '') + '" data-open="' + t.id + '">' +
+      '<span class="dot ' + dotClass(t) + ' sd"></span>' +
+      '<div class="sb"><div class="r1">' +
+      '<span class="nm mono">' + esc(nm) + '</span>' +
+      (kind === nm ? '' : '<span class="tm">' + esc(kind) + '</span>') + '</div>' +
+      '<div class="preview">' + statusLine(t) + (t.cwd ? ' · ' + esc(t.cwd) : '') + '</div>' +
+      '</div>' +
+      (t.status === 'needsyou' ? '<span class="sapprove nc" data-approve="' + t.id + '" role="button" tabindex="0" title="Approve — send Enter to continue" aria-label="Approve">Approve</span>' : '') +
+      '<span class="speye nceye" data-eye="' + t.id + '" role="button" tabindex="0" title="Preview session" aria-label="Preview session">' + EYE_SVG + '</span>' +
+      '<span class="nchev">' + CARET_RIGHT_SVG + '</span></div>';
   }
 
   // Clicking a group swaps the top tab strip to that group's terminals. This is
@@ -1527,9 +1617,15 @@
       if (on) {
         // Terminal leaves fit + focus the xterm; a non-terminal leaf (browser,
         // markdown) has no term — it shows its own body via onShow instead.
-        if (t.term) { try { t.fit.fit(); } catch (e) {} sendResize(t); resyncRenderer(t.term); t.term.focus(); }
+        if (t.term) {
+          applyRenderer(t.term, true);
+          if (t.term.__winmuxOptsDirty) applyTermOptions(t);   // settings changed while this tab was hidden
+          try { t.fit.fit(); } catch (e) {} sendResize(t); resyncRenderer(t.term); t.term.focus();
+        }
         else if (t.onShow) { try { t.onShow(); } catch (e) {} }
         if (t.status === 'needsyou') setStatus(t, 'idle');
+      } else if (t.term) {
+        applyRenderer(t.term, false);   // hidden — hand the WebGL context back
       }
     });
     if (!cycling) touchMru(p, termId);
@@ -1600,7 +1696,7 @@
     if (s !== 'working') stopProg(t);
     updateRings();
     layoutTabs(paneById(t.paneId));
-    renderSidebar();
+    renderRow(t);
   }
   // The busy underline: a progress line that creeps toward full while output keeps arriving,
   // completes to 100% when the shell falls quiet, then clears.
@@ -1928,6 +2024,7 @@
       // it here makes an explicit hyperlink open exactly like a bare URL.
       linkHandler: { activate: function (ev, uri) { openLink(uri); } },
     });
+    term.__winmuxThemeSig = themeSig();   // born current — applySettings skips it until the theme really changes
     var fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     var search = new SearchAddon.SearchAddon();
@@ -1959,7 +2056,7 @@
       } catch (e) {}
     }
     term.open(host);
-    applyRenderer(term);   // GPU vs DOM — see the function; must run AFTER open()
+    applyRenderer(term, host.style.display !== 'none');   // GPU vs DOM — see the function; must run AFTER open()
     // Catch the Electron startup dpr settle (dpr 1 first paint -> real dpr once placed
     // on a scaled monitor), which otherwise strands the very first prompt. Cheap no-op
     // once the canvas already matches. rAF for the next frame + a short timeout for the
@@ -5192,7 +5289,7 @@
         st = 'needs-you';
       } else if (st === 'working') {
         setStatus(ag, 'working');
-        if (amsg) { ag.lastLine = amsg; renderSidebar(); }
+        if (amsg) { ag.lastLine = amsg; updateDoing(ag); }
       } else if (st === 'done' || st === 'idle') {
         setStatus(ag, 'idle');
         st = 'idle';
