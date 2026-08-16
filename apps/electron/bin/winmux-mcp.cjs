@@ -94,6 +94,16 @@ const TOOLS = [
   { name: 'winmux_agent_result', desc: "Read a spawned job's state and result.",
     schema: { type: 'object', properties: { jobId: { type: 'string' } }, required: ['jobId'] },
     run: (a) => rpc('job-status', { jobId: a.jobId }) },
+  { name: 'winmux_slash', desc: "Type a slash command into a running Claude Code session's terminal — e.g. '/model haiku' to switch that session's model mid-flight (applies to its next turns), '/compact' to shrink its context. Waits for the session to be idle at its input prompt first; force queues it while working. id targets the session (from winmux_agent_spawn's sid or winmux_list); omit for the active one.",
+    schema: { type: 'object', properties: { command: { type: 'string' }, id: { type: 'number' }, force: { type: 'boolean' } }, required: ['command'] },
+    run: async (a) => {
+      const args = ['slash', a.command];
+      if (a.id != null) args.push('--id', String(a.id));
+      if (a.force) args.push('--force');
+      const r = await cli(args, 120000);
+      if (r.code !== 0) throw new Error(r.err || r.out || 'slash failed');
+      return { ok: true, sent: a.command };
+    } },
 ];
 
 // Run the winmux CLI as a child process (for tools that are client-side flows,

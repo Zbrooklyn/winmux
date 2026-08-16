@@ -168,6 +168,32 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
       return out(r.screen);
     }
     if (cmd === 'focus') { if (!argv[1]) die('focus needs a terminal id'); return emit('focused ' + argv[1], await rpc('focus', { target: argv[1] })); }
+    if (cmd === 'slash') {
+      // Drive a running Claude Code session with a slash command — e.g.
+      //   winmux slash "/model haiku" --id 3     (switch that session's model mid-flight)
+      //   winmux slash "/compact" --id 3         (shrink its context)
+      // The TUI needs the text and Enter as SEPARATE keystrokes (one send does not
+      // submit), and the command only lands cleanly when the session is idle at its
+      // input prompt — so wait for idle unless --force queues it anyway.
+      const text = argv[1];
+      if (!text || !text.startsWith('/')) die('slash needs a /command: winmux slash "/model haiku" --id 3');
+      const target = flag(argv, '--id');
+      const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+      if (!has(argv, '--force')) {
+        let idle = false;
+        for (let i = 0; i < 45; i++) {
+          const sc = await rpc('read-screen', { target, lines: 25 }).catch(() => null);
+          const s = (sc && sc.screen) || '';
+          if (/❯/.test(s) && !/esc to interrupt/i.test(s)) { idle = true; break; }
+          await sleepMs(2000);
+        }
+        if (!idle) die('session is still working — retry when idle, or add --force to queue it');
+      }
+      await rpc('send', { data: text, enter: false, target });
+      await sleepMs(1200);
+      await rpc('send', { data: '', enter: true, target });
+      return emit('sent ' + text, { ok: true, sent: text });
+    }
     if (cmd === 'notify') {
       // Attention bus: mark a session as needing Edward. Message is the free text
       // after the verb; --id targets a specific session, else the active one.
@@ -241,6 +267,69 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
       // --id also works; else the active session.
       const state = (argv[1] || '').toLowerCase();
 
+      // Stop-hook completion for spawned workers: the launcher exports WINMUX_JOB,
+      // so when the worker's first turn ends this reports the job done with the
+      // final assistant message (from the hook's transcript) as the result — no
+      // prompt-obedience contract for the worker model to misread. Always clears
+      // the cockpit lane; a plain shell (no WINMUX_JOB) is lane-only.
+      if (state === 'auto-done') {
+        let payload = '';
+        try { if (!process.stdin.isTTY) payload = fs.readFileSync(0, 'utf8'); } catch (e) {}
+        let tp = null;
+        try { tp = JSON.parse(payload).transcript_path; } catch (e) {}
+        // Windows hook stdin is flaky — fall back to the newest transcript in this
+        // cwd's Claude project dir (hooks run with the session's cwd).
+        if (!tp || !fs.existsSync(tp)) {
+          try {
+            const os2 = require('os');
+            const proj = path.join(os2.homedir(), '.claude', 'projects', process.cwd().replace(/[:\\\/.]/g, '-'));
+            const newest = fs.readdirSync(proj).filter((f) => f.endsWith('.jsonl'))
+              .map((f) => ({ f, m: fs.statSync(path.join(proj, f)).mtimeMs }))
+              .sort((a, b) => b.m - a.m)[0];
+            if (newest) tp = path.join(proj, newest.f);
+          } catch (e) {}
+        }
+        const jobId = process.env.WINMUX_JOB;
+        if (jobId) {
+          // The Stop hook can fire before the final assistant line is flushed to
+          // the transcript file — retry briefly before reporting.
+          const extract = (file) => {
+            try {
+              const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+              for (let i = lines.length - 1; i >= 0; i--) {
+                try {
+                  const j = JSON.parse(lines[i]);
+                  if (j.type === 'assistant' && j.message && Array.isArray(j.message.content)) {
+                    const t = j.message.content.filter((c) => c.type === 'text').map((c) => c.text).join('\n').trim();
+                    if (t) return t;
+                  }
+                } catch (e2) {}
+              }
+            } catch (e) {}
+            return null;
+          };
+          let result = null;
+          for (let tries = 0; tries < 12 && result == null; tries++) {
+            if (tries) await new Promise((r) => setTimeout(r, 500));
+            if (tp && fs.existsSync(tp)) result = extract(tp);
+            if (result == null) {
+              try {
+                const os2 = require('os');
+                const proj = path.join(os2.homedir(), '.claude', 'projects', process.cwd().replace(/[:\\\/.]/g, '-'));
+                const newest = fs.readdirSync(proj).filter((f) => f.endsWith('.jsonl'))
+                  .map((f) => ({ f, m: fs.statSync(path.join(proj, f)).mtimeMs }))
+                  .sort((a, b) => b.m - a.m)[0];
+                if (newest) result = extract(path.join(proj, newest.f));
+              } catch (e) {}
+            }
+          }
+          await rpc('job-report', { jobId, state: 'done', result }).catch(() => {});
+        }
+        const sidAd = process.env.WINMUX_SID || '';
+        if (sidAd) await rpc('agent', { state: 'done', sid: sidAd }).catch(() => {});
+        return;
+      }
+
       // Stage 3 — orchestration: a server-side job so one session can spawn another,
       // wait until it finishes, and get its result as data. jobId (not sid) is the
       // unit of work. These verbs are handled by the server, not the app.
@@ -302,19 +391,22 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
         const lines = [];
         if (flag(argv, '--cwd')) lines.push('Set-Location -LiteralPath ' + psq(flag(argv, '--cwd')));
         if (tui) {
-          // Interactive Claude Code streaming in the pane. The prompt carries its own
-          // completion contract: write the result file, then report the job done.
-          // Worker hooks (working/done lanes, no idle-notification noise) when present.
+          // Interactive Claude Code streaming in the pane. Completion is PLUMBING,
+          // not prompt-obedience: the launcher exports WINMUX_JOB and the worker
+          // hooks' Stop hook (`agent auto-done`) reports the job done with the final
+          // assistant message as the result — any model is safe, the task stays pure.
+          // Fallback (hooks file missing): an imperative same-turn contract in the
+          // prompt; weaker models read "when you are done" as future protocol.
           const hooks = path.join(__dirname, '..', 'config', 'claude-hooks-worker.json');
+          const hooksExist = fs.existsSync(hooks);
           const pf = path.join(dir, 'prompt.txt');
-          // Imperative, this-turn contract: weaker models read "when you are done"
-          // as future protocol and stall waiting for another instruction.
-          fs.writeFileSync(pf, prompt +
+          fs.writeFileSync(pf, hooksExist ? prompt : prompt +
             ' The above is your ENTIRE assignment. Do it now, then in this same turn, without asking anything: 1) write your full final answer to the file ' + rf.replace(/\\/g, '/') +
             ' using the Write tool, 2) run this exact Bash command: node "' + cliPath.replace(/\\/g, '/') + '" agent done --job ' + jobId + ' --result-file "' + rf.replace(/\\/g, '/') + '". You are not finished until step 2 has run.', 'utf8');
           lines.push('[Console]::OutputEncoding=[System.Text.Encoding]::UTF8');
+          if (hooksExist) lines.push('$env:WINMUX_JOB = ' + psq(jobId));
           lines.push('$__p = Get-Content -Raw -LiteralPath ' + psq(pf));
-          lines.push((fs.existsSync(hooks) ? 'claude --settings ' + psq(hooks) + ' ' : 'claude ') + modelArg + '--dangerously-skip-permissions $__p');
+          lines.push((hooksExist ? 'claude --settings ' + psq(hooks) + ' ' : 'claude ') + modelArg + '--dangerously-skip-permissions $__p');
         } else {
           let taskExpr = rawCmd;
           if (!rawCmd) { const pf = path.join(dir, 'prompt.txt'); fs.writeFileSync(pf, prompt, 'utf8'); taskExpr = 'Get-Content -Raw -LiteralPath ' + psq(pf) + ' | claude -p ' + modelArg.trim(); }

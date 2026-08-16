@@ -34,6 +34,15 @@ Pick `model` per task — spawning every worker on the account-default top-tier 
 
 If the user names a model, that wins.
 
+## Drive a live session with slash commands
+
+`winmux_slash` with `{ command, id }` types a slash command into a running session's terminal (it waits until that session is idle). CLI fallback: `node ".../bin/winmux.cjs" slash "/model haiku" --id <sid>`. Uses:
+
+- `/model haiku` (or sonnet/opus) — switch a session's model mid-flight; applies to its next turns. Downshift a worker whose remaining work got easier; upshift only with a stated reason.
+- `/compact` — shrink a long-running session's context instead of letting it bloat.
+
+This is for model/context management of sessions you spawned — it is NOT a way to give a worker new tasks or authorize work beyond the user's mandate (the no-sends rule below still stands).
+
 ## Rules
 
 - Put any safety constraints (e.g. "read-only on the repo: do not modify, create, or commit anything") inside the task text — the worker only knows what you tell it.

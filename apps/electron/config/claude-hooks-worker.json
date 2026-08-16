@@ -4,7 +4,7 @@
       { "hooks": [ { "type": "command", "command": "node \"C:\\Users\\EDWAR\\Dropbox\\AI_Projects_Claude\\projects\\winmux\\apps\\electron\\bin\\winmux.cjs\" agent working" } ] }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "node \"C:\\Users\\EDWAR\\Dropbox\\AI_Projects_Claude\\projects\\winmux\\apps\\electron\\bin\\winmux.cjs\" agent done" } ] }
+      { "hooks": [ { "type": "command", "command": "node \"C:\\Users\\EDWAR\\Dropbox\\AI_Projects_Claude\\projects\\winmux\\apps\\electron\\bin\\winmux.cjs\" agent auto-done" } ] }
     ]
   }
 }
