@@ -52,13 +52,25 @@ const SMOKE = !!process.env.WINMUX_SMOKE;
 
 let win: BrowserWindow | null = null;
 
+// SP-3: the launch has phases, and each one owns a number. `[boot]` lines make
+// the cold-start breakdown a log-read instead of a guess: process start ->
+// app ready -> window painted -> engine resolved -> page loaded.
+const bootT0 = Date.now();
+function bootMark(phase: string): void {
+  console.log('[boot] ' + phase + ' +' + (Date.now() - bootT0) + 'ms');
+}
+
 async function createWindow(): Promise<void> {
+  bootMark('app-ready');
   // The SMOKE harness keeps the in-process server so the electron check is
   // unaffected. A real launch RESOLVES a detached server (reattach to a live one
   // for this profile, else spawn one) so closing the window never kills the shells.
-  let port: number;
+  // SP-3: never serialize the user behind the engine. The window is created and
+  // painted FIRST (the dark shell is the skeleton); the engine resolve runs
+  // concurrently and the page loads the moment the port is known.
+  let portPromise: Promise<number>;
   if (SMOKE) {
-    ({ port } = await start());
+    portPromise = start().then((r) => r.port);
   } else {
     // WINMUX_CORE=rust boots the native Rust core as the sidecar instead of the
     // Node server. Discovery is identical (it writes the same instance.json and
@@ -87,15 +99,14 @@ async function createWindow(): Promise<void> {
           : path.join(__dirname, '..', 'public'),
       };
     }
-    const resolved = await resolveServer({
+    portPromise = resolveServer({
       instanceFile: profile.instanceFile,
       trustFile: process.env.WINMUX_TRUST_FILE || profile.trustFile,
       execPath: process.execPath,
       serverPath: path.join(__dirname, '..', 'server.cjs'),
       rustCorePath,
       extraEnv,
-    });
-    port = resolved.port;
+    }).then((r) => r.port);
   }
   win = new BrowserWindow({
     width: 1280,
@@ -112,9 +123,25 @@ async function createWindow(): Promise<void> {
       webviewTag: true,          // the browser panel (Phase 10) is a <webview>
     },
   });
+  if (!SMOKE) {
+    // Perceived launch is the window, not the page: paint the dark shell now,
+    // while the engine resolves behind it.
+    win.show();
+    bootMark('window-shown');
+  }
+  let port: number;
+  try {
+    port = await portPromise;
+  } catch (e) {
+    // The window is already on screen — never leave a dead dark rectangle.
+    dialog.showErrorBox('WinMux could not start its engine', String((e as Error).message || e));
+    app.quit();
+    return;
+  }
+  bootMark('engine-resolved');
   await win.loadURL('http://127.0.0.1:' + port + '/');
+  bootMark('page-loaded');
   if (SMOKE) { await runSmoke(win, port); return; }
-  win.show();
   win.on('closed', () => { win = null; });
 }
 

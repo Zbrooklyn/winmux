@@ -83,7 +83,10 @@ export async function resolveServer(opts: ResolveOpts): Promise<Resolved> {
   while (Date.now() < deadline) {
     const inst = await liveInstance(opts.instanceFile);
     if (inst) return { port: inst.port, host: inst.host || '127.0.0.1', attached: false };
-    await new Promise((r) => setTimeout(r, 200));
+    // 50ms, not 200: the check is a local file read + loopback ping, so polling
+    // fast is free — and every wasted step here is dead time on the cold path
+    // between "window painted" and "prompt usable" (SP-3).
+    await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error('detached server did not come up within ' + (opts.timeoutMs || 15000) + 'ms');
 }
