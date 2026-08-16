@@ -1108,6 +1108,14 @@ function handle(req, res, viaPhone) {
       // Shells still running with nobody watching them — the ones waiting out
       // a sleeping phone. Worth seeing, because they are real processes.
       detached: [...SESSIONS.values()].filter((s) => !s.ws).length,
+      // Saved scrollbacks with no live session behind them — the honest count
+      // beside `detached`, so 235 recovery files can never again hide behind a
+      // "detached: 0" (PT-4). Live sessions keep their own backlog files current;
+      // those aren't "recoverable", they're running, so they don't count here.
+      recoverable: (() => {
+        try { return fs.readdirSync(BACKLOG_DIR).filter((f) => f.endsWith('.json') && !SESSIONS.has(f.slice(0, -5))).length; }
+        catch (e) { return 0; }
+      })(),
       phone: phone.on ? 'on (' + phone.ip + ')' : 'off',
     }));
     return;
@@ -1121,7 +1129,38 @@ function handle(req, res, viaPhone) {
   if (urlPath === '/api/backlog') {
     let sid = '';
     try { sid = new URL(req.url, 'http://x').searchParams.get('sid') || ''; } catch (e) {}
-    const bl = sid ? readBacklog(sid) : null;
+    // DELETE ?sid= — dismiss a saved scrollback for good. The visible Recent &
+    // recoverable list's second verb; also fired after a successful replay, so a
+    // delivered backlog never lists itself again as if it were still waiting.
+    if (req.method === 'DELETE') {
+      const bl = sid ? readBacklog(sid) : null;
+      let ok = false;
+      if (bl && (bl.dev || '') === deviceIdFrom(req)) {
+        try { fs.unlinkSync(backlogPath(sid)); ok = true; } catch (e) {}
+      }
+      res.writeHead(ok ? 200 : 404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ ok }));
+    }
+    // No sid — the list (PT-4): everything this device could get back, each entry
+    // carrying its expiry so nothing ever vanishes silently (STATE.md invariant 1).
+    if (!sid) {
+      const items = [];
+      try {
+        for (const f of fs.readdirSync(BACKLOG_DIR)) {
+          if (!f.endsWith('.json')) continue;
+          const id = f.slice(0, -5);
+          const o = readBacklog(id);
+          if (!o || (o.dev || '') !== deviceIdFrom(req)) continue;
+          let m = 0; try { m = fs.statSync(path.join(BACKLOG_DIR, f)).mtimeMs; } catch (e) {}
+          items.push({ sid: id, shell: o.shell || '', cwd: o.cwd || '', savedAt: o.savedAt || Math.round(m),
+            expiresAt: Math.round(m + BACKLOG_MAX_AGE_MS), live: SESSIONS.has(id) });
+        }
+      } catch (e) {}   // no backlog dir yet — an empty list, not an error
+      items.sort((a, b) => b.savedAt - a.savedAt);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ ok: true, items, maxAgeMs: BACKLOG_MAX_AGE_MS }));
+    }
+    const bl = readBacklog(sid);
     if (!bl || (bl.dev || '') !== deviceIdFrom(req)) {
       res.writeHead(404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       return res.end(JSON.stringify({ found: false }));

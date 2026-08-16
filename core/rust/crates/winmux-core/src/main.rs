@@ -408,7 +408,7 @@ async fn main() {
         .route("/api/shutdown", post(api_shutdown))
         .route("/shells", get(api_shells))
         .route("/api/claude-sessions", get(api_claude_sessions))
-        .route("/api/backlog", get(api_backlog))
+        .route("/api/backlog", get(api_backlog).delete(api_backlog_delete))
         .route("/api/history", get(api_history_get).post(api_history_post))
         .route("/api/phone", get(api_phone).post(api_phone_post))
         .route("/api/phone/devices", get(api_phone_devices).post(api_phone_devices_post))
@@ -778,8 +778,40 @@ async fn api_claude_sessions(Query(q): Query<HashMap<String, String>>) -> impl I
 // ---- /api/backlog -------------------------------------------------------
 // After a full restart the fresh process reads the previous one's on-disk
 // scrollback (keyed by sid) and replays it as dimmed history above a new prompt.
-async fn api_backlog(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+// With no sid it is the Recent & recoverable list (PT-4, mirrors server.cjs):
+// every saved scrollback with its expiry, so nothing ever vanishes silently.
+const BACKLOG_MAX_AGE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+async fn api_backlog(State(state): State<Arc<AppState>>, Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
     let sid = q.get("sid").cloned().unwrap_or_default();
+    if sid.is_empty() {
+        let mut items: Vec<Value> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(backlog_dir()) {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if !name.ends_with(".json") { continue; }
+                let id = name.trim_end_matches(".json").to_string();
+                let o = match std::fs::read_to_string(e.path()).ok()
+                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                    .filter(|v| v.is_object()) { Some(o) => o, None => continue };
+                // dev is always "" in the Rust core (loopback-only), same as the guard on the per-sid read.
+                if !o.get("dev").and_then(|v| v.as_str()).unwrap_or("").is_empty() { continue; }
+                let m = e.metadata().ok().and_then(|md| md.modified().ok())
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64).unwrap_or(0);
+                let live = state.sessions.lock().unwrap().contains_key(&id);
+                items.push(json!({
+                    "sid": id,
+                    "shell": o.get("shell").and_then(|v| v.as_str()).unwrap_or(""),
+                    "cwd": o.get("cwd").and_then(|v| v.as_str()).unwrap_or(""),
+                    "savedAt": o.get("savedAt").and_then(|v| v.as_u64()).unwrap_or(m),
+                    "expiresAt": m + BACKLOG_MAX_AGE_MS,
+                    "live": live,
+                }));
+            }
+        }
+        items.sort_by_key(|v| std::cmp::Reverse(v.get("savedAt").and_then(|x| x.as_u64()).unwrap_or(0)));
+        return Json(json!({"ok": true, "items": items, "maxAgeMs": BACKLOG_MAX_AGE_MS})).into_response();
+    }
     let bl = backlog_path(&sid)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str::<Value>(&s).ok());
@@ -793,6 +825,15 @@ async fn api_backlog(Query(q): Query<HashMap<String, String>>) -> impl IntoRespo
         })).into_response(),
         _ => (axum::http::StatusCode::NOT_FOUND, Json(json!({"found": false}))).into_response(),
     }
+}
+
+// DELETE /api/backlog?sid= — dismiss a saved scrollback for good (the list's
+// second verb; also fired after a successful replay so a delivered backlog never
+// lists itself again). Mirrors server.cjs.
+async fn api_backlog_delete(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let sid = q.get("sid").cloned().unwrap_or_default();
+    let ok = backlog_path(&sid).map(|p| std::fs::remove_file(p).is_ok()).unwrap_or(false);
+    (if ok { StatusCode::OK } else { StatusCode::NOT_FOUND }, Json(json!({"ok": ok})))
 }
 
 // ---- /shells ------------------------------------------------------------
@@ -868,6 +909,14 @@ async fn api_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "pid": std::process::id(),
         "sessions": total,
         "detached": detached,
+        // Saved scrollbacks with no live session behind them — the honest count
+        // beside `detached` (PT-4). A live session's own current backlog file
+        // isn't "recoverable", it's running.
+        "recoverable": std::fs::read_dir(backlog_dir()).map(|d| d.flatten()
+            .filter(|e| {
+                let n = e.file_name().to_string_lossy().to_string();
+                n.ends_with(".json") && !state.sessions.lock().unwrap().contains_key(n.trim_end_matches(".json"))
+            }).count()).unwrap_or(0),
         "phone": "off",
         "shells": ["powershell", "pwsh", "cmd", "bash", "wsl"],
         "core": "rust",
@@ -1111,7 +1160,7 @@ fn phone_router(state: Arc<AppState>) -> Router {
         .route("/api/info", get(api_info))
         .route("/api/update", get(api_update))
         .route("/shells", get(api_shells))
-        .route("/api/backlog", get(api_backlog))
+        .route("/api/backlog", get(api_backlog).delete(api_backlog_delete))
         // Desk-door only over the tailnet: reading the host disk is refused even
         // with a valid key (#210).
         .route("/api/md", get(phone_denied))

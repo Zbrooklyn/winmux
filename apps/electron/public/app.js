@@ -1791,6 +1791,10 @@
           term.reset();
           term.write(o.buf);
           term.write('\r\n\x1b[90m──── restored from before the restart · fresh shell below ────\x1b[0m\r\n');
+          // Delivered = consumed: the content now lives in this tab (and re-saves
+          // under the new session's id), so the old file must not sit in the
+          // Recent & recoverable list pretending it is still waiting (PT-4).
+          try { fetch('/api/backlog?sid=' + encodeURIComponent(sid), { method: 'DELETE' }).catch(function () {}); } catch (e) {}
         }
         done(did);
       })
@@ -3566,11 +3570,67 @@
       }).join('');
     }).catch(function () { smList.innerHTML = '<div class="proj-empty">Projects unavailable.</div>'; });
   }
+  // Recent & recoverable (PT-4): every saved scrollback the engine still holds,
+  // with its age and its expiry in plain sight — the 235 invisible files problem.
+  // Rows are the two honest verbs: click restores it into a new tab (a detached
+  // session reattaches live; a dead one replays its saved output), × dismisses it
+  // for good. Sessions already open in this window are not "recoverable" — hidden.
+  var smRecover = document.getElementById('sm-recover');
+  var smRecoverLbl = document.getElementById('sm-recover-lbl');
+  var recoverCache = [];
+  function renderRecoverables() {
+    fetch('/api/backlog', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+      var open = {};
+      allTerms().forEach(function (t) { if (t.sid) open[t.sid] = true; });
+      recoverCache = ((j && j.items) || []).filter(function (b) { return !open[b.sid]; });
+      var show = recoverCache.length > 0;
+      smRecoverLbl.style.display = show ? '' : 'none';
+      smRecover.style.display = show ? '' : 'none';
+      if (!show) { smRecover.innerHTML = ''; return; }
+      var now = Date.now();
+      smRecover.innerHTML = recoverCache.map(function (b, i) {
+        var days = Math.max(1, Math.ceil((b.expiresAt - now) / 86400000));
+        return '<div class="pjrow" data-ri="' + i + '" role="button" title="' +
+            (b.live ? 'This shell is still running — click to bring it back as a tab' : 'Click to restore its saved output into a new tab') + '">' +
+          '<span class="pjrow-dot" style="background:' + (b.live ? '#44cf6e' : '#e9973f') + '"></span>' +
+          '<div class="pjrow-main">' +
+            '<div class="pjrow-top"><span class="pjrow-name">' + esc(labelFor(b.shell) || 'Terminal') + '</span>' +
+              '<span class="pjrow-badge">' + (b.live ? 'still running' : 'saved output') + '</span></div>' +
+            (b.cwd ? '<div class="pjrow-dir mono">' + esc(b.cwd) + '</div>' : '') +
+          '</div>' +
+          '<div class="pjrow-meta"><span class="pjrow-when">' + esc(ago(b.savedAt)) + '</span>' +
+            '<span class="pjrow-file mono">expires in ' + days + 'd</span></div>' +
+          '<span class="pjrow-del" data-rdel="' + i + '" title="Dismiss — delete this saved output for good">×</span></div>';
+      }).join('');
+    }).catch(function () { smRecoverLbl.style.display = 'none'; smRecover.style.display = 'none'; });
+  }
+  smRecover.addEventListener('click', function (e) {
+    var del = e.target.closest ? e.target.closest('[data-rdel]') : null;
+    if (del) {
+      e.stopPropagation();
+      var d = recoverCache[parseInt(del.getAttribute('data-rdel'), 10)];
+      if (d) fetch('/api/backlog?sid=' + encodeURIComponent(d.sid), { method: 'DELETE' }).then(renderRecoverables, renderRecoverables);
+      return;
+    }
+    var row = e.target.closest ? e.target.closest('[data-ri]') : null;
+    if (!row) return;
+    var b = recoverCache[parseInt(row.getAttribute('data-ri'), 10)];
+    if (!b) return;
+    closeLayoutMenu();
+    var p = paneById(activePaneId) || panes[0];
+    if (!p) return;
+    // Seeding the sid routes through the existing reattach path: a live session
+    // comes back as-is; a dead one lands a fresh shell with the backlog replayed
+    // above it (which then consumes the file — see replayBacklog).
+    newTerm(p, b.shell || startShell(), b.cwd || '', b.sid);
+    focusPane(p.id);
+  });
   // The Projects panel is a proper centered overlay now (not a sidebar popover), so it
   // never collides with the footer and reads as the real surface it is. Same open verb
   // the footer icons / Ctrl+Alt+O / palette all call.
   function openLayoutMenu(anchor) {
     renderLayouts();
+    renderRecoverables();
     var cur = readCurrent();
     smName.value = cur ? cur.name : '';
     openOvl('projects-ovl');

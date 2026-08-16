@@ -112,6 +112,7 @@ const PORT_IMAGES = 9959;     // Phase 3: inline images (addon-image) + `winmux 
 const PORT_DPRFIX = 9977;     // MR-1: a devicePixelRatio-stuck WebGL canvas is resynced (prompt-float fix)
 const PORT_AGENTJOB = 9968;   // Stage 3: server-side agent-job store (spawn/wait/result), no browser needed
 const PORT_WORKSPACE = 9978;  // PT-3: the engine-owned workspace file survives a wiped browser profile
+const PORT_RECOVER = 9979;    // PT-4: Recent & recoverable — saved scrollbacks are listed, restorable, dismissable
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -1312,6 +1313,79 @@ check('workspace', PORT_WORKSPACE, async ({ browser, base, t, shot }) => {
     await pageB.close();
   }
 }, { WINMUX_WORKSPACE_FILE: path.join(OUT, 'workspace-9978.json') });
+
+// PT-4: saved scrollbacks are a visible list, not 235 invisible files. The engine
+// lists every backlog entry with its expiry (STATE.md: silent expiry is a contract
+// violation), the Projects overlay shows them with restore/dismiss, restoring
+// replays the saved output into a real tab and consumes the file, and /api/info
+// reports the honest count. The check owns an exclusive backlog dir so no other
+// harness server's leftovers can pollute the row counts.
+check('recover', PORT_RECOVER, async ({ browser, base, t, shot }) => {
+  const cfgDir = path.join(OUT, 'recover-cfg');
+  const blDir = path.join(cfgDir, 'backlog');
+  fs.mkdirSync(blDir, { recursive: true });
+  for (const f of fs.readdirSync(blDir)) { try { fs.unlinkSync(path.join(blDir, f)); } catch (e) {} }
+  const seed = (sid, buf, savedAt) => fs.writeFileSync(path.join(blDir, sid + '.json'),
+    JSON.stringify({ id: sid, dev: '', shell: 'pwsh', cwd: 'C:\\work', buf, savedAt }));
+  seed('rec-restoreme', 'RECOVER_PAYLOAD_ALPHA\r\n', Date.now());
+  seed('rec-dismissme', 'RECOVER_PAYLOAD_BETA\r\n', Date.now() - 60000);
+
+  const list = JSON.parse((await get(base + '/api/backlog')).body);
+  t('the engine lists both saved scrollbacks', list.ok === true && list.items.length === 2,
+    list.items && list.items.map((i) => i.sid));
+  t('every entry says when it expires — nothing can vanish silently',
+    list.items.every((i) => i.expiresAt > Date.now() && i.live === false), list.items);
+  const info = JSON.parse((await get(base + '/api/info')).body);
+  t('/api/info reports the honest recoverable count', info.recoverable === 2, { recoverable: info.recoverable });
+
+  const page = await desktop(browser);
+  try {
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3500);
+    await page.click('#open-load');
+    await page.waitForTimeout(800);
+    const rows = await page.evaluate(() => ({
+      shown: getComputedStyle(document.getElementById('sm-recover')).display !== 'none',
+      n: document.querySelectorAll('#sm-recover .pjrow').length,
+      text: document.getElementById('sm-recover').textContent,
+    }));
+    t('the Recent & recoverable section is on screen with both entries', rows.shown && rows.n === 2, rows);
+    t('each row shows its expiry in plain sight', /expires in \d+d/.test(rows.text), rows.text);
+    await shot(page, 'recover-list');
+
+    // Restore the newest (row 0 — the list sorts newest first): a dead session
+    // replays its saved output into a fresh tab and consumes the file.
+    await page.click('#sm-recover .pjrow[data-ri="0"]');
+    await page.waitForTimeout(4000);
+    // Read every terminal's rows — the restored tab is the second one; grabbing
+    // only the first would read the original shell and miss the replay.
+    const screen = await page.evaluate(() =>
+      [...document.querySelectorAll('.xterm-rows')].map((r) => r.innerText).join('\n'));
+    t('restoring replays the saved output into a live tab', /RECOVER_PAYLOAD_ALPHA/.test(screen),
+      screen.slice(0, 300));
+    let consumed = false;
+    for (let i = 0; i < 10 && !consumed; i++) { await page.waitForTimeout(500); consumed = !fs.existsSync(path.join(blDir, 'rec-restoreme.json')); }
+    t('a delivered backlog is consumed — it cannot list itself twice', consumed);
+
+    // Dismiss the other one from the reopened list.
+    await page.click('#open-load');
+    await page.waitForTimeout(800);
+    const left = await page.evaluate(() => document.querySelectorAll('#sm-recover .pjrow').length);
+    t('the restored entry is gone from the list, the other remains', left === 1, { left });
+    await page.click('#sm-recover .pjrow-del[data-rdel="0"]');
+    await page.waitForTimeout(800);
+    const afterDismiss = await page.evaluate(() => ({
+      n: document.querySelectorAll('#sm-recover .pjrow').length,
+      shown: getComputedStyle(document.getElementById('sm-recover')).display !== 'none',
+    }));
+    t('dismiss deletes it and the section stands down', afterDismiss.n === 0 && !afterDismiss.shown
+      && !fs.existsSync(path.join(blDir, 'rec-dismissme.json')), afterDismiss);
+    const info2 = JSON.parse((await get(base + '/api/info')).body);
+    t('the honest count follows to zero', info2.recoverable === 0, { recoverable: info2.recoverable });
+  } finally {
+    await page.close();
+  }
+}, { WINMUX_CONFIG_FILE: path.join(OUT, 'recover-cfg', 'config.json') });
 
 // ST6: non-terminal leaves survive a page reload. Both a diff leaf AND a markdown
 // leaf, opened as pane tabs, must be persisted in the live snapshot and rebuilt on
