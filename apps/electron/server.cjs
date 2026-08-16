@@ -1391,6 +1391,22 @@ function evictJobs() {
   while (AGENT_JOBS.size > JOB_MAX) { const first = AGENT_JOBS.keys().next().value; AGENT_JOBS.delete(first); }
 }
 function wakeJobWaiters(jobId) { const s = AGENT_WAITERS.get(jobId); if (s) for (const fn of [...s]) fn(); }
+// P6 supervision (parity with the Rust core): a worker session that dies before
+// reporting must fail its jobs so waiters wake with the reason instead of
+// hanging until timeout. Idempotent — terminal jobs are immutable. Called from
+// both death paths (pty onExit and the deliberate endSession).
+function failJobsForSid(sid, exitCode) {
+  if (!sid) return;
+  const now = Date.now();
+  for (const j of AGENT_JOBS.values()) {
+    if (j.sid !== sid || JOB_TERMINAL.has(j.state)) continue;
+    j.state = 'failed';
+    j.result = 'worker session exited' + (exitCode != null ? ' (code ' + exitCode + ')' : '') + ' before reporting a result';
+    if (exitCode != null) j.exitCode = exitCode;
+    j.updatedAt = now; j.endedAt = now;
+    wakeJobWaiters(j.jobId);
+  }
+}
 // Handle a job verb server-side. Returns a result object, or null if `cmd` is not
 // a job verb (the caller then relays it to the app as before).
 function agentJobDispatch(cmd, args) {
@@ -1518,6 +1534,7 @@ pruneBacklog();
 function endSession(s, why) {
   if (!s || !SESSIONS.has(s.id)) return;
   SESSIONS.delete(s.id);
+  failJobsForSid(s.id, null);
   if (s.timer) { clearTimeout(s.timer); s.timer = null; }
   try { s.term.kill(); } catch (e) {}
   if (s.ws) { try { s.ws.close(4003, why || 'closed'); } catch (e) {} }
@@ -1649,9 +1666,10 @@ function spawnSession(shell, cwd) {
     if (s.ws && s.ws.readyState === s.ws.OPEN) s.ws.send(Buffer.from(d, 'utf8'));
     if (SESSIONS.has(s.id)) scheduleBacklogSave(s);   // real sessions only; a spare isn't in SESSIONS yet
   });
-  term.onExit(() => {
+  term.onExit((ev) => {
     const si = spares.indexOf(s);
     if (si !== -1) { spares.splice(si, 1); ensureSpare(); return; }   // a spare died before it was ever used
+    failJobsForSid(s.id, ev && typeof ev.exitCode === 'number' ? ev.exitCode : null);
     if (!SESSIONS.has(s.id)) return;
     SESSIONS.delete(s.id);
     if (s.timer) { clearTimeout(s.timer); s.timer = null; }
