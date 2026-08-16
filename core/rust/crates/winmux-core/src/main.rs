@@ -192,6 +192,28 @@ impl AppState {
             _ => None,
         }
     }
+    // P6 supervision: a session died with jobs still riding it → fail them so
+    // waiters wake with the reason. Auto-restart is deliberately NOT built here —
+    // restarting a task can repeat its side effects, so it stays opt-in and off.
+    fn fail_jobs_for_sid(&self, sid: &str, exit_code: Option<i64>) {
+        let mut m = self.jobs.lock().unwrap();
+        let mut any = false;
+        for r in m.values_mut() {
+            if r.sid.as_deref() == Some(sid) && !r.is_terminal() {
+                r.state = "failed".into();
+                r.result = Some(match exit_code {
+                    Some(c) => format!("worker session exited (code {c}) before reporting a result"),
+                    None => "worker session exited before reporting a result".into(),
+                });
+                r.exit_code = exit_code;
+                r.updated_at = now_ms() as u64;
+                r.ended_at = Some(r.updated_at);
+                any = true;
+            }
+        }
+        drop(m);
+        if any { self.job_notify.notify_waiters(); }
+    }
     fn pick_controller(&self) -> Option<UnboundedSender<Message>> {
         let map = self.controllers.lock().unwrap();
         map.iter().max_by_key(|(id, _)| **id).map(|(_, s)| s.clone())
@@ -354,6 +376,32 @@ async fn main() {
         .layer(axum::middleware::from_fn(no_store_html))
         .with_state(state);
 
+    // P6 supervision watchdog: ConPTY does not reliably EOF the reader thread when
+    // the shell process dies, so poll — any non-terminal job whose session is gone
+    // or whose shell has exited is failed here so waiters wake with the reason.
+    // Auto-restart is deliberately absent (opt-in, off by default).
+    let watch_state = shutdown_state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(2000)).await;
+            let watch: Vec<String> = {
+                let m = watch_state.jobs.lock().unwrap();
+                m.values().filter(|r| !r.is_terminal()).filter_map(|r| r.sid.clone()).collect()
+            };
+            for sid in watch {
+                let sess = watch_state.sessions.lock().unwrap().get(&sid).cloned();
+                let dead: Option<Option<i64>> = match &sess {
+                    None => Some(None),                                   // session gone entirely
+                    Some(s) => match s.child.lock().unwrap().try_wait() {
+                        Ok(Some(st)) => Some(Some(st.exit_code() as i64)), // shell process exited
+                        _ => None,                                         // still running
+                    },
+                };
+                if let Some(code) = dead { watch_state.fail_jobs_for_sid(&sid, code); }
+            }
+        }
+    });
+
     // Graceful shutdown: on Ctrl+C, kill every live shell so we never leak a
     // detached PowerShell after the core exits (mirrors the Node server's teardown).
     tokio::spawn(async move {
@@ -397,7 +445,7 @@ async fn pty_ws_phone(
 }
 
 // Spawn a brand-new shell as a registry Session with a lifelong reader thread.
-fn spawn_session(shell_key: &str, cwd: &str, port: u16) -> Result<(String, Arc<Session>), String> {
+fn spawn_session(shell_key: &str, cwd: &str, state: &Arc<AppState>) -> Result<(String, Arc<Session>), String> {
     let (exec, args, label) = shell_cmd(shell_key);
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -419,7 +467,7 @@ fn spawn_session(shell_key: &str, cwd: &str, port: u16) -> Result<(String, Arc<S
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("WINMUX_SID", &sid);
-    cmd.env("WINMUX_PORT", port.to_string());
+    cmd.env("WINMUX_PORT", state.port.to_string());
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to start {label}: {e}"))?;
     drop(pair.slave);
@@ -443,6 +491,7 @@ fn spawn_session(shell_key: &str, cwd: &str, port: u16) -> Result<(String, Arc<S
     // flags the scrollback dirty so the flusher persists it (trailing-edge, so the
     // LAST line before a quiet restart is never dropped).
     let sref = session.clone();
+    let stref = state.clone();
     std::thread::spawn(move || {
         let mut reader = reader;
         let mut buf = [0u8; 8192];
@@ -461,6 +510,11 @@ fn spawn_session(shell_key: &str, cwd: &str, port: u16) -> Result<(String, Arc<S
             }
         }
         sref.alive.store(false, Ordering::Relaxed);
+        // P6 supervision: the shell died — fail any job still riding this session
+        // so a waiting orchestrator wakes with `failed` + the reason instead of
+        // hanging until its timeout.
+        let code = sref.child.lock().unwrap().try_wait().ok().flatten().map(|s| s.exit_code() as i64);
+        stref.fail_jobs_for_sid(&sref.sid, code);
     });
 
     // Flusher: every 600ms, if the scrollback changed, persist it to disk. This is
@@ -499,7 +553,7 @@ async fn handle_pty(
     let existing = want_sid.as_ref().and_then(|s| state.sessions.lock().unwrap().get(s).cloned());
     let (sid, session, resumed) = match existing {
         Some(s) => (want_sid.clone().unwrap(), s, true),
-        None => match spawn_session(&shell_key, &cwd, state.port) {
+        None => match spawn_session(&shell_key, &cwd, &state) {
             Ok((sid, s)) => {
                 state.sessions.lock().unwrap().insert(sid.clone(), s.clone());
                 (sid, s, false)

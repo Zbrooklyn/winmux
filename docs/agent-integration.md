@@ -91,10 +91,21 @@ How it fits together:
 - **Local only.** Orchestration verbs run at the PC over the local RPC surface; the phone
   link cannot drive them.
 
-What this does not do yet: **supervise** a spawned session (detect a crash that never
-reports, and optionally restart it). That is a separate, safety-sensitive follow-on;
-restarting a task can repeat its side effects, so any auto-restart will be off by default
-and opt-in.
+**Supervision (P6, built 2026-08-15) — a crashed worker can no longer hang a wait.**
+Two layers, both detect-and-surface only:
+
+- **Engine watchdog** (Rust core): jobs are registered by the engine's session sid, and a
+  2-second watchdog fails any non-terminal job whose session is gone or whose shell
+  process has exited — the job flips to `failed` with `worker session exited (code N)
+  before reporting a result` and every waiter wakes immediately. (A reader-EOF hook does
+  the same when ConPTY delivers EOF; the watchdog covers the cases where it doesn't.)
+- **Launcher failsafe** (job.ps1): if the `claude` process itself exits without the Stop
+  hook having reported (hard crash, failed launch), the launcher reports the job `failed`
+  with claude's exit code. Harmless after a normal finish — the first terminal report
+  wins and later reports are ignored.
+
+**Auto-restart is deliberately not built.** Restarting a task can repeat its side
+effects, so any restart remains a safety-sensitive, off-by-default, opt-in follow-on.
 
 ## Scope
 

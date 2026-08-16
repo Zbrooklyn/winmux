@@ -384,7 +384,15 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
           if (sid == null) die('could not open a tab for the spawned session');
         }
         const name = flag(argv, '--name') || (prompt || rawCmd).slice(0, 48);
-        const reg = await rpc('job-register', { sid: String(sid), name });
+        // Register the job by the ENGINE's registry sid (32-hex), not the UI tab id —
+        // that's the id the server supervises by (dead shell → job auto-fails). The
+        // tab's sid arrives with the shell's meta, so poll briefly for it.
+        let esid = null;
+        for (let i = 0; i < 20 && !esid; i++) {
+          const row = ((((await rpc('list')) || {}).sessions) || []).find((s) => String(s.id) === String(sid));
+          if (row && row.sid) esid = row.sid; else await sleep(500);
+        }
+        const reg = await rpc('job-register', { sid: esid || String(sid), name });
         const jobId = reg.job.jobId;
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'winmux-job-'));
         const rf = path.join(dir, 'result.txt');
@@ -407,6 +415,12 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
           if (hooksExist) lines.push('$env:WINMUX_JOB = ' + psq(jobId));
           lines.push('$__p = Get-Content -Raw -LiteralPath ' + psq(pf));
           lines.push((hooksExist ? 'claude --settings ' + psq(hooks) + ' ' : 'claude ') + modelArg + '--dangerously-skip-permissions $__p');
+          // P6 supervision failsafe: if claude exits without the Stop hook (or the
+          // fallback contract) having reported, fail the job with the exit code so
+          // a waiting orchestrator is never left hanging. Harmless after a normal
+          // finish — the server ignores reports on already-terminal jobs.
+          lines.push('$__x = if ($null -eq $LASTEXITCODE) { -1 } else { $LASTEXITCODE }');
+          lines.push('& node ' + psq(cliPath) + ' agent failed --job ' + jobId + ' --exit $__x --result "claude exited (code $__x) without reporting a result"');
         } else {
           let taskExpr = rawCmd;
           if (!rawCmd) { const pf = path.join(dir, 'prompt.txt'); fs.writeFileSync(pf, prompt, 'utf8'); taskExpr = 'Get-Content -Raw -LiteralPath ' + psq(pf) + ' | claude -p ' + modelArg.trim(); }

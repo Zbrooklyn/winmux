@@ -4725,7 +4725,9 @@
     if (cmd === 'list') {
       var act = activeTerm();
       return { sessions: allTerms().map(function (t) {
-        return { id: t.id, title: termName(t), shell: t.shell, cwd: t.cwd || '', group: t.groupId, active: t === act };
+        // sid = the server-registry session id (null until the shell's meta arrives).
+        // Orchestration registers jobs by it so the engine can supervise by session.
+        return { id: t.id, title: termName(t), shell: t.shell, cwd: t.cwd || '', group: t.groupId, active: t === act, sid: t.sid || null };
       }) };
     }
     if (cmd === 'read-screen') {

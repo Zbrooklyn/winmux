@@ -47,6 +47,7 @@ This is for model/context management of sessions you spawned — it is NOT a way
 
 - Put any safety constraints (e.g. "read-only on the repo: do not modify, create, or commit anything") inside the task text — the worker only knows what you tell it.
 - Wait for every job you spawn and read its result — never leave one unread.
+- `failed` is a first-class outcome: a worker that crashes, whose pane is closed, or whose claude process dies is auto-failed by WinMux with the reason and exit code in the result — a wait never hangs past its timeout. Read the failure reason, decide whether to respawn the task yourself (nothing restarts automatically), and say what happened in your summary.
 - Spawn workers back-to-back when their tasks are independent, then wait on each job in turn.
 - Do not close tabs you did not create.
 - Workers are driven ONLY by their spawn task. Never use winmux_send (or the CLI send verb) on a worker's terminal — no follow-up questions, no pre-staged "go ahead" commands, not even unsubmitted text left in its input box. If a worker's result suggests further work, put that recommendation in YOUR OWN final answer; the user decides and issues any follow-up themselves.
