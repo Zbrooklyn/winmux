@@ -113,6 +113,7 @@ const PORT_DPRFIX = 9977;     // MR-1: a devicePixelRatio-stuck WebGL canvas is 
 const PORT_AGENTJOB = 9968;   // Stage 3: server-side agent-job store (spawn/wait/result), no browser needed
 const PORT_WORKSPACE = 9978;  // PT-3: the engine-owned workspace file survives a wiped browser profile
 const PORT_RECOVER = 9979;    // PT-4: Recent & recoverable — saved scrollbacks are listed, restorable, dismissable
+const PORT_CLOSEVERB = 9980;  // PT-5: Close project = unbind with three honest outcomes; Delete is real and confirmed
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -1386,6 +1387,92 @@ check('recover', PORT_RECOVER, async ({ browser, base, t, shot }) => {
     await page.close();
   }
 }, { WINMUX_CONFIG_FILE: path.join(OUT, 'recover-cfg', 'config.json') });
+
+// PT-5: the Close-project verb exists and is honest. Closing unbinds the window
+// from the named file and returns to the unnamed workspace — it never deletes the
+// file, and it asks one question whose outcomes are keep-sessions / end-sessions /
+// save-first. Deleting a file is its own confirmed verb on the project row.
+check('closeverb', PORT_CLOSEVERB, async ({ browser, base, t, shot }) => {
+  const projDir = path.join(OUT, 'closeverb-projects');
+  fs.mkdirSync(projDir, { recursive: true });
+  for (const f of fs.readdirSync(projDir)) { try { fs.unlinkSync(path.join(projDir, f)); } catch (e) {} }
+  const page = await desktop(browser);
+  const bound = () => page.evaluate(() => { try { return JSON.parse(localStorage.getItem('ct-current') || 'null'); } catch (e) { return null; } });
+  const projFiles = () => fs.readdirSync(projDir).filter((f) => f.endsWith('.winmux.json'));
+  try {
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3500);
+
+    // Save the workspace as a named project — the window is now bound.
+    await page.click('#open-save');
+    await page.waitForTimeout(600);
+    await page.fill('#sm-name', 'Harness Project');
+    await page.click('#sm-save');
+    await page.waitForTimeout(1200);
+    t('saving binds the window to the project', !!(await bound()), await bound());
+    t('the project file exists on disk', projFiles().length === 1, projFiles());
+    await page.keyboard.press('Escape');   // the overlay stays open after Save — close it
+    await page.waitForTimeout(400);
+
+    // The Close verb appears only while bound, and closing with "keep" unbinds
+    // without touching the file or the running shells.
+    await page.click('#open-save');
+    await page.waitForTimeout(600);
+    const closeVisible = await page.evaluate(() => getComputedStyle(document.getElementById('pj-close')).display !== 'none');
+    t('Close project is offered while a project is open', closeVisible);
+    await page.click('#pj-close');
+    await page.waitForTimeout(500);
+    const dlg = await page.evaluate(() => ({
+      end: !!document.querySelector('#dlg-body [data-end]'),
+      keep: !!document.querySelector('#dlg-body [data-keep]'),
+      text: (document.getElementById('dlg-body') || {}).textContent || '',
+    }));
+    t('the close dialog offers the honest outcomes', dlg.end && dlg.keep && /file stays on disk/.test(dlg.text), dlg);
+    await shot(page, 'close-dialog');
+    const tabsBefore = await page.evaluate(() => document.querySelectorAll('.ptab').length);
+    await page.click('#dlg-body [data-keep]');
+    await page.waitForTimeout(800);
+    t('keep-running closes the project but not the terminals',
+      (await bound()) === null && (await page.evaluate(() => document.querySelectorAll('.ptab').length)) === tabsBefore,
+      { bound: await bound(), tabsBefore });
+    t('closing never deletes the file', projFiles().length === 1, projFiles());
+
+    // Reopen it, drift the layout, close with "save first": the file catches up
+    // and the terminals stay.
+    await page.click('#open-load');
+    await page.waitForTimeout(600);
+    await page.click('#sm-list .pjrow');
+    await page.waitForTimeout(400);
+    // A live terminal makes openSavedLayout confirm first — accept it if shown.
+    await page.evaluate(() => { const ok = document.querySelector('#dlg-body [data-ok]'); if (ok) ok.click(); });
+    await page.waitForTimeout(1500);
+    t('reopening binds again', !!(await bound()), await bound());
+    await page.evaluate(() => document.getElementById('open-new').click());
+    await page.waitForTimeout(1500);
+    await page.click('#open-save');
+    await page.waitForTimeout(600);
+    await page.click('#pj-close');
+    await page.waitForTimeout(500);
+    const hasSave = await page.evaluate(() => !!document.querySelector('#dlg-body [data-save]'));
+    t('unsaved layout changes surface the save-first outcome', hasSave);
+    await page.click('#dlg-body [data-save]');
+    await page.waitForTimeout(1200);
+    const saved = JSON.parse(fs.readFileSync(path.join(projDir, projFiles()[0]), 'utf8'));
+    const savedTabs = (saved.layout && saved.layout.cols || []).reduce((n, c) => n + c.reduce((m, p) => m + (p.tabs || []).length, 0), 0);
+    t('save-first wrote the drifted layout into the file', (await bound()) === null && savedTabs >= 2, { savedTabs });
+
+    // Delete is a real, separate, confirmed verb — and it actually removes the file.
+    await page.click('#open-load');
+    await page.waitForTimeout(600);
+    await page.click('#sm-list .pjrow-del');
+    await page.waitForTimeout(500);
+    await page.click('#dlg-body [data-discard]');   // "Delete the file"
+    await page.waitForTimeout(800);
+    t('delete removes the project file from disk', projFiles().length === 0, projFiles());
+  } finally {
+    await page.close();
+  }
+}, { WINMUX_PROJECTS_DIR: path.join(OUT, 'closeverb-projects'), WINMUX_CONFIG_FILE: path.join(OUT, 'closeverb-cfg', 'config.json') });
 
 // ST6: non-terminal leaves survive a page reload. Both a diff leaf AND a markdown
 // leaf, opened as pane tabs, must be persisted in the live snapshot and rebuilt on

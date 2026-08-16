@@ -3633,6 +3633,10 @@
     renderRecoverables();
     var cur = readCurrent();
     smName.value = cur ? cur.name : '';
+    // The Close verb only exists while a project is actually open.
+    var closeBtn = document.getElementById('pj-close');
+    closeBtn.style.display = cur ? '' : 'none';
+    if (cur) document.getElementById('pj-close-sub').textContent = 'Unbind “' + cur.name + '” — the file stays';
     openOvl('projects-ovl');
     if (currentMode !== 'narrow') setTimeout(function () { try { smName.focus(); } catch (e) {} }, 30);
   }
@@ -3660,7 +3664,21 @@
     if (del) {
       e.stopPropagation();
       var d = recentsCache[parseInt(del.getAttribute('data-del'), 10)];
-      if (d) Projects.forget(d.path).then(renderLayouts);
+      if (!d) return;
+      // Delete is a real verb now (PT-5), so the × asks which one you meant:
+      // drop the row (file untouched) or delete the file itself, confirmed.
+      confirmDialog3('Remove “' + (d.name || baseName(d.path)) + '”?',
+        'Remove it from this list (the file stays in ' + (d.dir || 'its folder') + '), or delete the project file itself.',
+        'Remove from list', 'Delete the file',
+        function () { Projects.forget(d.path).then(renderLayouts); },
+        function () {
+          Projects.forget(d.path, true).then(function () {
+            var cur = readCurrent();
+            if (cur && cur.path === d.path) { setCurrent(null); projectBaseline = null; if (typeof updateProjectRow === 'function') updateProjectRow(); }
+            renderLayouts();
+            notify('Project deleted', (d.name || baseName(d.path)) + ' — file removed.');
+          });
+        });
       return;
     }
     var row = e.target.closest ? e.target.closest('[data-i]') : null;
@@ -3674,6 +3692,46 @@
       openSavedLayout({ name: r.name || p.name, desc: r.layout, path: p.path });
     });
   });
+  // Close project (PT-5, STATE.md): unbind from the named file and return to the
+  // unnamed workspace. One question, three honest outcomes — keep the sessions
+  // running, end this project's sessions, or save first. Closing NEVER deletes
+  // the file; the workspace keeps auto-saving either way.
+  function closeProject() {
+    var cur = readCurrent();
+    if (!cur) { notify('No project open', 'The workspace is unnamed right now — nothing to close.'); return; }
+    closeLayoutMenu();
+    var live = allTerms().filter(function (t) { return t.state === 'open'; }).length;
+    var dirty = projectDirty();
+    var unbind = function () {
+      setCurrent(null); projectBaseline = null;
+      if (typeof updateProjectRow === 'function') updateProjectRow();
+      persistLive();
+      notify('Project closed', cur.name + ' — the file stays in your projects list.');
+    };
+    var endSessions = function () {
+      restoreLayout({ v: SCHEMA_VERSION, cols: [[{ active: 0, tabs: [{ type: 'terminal', shell: startShell(), cwd: '' }] }]], group: '' });
+      unbind();
+    };
+    var saveFirst = function () {
+      Projects.save(cur.name, cur.path, projectLayout()).then(unbind, unbind);
+    };
+    var body = document.getElementById('dlg-body');
+    body.innerHTML = '<h3>Close “' + esc(cur.name) + '”?</h3>' +
+      '<p>The project file stays on disk' + (dirty ? ' — it does not have your latest layout changes yet' : '') +
+      '. What should happen to ' + (live ? 'its ' + live + ' running terminal' + (live === 1 ? '' : 's') : 'the workspace') + '?</p>' +
+      '<div class="drow"><span class="btn" data-cancel>Cancel</span>' +
+      '<span class="btn danger" data-end>End the sessions</span>' +
+      (dirty ? '<span class="btn" data-keep>Keep them running</span><span class="btn primary" data-save>Save first, keep running</span>'
+             : '<span class="btn primary" data-keep>Keep them running</span>') +
+      '</div>';
+    openOvl('dlg-ovl');
+    body.querySelector('[data-cancel]').addEventListener('click', function () { closeOvl('dlg-ovl'); });
+    body.querySelector('[data-keep]').addEventListener('click', function () { closeOvl('dlg-ovl'); unbind(); });
+    body.querySelector('[data-end]').addEventListener('click', function () { closeOvl('dlg-ovl'); endSessions(); });
+    var sv = body.querySelector('[data-save]');
+    if (sv) sv.addEventListener('click', function () { closeOvl('dlg-ovl'); saveFirst(); });
+  }
+  document.getElementById('pj-close').addEventListener('click', closeProject);
   // New project — end the current workspace (asking first if it is live) and start
   // clean, unbound to any file.
   function newProject() {
@@ -4210,6 +4268,7 @@
       { cat: 'View', name: 'Theme: light', run: function () { applyTheme('light'); } },
       { cat: 'Project', name: 'Save project', kbd: 'Ctrl+Alt+S', run: saveLayoutDialog },
       { cat: 'Project', name: 'Open project', kbd: 'Ctrl+Alt+O', run: loadLayoutDialog },
+      { cat: 'Project', name: 'Close project', run: closeProject },
       { cat: 'App', name: 'Settings', kbd: 'Ctrl+,', run: function () { openSettings(); } },
       { cat: 'App', name: 'Keyboard shortcuts', kbd: 'F1', run: openCheat },
       { cat: 'App', name: 'Agents guide', run: function () { openAgentsGuide(); } },

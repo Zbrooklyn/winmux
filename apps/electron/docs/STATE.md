@@ -24,9 +24,10 @@ reopen anytime. Sessions keep running until you end them.**
 ### 2. Workspace — the always-saved current layout
 - **What:** groups, tabs, splits, each tab's shell/folder/type, dock state. The thing you see.
 - **Lifetime:** continuous. Every change auto-saves; there is no "unsaved workspace".
-- **Where (today):** `ct-live` in per-window localStorage — invisible, per-app, wiped with the
-  profile. **Target (PT-3):** the engine owns it at `~/.winmux/workspace.<identity>.json`;
-  localStorage becomes a cache. One workspace per installed identity, by design.
+- **Where (since PT-3):** the engine owns it at `~/.winmux/workspace.<identity>.json`
+  (atomic writes, `/api/workspace`, desk-door only); `ct-live` in localStorage is a warm
+  cache for instant boots. One workspace per installed identity, by design — a fresh
+  window on the desk door inherits it.
 - **Recovery:** reopening the app restores the workspace. Losing it should require deleting
   the file on purpose.
 
@@ -64,7 +65,7 @@ reopen anytime. Sessions keep running until you end them.**
 | Store | Path | Owner | Target state |
 |---|---|---|---|
 | Sessions | engine memory + `~/.winmux/backlog/` | engine | keep; add visible list + expiry notice |
-| Workspace | `ct-live` (localStorage) | window (today) | move to `~/.winmux/workspace.<id>.json` (engine) |
+| Workspace | `~/.winmux/workspace.<id>.json` + `ct-live` cache | engine (since PT-3) | done — harness `workspace` check guards it |
 | Project files | `Documents\WinMux Projects\*.winmux.json` | user | keep; add manager UI + Close verb |
 | Settings/keymap | `~/.winmux/config.json` + `ct-settings`/`ct-keymap` | split (today) | engine file authoritative |
 | Trust/devices | `~/.winmux/devices*.json` | engine | keep |
