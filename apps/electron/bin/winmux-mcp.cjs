@@ -22,12 +22,12 @@ function pidAlive(pid) {
 function instance() {
   if (process.env.WINMUX_PORT) return { port: Number(process.env.WINMUX_PORT), host: process.env.WINMUX_HOST || '127.0.0.1' };
   // Mirror the CLI's discovery: primary app first, then the side-by-side WinMux
-  // Rust app; a file whose pid is dead is a stale leftover, not a target.
+  // Rust app, then WinMux Tauri; a file whose pid is dead is a stale leftover.
   const dev = process.argv.includes('--dev') || process.env.WINMUX_PROFILE === 'dev';
   const dir = path.join(os.homedir(), '.winmux');
   const candidates = process.env.WINMUX_INSTANCE_FILE ? [process.env.WINMUX_INSTANCE_FILE]
     : dev ? [path.join(dir, 'instance.dev.json')]
-    : [path.join(dir, 'instance.json'), path.join(dir, 'instance.rust.json')];
+    : [path.join(dir, 'instance.json'), path.join(dir, 'instance.rust.json'), path.join(dir, 'instance.tauri.json')];
   for (const f of candidates) {
     try {
       const inst = JSON.parse(fs.readFileSync(f, 'utf8'));

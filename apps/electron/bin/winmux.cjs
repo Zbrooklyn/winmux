@@ -23,13 +23,14 @@ function instance() {
   // Which copy to drive: an explicit file wins; then --dev / WINMUX_PROFILE=dev;
   // otherwise whichever packaged identity is actually LIVE — the primary app
   // (instance.json) first, then the side-by-side WinMux Rust app
-  // (instance.rust.json). A file whose pid is dead is a stale leftover, not a
-  // target, so a crashed primary never shadows a running Rust app.
+  // (instance.rust.json), then the WinMux Tauri app (instance.tauri.json).
+  // A file whose pid is dead is a stale leftover, not a target, so a crashed
+  // primary never shadows a running side app.
   const dev = process.argv.includes('--dev') || process.env.WINMUX_PROFILE === 'dev';
   const dir = path.join(os.homedir(), '.winmux');
   const candidates = process.env.WINMUX_INSTANCE_FILE ? [process.env.WINMUX_INSTANCE_FILE]
     : dev ? [path.join(dir, 'instance.dev.json')]
-    : [path.join(dir, 'instance.json'), path.join(dir, 'instance.rust.json')];
+    : [path.join(dir, 'instance.json'), path.join(dir, 'instance.rust.json'), path.join(dir, 'instance.tauri.json')];
   for (const f of candidates) {
     try {
       const inst = JSON.parse(fs.readFileSync(f, 'utf8'));

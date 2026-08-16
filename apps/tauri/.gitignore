@@ -1,0 +1,4 @@
+# Build in ~/winmux-build/tauri-target (CARGO_TARGET_DIR) — a target/ tree inside
+# Dropbox loses a race with the sync client (os error 32 mid-archive).
+target/
+gen/

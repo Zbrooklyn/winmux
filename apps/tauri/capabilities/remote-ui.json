@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-ui",
+  "description": "The cockpit UI is served by the local engine over loopback — a 'remote' URL from Tauri's viewpoint. Without the remote context here, every permission below silently does nothing (Stage 5 gotcha). Grants exactly what the window.winmux shim needs: frame controls, drag, and opening links in the real browser.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "permissions": [
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "opener:allow-open-url"
+  ]
+}

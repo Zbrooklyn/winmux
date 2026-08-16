@@ -1,0 +1,20 @@
+[package]
+name = "winmux-tauri"
+version = "0.2.1"
+edition = "2021"
+
+# WinMux Tauri — the third side-by-side identity (v2 Stage 5). A native Tauri 2
+# shell hosting the SAME web UI on the SAME Rust engine as the Electron apps.
+# v1 deliberately does NOT enable the `unstable` multiwebview feature: the
+# embedded browser panel (TS-7) is a separate later phase, so this shell rides
+# only stable Tauri APIs. The Tauri version is pinned by Cargo.lock.
+[dependencies]
+tauri = "2"
+tauri-plugin-opener = "2"
+serde_json = "1"
+
+[build-dependencies]
+tauri-build = "2"
+
+[profile.release]
+strip = true
