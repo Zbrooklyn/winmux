@@ -33,6 +33,14 @@ Top strip also carries (right-aligned, quiet): the update badge and the palette 
 - **SB-5 — Verify + ship.** New `sidebar-tabs` harness check (switch, persist, resize, notif badge); full harness green both engines; desktop screenshots (dark + light, each tab) to Edward.
   **Done:** 444+N/444+N both engines; screenshots delivered; Edward's eye is the design acceptance.
 
+## Progress
+
+- **SB-0 done** — this plan.
+- **SB-1..SB-4 built in one batch** (commit 91adc84): `.sx-tabs` strip + three `.sx-panel` containers in index.html; `setSidebarTab`/`placeSidebarControls`/`renderSxProjects`/drag-resize in app.js; `S.sidebarTab` + `S.sidebarWidth` settings (disk-config authority respected — boot paints both without waiting for applySettings). Bell = third tab; notif never persists as the resting tab; outside-click dismissal gated to the phone sheet (panels stay put, Obsidian rule); `pjrowHTML`/`openRecent`/`removeRecent` shared between overlay and panel.
+- **SB-5 done** — harness check `sidebar-tabs` (17 measured mechanics: swap ≤1 frame — measured 1ms, persistence, 200–420 clamp, real-mouse drag to 340px, narrow dormancy, desktop restore). **Full harness 461/461 on BOTH engines** (Node + `WINMUX_CORE=rust`). Dark+light screenshots of all three panels delivered; Edward's eye is design acceptance.
+- Environmental gotcha for future runs: PORT_CLI (9921) is also the installed **WinMux Tauri** identity's engine port — if that app is running, the harness's cli check drives the *installed* app and its always-open window makes "no app connected" impossible (exactly one red in the first full run). Close the Tauri app before full runs, or move PORT_CLI.
+- One real bug caught by the probe: `--sbw` was only painted by applySettings, which skips when disk config matches the warm cache — width fell back to 264 on reload. Fixed by painting at init.
+
 ## Boundaries
 
 - Phone/narrow flow is SETTLED — zero changes below 620px; the tab strip is display:none on narrow.
