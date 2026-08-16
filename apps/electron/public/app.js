@@ -3655,6 +3655,7 @@
       return frow('Confirm before closing', 'Ask before ending a running shell', sw('confirmClose', S.confirmClose)) +
         frow('Desktop notifications', 'Alert you when a session needs you and WinMux is not the window you are looking at', sw('osNotify', S.osNotify)) +
         frow('Sync clipboard across devices', 'Copy on this device makes the text available to paste on your phone (and back) over your tailnet. Held in memory only, never saved to disk. Off by default.', sw('clipSync', S.clipSync)) +
+        frow('Save terminal history to disk', 'Recent output is saved so a full restart replays it above a fresh prompt. That history can include secrets a command printed (tokens, passwords). Turning this off stops saving and deletes what’s already on disk. On by default.', '<span class="sw ' + (historyS && historyS.persist !== false ? 'on' : '') + '" data-history-toggle role="button" aria-label="Save terminal history to disk"></span>') +
         frow('Default shell', 'Used by new tabs and splits', sel('defaultShell', [['', 'First available (' + labelFor(DEFAULT_SHELL) + ')']].concat(SHELLS.map(function (s) { return [s.key, s.label]; })), S.defaultShell)) +
         frow('Start folder', 'Blank = your home folder', '<input class="ctl" type="text" value="' + esc(S.startFolder) + '" data-set="startFolder" placeholder="' + esc(HOME) + '" style="width:230px" spellcheck="false">') +
         frow('Resume command', 'Run in each armed tab when WinMux reopens (right-click a tab → “Auto-resume this conversation”). {id} is replaced with that tab’s pinned Claude conversation.', '<input class="ctl" type="text" value="' + esc(S.resumeCommand) + '" data-set="resumeCommand" placeholder="claude --resume {id}" style="width:280px" spellcheck="false">') +
@@ -3812,6 +3813,29 @@
       .catch(function () {})
       .then(function () { autostartBusy = false; if (curSet === 'Behaviour') renderSettings(); });
   }
+  // Saved terminal history is server state too (the engine writes the files), so
+  // like autostart it loads from /api/history and flips through it. Turning it
+  // off also wipes what's already on disk — that's the point of the switch.
+  var historyS = null;            // last /api/history state, or null while loading
+  var historyBusy = false;
+  function loadHistory() {
+    fetch('/api/history', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+      historyS = j; if (curSet === 'Behaviour') renderSettings();
+    }).catch(function () { historyS = { persist: true }; if (curSet === 'Behaviour') renderSettings(); });
+  }
+  function flipHistory() {
+    if (historyBusy || !historyS) return;
+    historyBusy = true;
+    var want = !historyS.persist;
+    fetch('/api/history', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ persist: want }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        historyS = j;
+        if (!want) notify('History wiped from disk', (j.wiped || 0) + ' saved terminal histor' + (j.wiped === 1 ? 'y' : 'ies') + ' deleted. Nothing new will be saved.');
+      })
+      .catch(function () {})
+      .then(function () { historyBusy = false; if (curSet === 'Behaviour') renderSettings(); });
+  }
   // Trusting the tailnet is its own POST field, so flipping it never disturbs
   // whether the door is open — those are two separate decisions.
   function flipTrust() {
@@ -3866,7 +3890,7 @@
     // plain footer/⌘, entry opens to the category list.
     settingsDrill(tab ? 'detail' : 'list');
     if (curSet === 'Phone') loadPhone();
-    if (curSet === 'Behaviour') loadAutostart();
+    if (curSet === 'Behaviour') { loadAutostart(); loadHistory(); }
   }
   document.getElementById('settings-tabs').addEventListener('click', function (e) {
     var tab = e.target.closest ? e.target.closest('[data-settab]') : null;
@@ -3875,7 +3899,7 @@
     settingsDrill('detail');
     // The switch must reflect the server, not whatever it looked like last time.
     if (curSet === 'Phone') { phoneS = null; phoneErr = ''; renderSettings(); loadPhone(); return; }
-    if (curSet === 'Behaviour') { autostartS = null; renderSettings(); loadAutostart(); return; }
+    if (curSet === 'Behaviour') { autostartS = null; historyS = null; renderSettings(); loadAutostart(); loadHistory(); return; }
     renderSettings();
   });
   document.getElementById('settings-back').addEventListener('click', function () { settingsDrill('list'); });
@@ -3883,6 +3907,7 @@
     if (e.target.closest && e.target.closest('[data-phone-toggle]')) { flipPhone(); return; }
     if (e.target.closest && e.target.closest('[data-trust-toggle]')) { flipTrust(); return; }
     if (e.target.closest && e.target.closest('[data-autostart-toggle]')) { flipAutostart(); return; }
+    if (e.target.closest && e.target.closest('[data-history-toggle]')) { flipHistory(); return; }
     var s = e.target.closest ? e.target.closest('[data-sw]') : null;
     if (s) {
       var k = s.getAttribute('data-sw');

@@ -1,6 +1,6 @@
 {
   "name": "winmux",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "WinMux — a terminal multiplexer for Windows: one node-pty server with three faces (native Electron app, browser, and phone over Tailscale).",
   "license": "MIT",
@@ -45,7 +45,8 @@
     "dist:rust": "node scripts/dist-rust.cjs",
     "winget": "node scripts/winget-manifest.mjs",
     "perf": "node perf.cjs",
-    "endurance": "node endurance.cjs"
+    "endurance": "node endurance.cjs",
+    "dist:node": "npm run build:electron && node scripts/dist-node.cjs"
   },
   "build": {
     "appId": "com.zbrooklyn.winmux",

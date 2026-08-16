@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Package a WinMux installer with electron-builder, writing the output OFF the
-// repo tree. On a Dropbox-synced checkout, packaging into the repo (the default
-// dist-installer/) races Dropbox's file locks and fails with EPERM, so we send
-// the artifacts to <home>/winmux-build by default. Override with WINMUX_DIST_OUT.
+// Package THE WinMux installer — which, since v0.2.0, boots on the native Rust
+// core (v2 Stage 4 cutover). Same app, same UI; the engine is winmux-core.exe
+// bundled via extraResources and selected by core-rust.flag next to main.js.
+// The legacy Node-engine build stays reachable as `npm run dist:node`.
+// Output goes OFF the repo tree (Dropbox file locks race EPERM otherwise).
 //
 // Usage:  npm run dist            -> ~/winmux-build/WinMux Setup <version>.exe
 //         WINMUX_DIST_OUT=D:\out npm run dist
@@ -11,15 +12,32 @@ const path = require('path');
 const os = require('os');
 const { runBuilder } = require('./eb-retry.cjs');
 
-// A prior `npm run dist:rust` leaves core-rust.flag in dist-electron; strip it so
-// the Node installer never accidentally ships selecting the Rust core.
-const staleFlag = path.join(__dirname, '..', 'dist-electron', 'core-rust.flag');
-if (fs.existsSync(staleFlag)) { fs.unlinkSync(staleFlag); console.log('Removed stale core-rust.flag (Node build).'); }
+const appDir = path.join(__dirname, '..');
+const root = path.join(appDir, '..', '..');
+const bin = path.join(root, 'core', 'rust', 'target', 'release', 'winmux-core.exe');
+
+if (!fs.existsSync(bin)) {
+  console.error('Rust core not built. Run:  cargo build --release -p winmux-core   (in core/rust)');
+  process.exit(1);
+}
+
+// build:electron already ran via the npm script; drop the flag so the packaged
+// app selects the Rust core at launch.
+const flag = path.join(appDir, 'dist-electron', 'core-rust.flag');
+fs.writeFileSync(flag, 'rust\n');
+console.log('Wrote ' + flag + ' — this build boots on the Rust core.');
 
 const out = process.env.WINMUX_DIST_OUT || path.join(os.homedir(), 'winmux-build');
-console.log('Packaging WinMux installer -> ' + out);
+console.log('Packaging WinMux installer (Rust core) -> ' + out);
 
-const r = runBuilder(['--win', 'nsis', '-c.directories.output=' + out], path.join(__dirname, '..'));
+// eb-rust.config.js = the shared package.json build config + the winmux-core.exe
+// extraResource. Identity stays the primary one (appId/productName/icon from the
+// shared config), so existing WinMux installs upgrade in place onto the Rust core.
+const r = runBuilder([
+  '--win', 'nsis',
+  '--config', 'scripts/eb-rust.config.js',
+  '-c.directories.output=' + out,
+], appDir);
 
 if (r.status === 0) {
   const { version } = require('../package.json');

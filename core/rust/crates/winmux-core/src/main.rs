@@ -272,9 +272,45 @@ fn backlog_path(sid: &str) -> Option<PathBuf> {
     Some(backlog_dir().join(format!("{sid}.json")))
 }
 
+// History-persistence switch (readiness #13: saved scrollback is secrets-at-rest —
+// tokens and passwords a command printed live in those files). The flag file next
+// to the config disables saving; flipping it off also wipes what's already there.
+// Default: on (today's behavior).
+static HISTORY_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn history_off_flag() -> PathBuf {
+    config_file().parent().map(|p| p.join("history-off.flag")).unwrap_or_else(|| PathBuf::from("history-off.flag"))
+}
+fn wipe_backlog() -> u64 {
+    let mut n = 0u64;
+    if let Ok(entries) = std::fs::read_dir(backlog_dir()) {
+        for e in entries.flatten() {
+            if e.file_name().to_string_lossy().to_lowercase().ends_with(".json") && std::fs::remove_file(e.path()).is_ok() { n += 1; }
+        }
+    }
+    n
+}
+async fn api_history_get() -> impl IntoResponse {
+    Json(json!({"persist": !HISTORY_OFF.load(Ordering::Relaxed)}))
+}
+async fn api_history_post(Json(body): Json<Value>) -> impl IntoResponse {
+    let persist = body.get("persist").and_then(|v| v.as_bool()).unwrap_or(true);
+    HISTORY_OFF.store(!persist, Ordering::Relaxed);
+    let mut wiped = 0u64;
+    if persist {
+        let _ = std::fs::remove_file(history_off_flag());
+    } else {
+        let f = history_off_flag();
+        if let Some(d) = f.parent() { let _ = std::fs::create_dir_all(d); }
+        let _ = std::fs::write(&f, "off\n");
+        wiped = wipe_backlog();
+    }
+    Json(json!({"persist": persist, "wiped": wiped}))
+}
+
 // Persist a session's scrollback so it survives a full process restart. Atomic
 // (tmp + rename); dev is empty because the Rust core is loopback-only for now.
 fn save_backlog(sid: &str, shell: &str, cwd: &str, buf: &str) {
+    if HISTORY_OFF.load(Ordering::Relaxed) { return; }
     let p = match backlog_path(sid) { Some(p) => p, None => return };
     let _ = std::fs::create_dir_all(backlog_dir());
     let body = json!({"id": sid, "dev": "", "shell": shell, "cwd": cwd, "buf": buf, "savedAt": now_ms() as u64});
@@ -369,6 +405,7 @@ async fn main() {
         .route("/shells", get(api_shells))
         .route("/api/claude-sessions", get(api_claude_sessions))
         .route("/api/backlog", get(api_backlog))
+        .route("/api/history", get(api_history_get).post(api_history_post))
         .route("/api/phone", get(api_phone).post(api_phone_post))
         .route("/api/phone/devices", get(api_phone_devices).post(api_phone_devices_post))
         .route("/api/phone/qr", get(api_phone_qr))
@@ -413,6 +450,7 @@ async fn main() {
     });
 
     write_instance(port);
+    HISTORY_OFF.store(history_off_flag().exists(), Ordering::Relaxed);
     prune_backlog();
     println!("winmux-core: serving {} on http://127.0.0.1:{port}  (control+rpc+resume live)", public.display());
     axum::serve(listener, app).await.expect("serve");

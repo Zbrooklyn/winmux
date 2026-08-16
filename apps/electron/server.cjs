@@ -944,6 +944,29 @@ function handle(req, res, viaPhone) {
     return;
   }
 
+  // Save-terminal-history switch (saved scrollback is secrets-at-rest: tokens and
+  // passwords a command printed live in those files). GET reports whether saving
+  // is on; POST { persist } flips it — turning it off also wipes what's already on
+  // disk. Desk-door only, like autostart: it governs THIS machine's files.
+  if (urlPath === '/api/history') {
+    if (viaPhone) { res.writeHead(403, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ persist: true, error: 'available only at the PC' })); }
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (d) => { body += d; if (body.length > 1000) req.destroy(); });
+      req.on('end', () => {
+        let persist = true;
+        try { const b = JSON.parse(body || '{}') || {}; persist = b.persist !== false; } catch (e) {}
+        const wiped = setHistoryPersist(persist);
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ persist, wiped }));
+      });
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ persist: !historyOff }));
+    return;
+  }
+
   // Cross-device clipboard (opt-in). POST { text } stores the latest clip in
   // memory; GET returns it. Allowed over the tailnet on purpose — that is the whole
   // point (copy on the PC, paste on the phone) — and safe because it only ever hands
@@ -1441,7 +1464,29 @@ function backlogPath(sid) {
   if (!/^[a-zA-Z0-9_-]+$/.test(sid)) return null;
   return path.join(BACKLOG_DIR, sid + '.json');
 }
+// History-persistence switch (readiness #13): the flag file's presence disables
+// saving terminal history to disk; disabling also wipes what's already there.
+const HISTORY_OFF_FLAG = path.join(path.dirname(CONFIG_FILE), 'history-off.flag');
+let historyOff = false;
+try { historyOff = fs.existsSync(HISTORY_OFF_FLAG); } catch (e) {}
+function setHistoryPersist(persist) {
+  historyOff = !persist;
+  let wiped = 0;
+  try {
+    if (persist) { if (fs.existsSync(HISTORY_OFF_FLAG)) fs.unlinkSync(HISTORY_OFF_FLAG); }
+    else {
+      fs.mkdirSync(path.dirname(HISTORY_OFF_FLAG), { recursive: true });
+      fs.writeFileSync(HISTORY_OFF_FLAG, 'off\n');
+      for (const f of fs.readdirSync(BACKLOG_DIR)) {
+        if (!f.endsWith('.json')) continue;
+        try { fs.unlinkSync(path.join(BACKLOG_DIR, f)); wiped++; } catch (e) {}
+      }
+    }
+  } catch (e) {}   // no backlog dir yet is fine
+  return wiped;
+}
 function saveBacklog(s) {
+  if (historyOff) return;
   const p = backlogPath(s.id); if (!p) return;
   try {
     fs.mkdirSync(BACKLOG_DIR, { recursive: true });
