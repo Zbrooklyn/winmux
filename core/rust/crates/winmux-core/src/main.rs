@@ -784,33 +784,44 @@ const BACKLOG_MAX_AGE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 async fn api_backlog(State(state): State<Arc<AppState>>, Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
     let sid = q.get("sid").cloned().unwrap_or_default();
     if sid.is_empty() {
-        let mut items: Vec<Value> = Vec::new();
+        // Bounded like server.cjs: stat-sort everything, parse only the newest 30
+        // (each file carries a whole scrollback), report the honest total.
+        const LIST_CAP: usize = 30;
+        let mut names: Vec<(std::path::PathBuf, String, u64)> = Vec::new();
         if let Ok(entries) = std::fs::read_dir(backlog_dir()) {
             for e in entries.flatten() {
                 let name = e.file_name().to_string_lossy().to_string();
                 if !name.ends_with(".json") { continue; }
-                let id = name.trim_end_matches(".json").to_string();
-                let o = match std::fs::read_to_string(e.path()).ok()
-                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-                    .filter(|v| v.is_object()) { Some(o) => o, None => continue };
-                // dev is always "" in the Rust core (loopback-only), same as the guard on the per-sid read.
-                if !o.get("dev").and_then(|v| v.as_str()).unwrap_or("").is_empty() { continue; }
                 let m = e.metadata().ok().and_then(|md| md.modified().ok())
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map(|d| d.as_millis() as u64).unwrap_or(0);
-                let live = state.sessions.lock().unwrap().contains_key(&id);
-                items.push(json!({
-                    "sid": id,
-                    "shell": o.get("shell").and_then(|v| v.as_str()).unwrap_or(""),
-                    "cwd": o.get("cwd").and_then(|v| v.as_str()).unwrap_or(""),
-                    "savedAt": o.get("savedAt").and_then(|v| v.as_u64()).unwrap_or(m),
-                    "expiresAt": m + BACKLOG_MAX_AGE_MS,
-                    "live": live,
-                }));
+                names.push((e.path(), name, m));
             }
         }
+        names.sort_by_key(|(_, _, m)| std::cmp::Reverse(*m));
+        let total = names.len();
+        let mut items: Vec<Value> = Vec::new();
+        for (p, name, m) in names {
+            if items.len() >= LIST_CAP { break; }
+            let id = name.trim_end_matches(".json").to_string();
+            let o = match std::fs::read_to_string(&p).ok()
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                .filter(|v| v.is_object()) { Some(o) => o, None => continue };
+            // dev is always "" in the Rust core (loopback-only), same as the guard on the per-sid read.
+            if !o.get("dev").and_then(|v| v.as_str()).unwrap_or("").is_empty() { continue; }
+            let live = state.sessions.lock().unwrap().contains_key(&id);
+            items.push(json!({
+                "sid": id,
+                "shell": o.get("shell").and_then(|v| v.as_str()).unwrap_or(""),
+                "cwd": o.get("cwd").and_then(|v| v.as_str()).unwrap_or(""),
+                "savedAt": o.get("savedAt").and_then(|v| v.as_u64()).unwrap_or(m),
+                "expiresAt": m + BACKLOG_MAX_AGE_MS,
+                "live": live,
+            }));
+        }
+        // mtime picked the cheap cap; savedAt orders what the user sees.
         items.sort_by_key(|v| std::cmp::Reverse(v.get("savedAt").and_then(|x| x.as_u64()).unwrap_or(0)));
-        return Json(json!({"ok": true, "items": items, "maxAgeMs": BACKLOG_MAX_AGE_MS})).into_response();
+        return Json(json!({"ok": true, "items": items, "total": total, "maxAgeMs": BACKLOG_MAX_AGE_MS})).into_response();
     }
     let bl = backlog_path(&sid)
         .and_then(|p| std::fs::read_to_string(p).ok())

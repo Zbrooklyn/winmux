@@ -317,24 +317,32 @@ function writeConfigAtomic(obj) {
 // WINMUX_WORKSPACE_FILE overrides for tests. Under WINMUX_NO_INSTANCE with no
 // override there is no identity to own a file, so the workspace is held in memory
 // only — a harness or perf server must never write into the real ~/.winmux.
-const WORKSPACE_FILE = process.env.WINMUX_WORKSPACE_FILE || (() => {
+// Resolved LAZILY, not as a load-time const: under Electron, main.ts sets
+// WINMUX_INSTANCE_FILE for the identity AFTER this module is required — a
+// load-time snapshot silently derived the PRIMARY identity's workspace.json for
+// every packaged variant and the dev copy (a cross-identity leak the harness
+// caught as the electron smoke restoring another run's layout).
+function workspaceFile() {
+  if (process.env.WINMUX_WORKSPACE_FILE) return process.env.WINMUX_WORKSPACE_FILE;
   if (process.env.WINMUX_NO_INSTANCE) return null;   // memory-only
   const inst = process.env.WINMUX_INSTANCE_FILE || path.join(os.homedir(), '.winmux', 'instance.json');
   return path.join(path.dirname(inst), path.basename(inst).replace(/^instance/, 'workspace'));
-})();
+}
 let memWorkspace = null;
 function readWorkspace() {
-  if (!WORKSPACE_FILE) return memWorkspace;
-  try { const w = JSON.parse(fs.readFileSync(WORKSPACE_FILE, 'utf8')); return (w && typeof w === 'object') ? w : null; }
+  const file = workspaceFile();
+  if (!file) return memWorkspace;
+  try { const w = JSON.parse(fs.readFileSync(file, 'utf8')); return (w && typeof w === 'object') ? w : null; }
   catch (e) { return null; }
 }
 function writeWorkspace(doc) {
-  if (!WORKSPACE_FILE) { memWorkspace = doc; return true; }
+  const file = workspaceFile();
+  if (!file) { memWorkspace = doc; return true; }
   try {
-    fs.mkdirSync(path.dirname(WORKSPACE_FILE), { recursive: true });
-    const tmp = WORKSPACE_FILE + '.' + process.pid + '.tmp';
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = file + '.' + process.pid + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(doc, null, 2));
-    fs.renameSync(tmp, WORKSPACE_FILE);
+    fs.renameSync(tmp, file);
     return true;
   } catch (e) { return false; }
 }
@@ -1143,22 +1151,34 @@ function handle(req, res, viaPhone) {
     }
     // No sid — the list (PT-4): everything this device could get back, each entry
     // carrying its expiry so nothing ever vanishes silently (STATE.md invariant 1).
+    // Parsing is bounded: each file carries a whole scrollback, and this server is
+    // single-threaded — parsing thousands of them here would stall every request
+    // queued behind the list (a real freeze, seen in the harness at 2400 files).
+    // So: cheap stat pass over everything, full parse only for the newest 30, and
+    // the honest total rides along so a capped list never reads as "that's all".
     if (!sid) {
-      const items = [];
+      const LIST_CAP = 30;
+      let names = [];
       try {
-        for (const f of fs.readdirSync(BACKLOG_DIR)) {
-          if (!f.endsWith('.json')) continue;
-          const id = f.slice(0, -5);
-          const o = readBacklog(id);
-          if (!o || (o.dev || '') !== deviceIdFrom(req)) continue;
+        names = fs.readdirSync(BACKLOG_DIR).filter((f) => f.endsWith('.json')).map((f) => {
           let m = 0; try { m = fs.statSync(path.join(BACKLOG_DIR, f)).mtimeMs; } catch (e) {}
-          items.push({ sid: id, shell: o.shell || '', cwd: o.cwd || '', savedAt: o.savedAt || Math.round(m),
-            expiresAt: Math.round(m + BACKLOG_MAX_AGE_MS), live: SESSIONS.has(id) });
-        }
+          return { f, m };
+        }).sort((a, b) => b.m - a.m);
       } catch (e) {}   // no backlog dir yet — an empty list, not an error
+      const items = [];
+      for (const { f, m } of names) {
+        if (items.length >= LIST_CAP) break;
+        const id = f.slice(0, -5);
+        const o = readBacklog(id);
+        if (!o || (o.dev || '') !== deviceIdFrom(req)) continue;
+        items.push({ sid: id, shell: o.shell || '', cwd: o.cwd || '', savedAt: o.savedAt || Math.round(m),
+          expiresAt: Math.round(m + BACKLOG_MAX_AGE_MS), live: SESSIONS.has(id) });
+      }
+      // mtime picked the cheap cap; savedAt (the document's own stamp) orders what
+      // the user sees — files written in the same instant must not flip around.
       items.sort((a, b) => b.savedAt - a.savedAt);
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      return res.end(JSON.stringify({ ok: true, items, maxAgeMs: BACKLOG_MAX_AGE_MS }));
+      return res.end(JSON.stringify({ ok: true, items, total: names.length, maxAgeMs: BACKLOG_MAX_AGE_MS }));
     }
     const bl = readBacklog(sid);
     if (!bl || (bl.dev || '') !== deviceIdFrom(req)) {

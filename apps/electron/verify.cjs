@@ -114,6 +114,7 @@ const PORT_AGENTJOB = 9968;   // Stage 3: server-side agent-job store (spawn/wai
 const PORT_WORKSPACE = 9978;  // PT-3: the engine-owned workspace file survives a wiped browser profile
 const PORT_RECOVER = 9979;    // PT-4: Recent & recoverable — saved scrollbacks are listed, restorable, dismissable
 const PORT_CLOSEVERB = 9980;  // PT-5: Close project = unbind with three honest outcomes; Delete is real and confirmed
+const PORT_SOT = 9981;        // PT-6: the engine's config.json is the settings authority; localStorage is only a cache
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -1388,6 +1389,30 @@ check('recover', PORT_RECOVER, async ({ browser, base, t, shot }) => {
   }
 }, { WINMUX_CONFIG_FILE: path.join(OUT, 'recover-cfg', 'config.json') });
 
+// PT-6: one source of truth per setting. The engine's config.json wins over a
+// stale localStorage copy on boot — the drift where app A changes a setting and
+// app B's localStorage overrides it forever is dead. The win must be REAL (the
+// rendered terminal uses the disk value, measured) and the cache must converge.
+check('sot', PORT_SOT, async ({ browser, base, t }) => {
+  const cfg = path.join(OUT, 'sot-config.json');
+  fs.writeFileSync(cfg, JSON.stringify({ settings: { fontSize: 19, gpuRenderer: false } }));
+  // The page arrives with a STALE cache claiming fontSize 13 — the old code let
+  // that override the disk forever.
+  const page = await desktop(browser, { fontSize: 13 });
+  try {
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3500);
+    const got = await page.evaluate(() => ({
+      rendered: getComputedStyle(document.querySelector('.xterm-rows')).fontSize,
+      cache: (() => { try { return JSON.parse(localStorage.getItem('ct-settings') || '{}').fontSize; } catch (e) { return null; } })(),
+    }));
+    t('the rendered terminal uses the engine\'s value, not the stale cache', got.rendered === '19px', got);
+    t('the localStorage cache converged to the engine\'s value', got.cache === 19, got);
+  } finally {
+    await page.close();
+  }
+}, { WINMUX_CONFIG_FILE: path.join(OUT, 'sot-config.json') });
+
 // PT-5: the Close-project verb exists and is honest. Closing unbinds the window
 // from the named file and returns to the unnamed workspace — it never deletes the
 // file, and it asks one question whose outcomes are keep-sessions / end-sessions /
@@ -2002,10 +2027,15 @@ check('electron', PORT_GROUPS, async ({ t }) => {
     fs.rmSync(path.join(appData, 'WinMuxDev', 'Local Storage'), { recursive: true, force: true });
   } catch (e) { /* best effort */ }
 
+  // The engine-owned workspace (PT-3) is exactly the kind of durable state this
+  // smoke must not inherit across runs or leak into a real identity — pin it to
+  // a scratch file and start that file empty, like the Local Storage wipe above.
+  const wsFile = path.join(OUT, 'electron-workspace.json');
+  try { fs.unlinkSync(wsFile); } catch (e) { /* fresh */ }
   const res = await new Promise((resolve) => {
     const proc = spawn(electronPath, [main], {
       cwd: ROOT,
-      env: Object.assign({}, process.env, { WINMUX_SMOKE: '1', WINMUX_SMOKE_OUT: outFile, WINMUX_FORCE_DOM: '1' }),
+      env: Object.assign({}, process.env, { WINMUX_SMOKE: '1', WINMUX_SMOKE_OUT: outFile, WINMUX_FORCE_DOM: '1', WINMUX_WORKSPACE_FILE: wsFile }),
       stdio: 'ignore',
     });
     const timer = setTimeout(() => {

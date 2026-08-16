@@ -85,30 +85,30 @@
     // "yolo remote control" mode these tabs are meant to come back in.
     resumeCommand: 'claude --resume {id} --dangerously-skip-permissions',
   };
-  // Keys this browser has an explicit stored value for. They win over the on-disk
-  // config on reconcile — localStorage is this device's stated choice; disk only
-  // fills the keys the device has never set (the fresh-install / reinstall case).
-  var LS_KEYS = {};
   var S = (function () {
     var s = {};
     for (var k in DEFAULTS) s[k] = DEFAULTS[k];
+    // localStorage is a warm cache: it paints the right settings instantly and
+    // keeps the standalone phone/web path working offline. The engine's
+    // config.json is the source of truth and wins when it loads (PT-6).
     try {
       var raw = JSON.parse(localStorage.getItem('ct-settings') || '{}');
-      for (var j in raw) if (j in s) { s[j] = raw[j]; LS_KEYS[j] = true; }
+      for (var j in raw) if (j in s) s[j] = raw[j];
     } catch (e) {}
     // A resume command with no {id} placeholder can't pin a conversation — it is
     // either the older `--continue` form or a hand-edit that would silently resume
     // the wrong chat. Bring it forward to the template rather than obeying it.
     if (typeof s.resumeCommand !== 'string' || s.resumeCommand.indexOf('{id}') < 0) {
       s.resumeCommand = DEFAULTS.resumeCommand;
-      delete LS_KEYS.resumeCommand;
     }
     return s;
   })();
-  // Settings live in two places: localStorage (the instant, offline mirror — keeps
-  // the standalone phone/web path working with no disk) and the on-disk config the
-  // server owns (durable, hand-editable, survives a reinstall). Writing goes to
-  // both; `localOnly` mirrors disk→localStorage without echoing back to disk.
+  // Settings live in two places, with one authority (PT-6): the engine's on-disk
+  // config.json is the source of truth (durable, hand-editable, survives a
+  // reinstall, shared by every face of this identity); localStorage is the warm
+  // cache that paints instantly and keeps the offline phone/web path working.
+  // Writing goes to both; on boot the disk wins over the cache once it loads.
+  // `localOnly` mirrors disk→localStorage without echoing back to disk.
   var DISK_CONFIG = {};
   // Guards the disk write: until the on-disk config has actually been read once, a
   // boot's applySettings() must NOT POST its defaults — otherwise a fresh browser
@@ -137,12 +137,20 @@
           DISK_CONFIG = j.config;
           if (DISK_CONFIG.themes && typeof DISK_CONFIG.themes === 'object') USER_THEMES = DISK_CONFIG.themes;
           if (DISK_CONFIG.keymap && typeof DISK_CONFIG.keymap === 'object') {
-            for (var km in DISK_CONFIG.keymap) if (!(km in KEYMAP)) KEYMAP[km] = DISK_CONFIG.keymap[km];   // localStorage wins; disk fills gaps
+            // The engine file is the source of truth (PT-6): disk overrides the
+            // local cache, so a binding changed in one app follows to the others.
+            for (var km in DISK_CONFIG.keymap) KEYMAP[km] = DISK_CONFIG.keymap[km];
           }
           var s = DISK_CONFIG.settings;
           if (s && typeof s === 'object') {
             var changed = false;
-            for (var k in s) if (k in DEFAULTS && !LS_KEYS[k]) { S[k] = s[k]; changed = true; }
+            for (var k in s) {
+              if (!(k in DEFAULTS)) continue;
+              // The one validity rule survives the flip: a resume command without
+              // {id} is broken wherever it came from — never adopt it.
+              if (k === 'resumeCommand' && (typeof s[k] !== 'string' || s[k].indexOf('{id}') < 0)) continue;
+              if (S[k] !== s[k]) { S[k] = s[k]; changed = true; }
+            }
             if (changed) applySettings();   // still !configReady → mirrors to localStorage, no POST echo
           }
         }
@@ -3586,6 +3594,11 @@
       var show = recoverCache.length > 0;
       smRecoverLbl.style.display = show ? '' : 'none';
       smRecover.style.display = show ? '' : 'none';
+      // The engine caps the list at the newest 30 — say so instead of letting a
+      // capped list read as "that's everything".
+      var total = (j && j.total) || 0;
+      smRecoverLbl.textContent = 'Recent & recoverable sessions' +
+        (total > ((j && j.items) || []).length ? ' — newest ' + j.items.length + ' of ' + total : '');
       if (!show) { smRecover.innerHTML = ''; return; }
       var now = Date.now();
       smRecover.innerHTML = recoverCache.map(function (b, i) {
