@@ -777,6 +777,48 @@
     .wc-title { font-size: 20px; }
     .wc-actions { flex-direction: column; }
   }
+  /* ---- SB arc: Obsidian-style sidebar tabs (desktop/half only) --------------
+     The left rail hosts switchable panels behind a slim icon strip, the way
+     Obsidian's left sidebar does. On narrow everything below is inert: the
+     strip and panels vanish, the settled phone drill-in flow is untouched. */
+  .sessions { position: relative; width: var(--sbw, 264px); }
+  .sx-tabs { flex: 0 0 auto; display: none; align-items: center; gap: 2px; height: 40px; padding: 0 8px;
+    background: var(--bg1); border-bottom: 1px solid var(--border); }
+  .cockpit[data-mode="full"] .sx-tabs, .cockpit[data-mode="half"] .sx-tabs { display: flex; }
+  .cockpit[data-mode="full"] .sx-head, .cockpit[data-mode="half"] .sx-head { display: none; }
+  .sx-tabs .sxbtn { width: 30px; height: 30px; }
+  .sx-tabs .sxbtn svg { width: 17px; height: 17px; }
+  .sx-tabs .sxbtn[data-active] { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+  /* Panels: one visible at a time by the aside's data-sxtab; on narrow the
+     Sessions panel is always the visible one and the others never show. */
+  .sx-panel { flex: 1; min-height: 0; display: none; flex-direction: column; overflow: hidden; }
+  .sessions[data-sxtab="sessions"] #sxp-sessions,
+  .cockpit[data-mode="narrow"] #sxp-sessions { display: flex; }
+  .cockpit:not([data-mode="narrow"]) .sessions[data-sxtab="projects"] #sxp-projects { display: flex; }
+  .cockpit:not([data-mode="narrow"]) .sessions[data-sxtab="notif"] #sxp-notif { display: flex; }
+  /* Each panel owns a thin section row (Obsidian panels carry their own header). */
+  .sx-sect { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px 0 14px;
+    font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
+  .sx-sect .n { margin-left: auto; }
+  .cockpit[data-mode="narrow"] .sx-sect { display: none; }
+  /* Projects panel: same .pjrow rows as the projects overlay, compacted for a
+     ~264px rail — the right-hand meta column folds away, the dir line carries
+     the place, the × keeps its hover-reveal. */
+  .sx-plist { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; }
+  .sx-plist .pjrow { padding: 8px 6px 8px 10px; gap: 9px; border-radius: 8px; }
+  .sx-plist .pjrow:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+  .sx-plist .pjrow-meta { display: none; }
+  .sx-plist .pjrow-chips { display: none; }
+  /* Notifications panel: the same #npanel node, parked inside the sidebar on
+     desktop (placeSidebarControls moves it), so it stops floating over the
+     terminal. The narrow bottom-sheet path keeps the fixed/base styling. */
+  #sxp-notif .npanel { position: static; width: auto; max-height: none; flex: 1; min-height: 0; overflow-y: auto;
+    border: none; border-radius: 0; box-shadow: none; background: transparent; padding: 0 8px 8px; z-index: auto; }
+  /* Drag-resize: a slim grab strip on the rail's right edge (inside — the aside
+     clips overflow), invisible until hovered or dragging. */
+  .sx-resize { display: none; position: absolute; top: 0; right: 0; width: 5px; height: 100%; cursor: col-resize; z-index: 30; }
+  .cockpit[data-mode="full"] .sx-resize, .cockpit[data-mode="half"] .sx-resize { display: block; }
+  .sx-resize:hover, .sx-resize.drag { background: color-mix(in srgb, var(--accent) 45%, transparent); }
 </style>
 </head>
 <body>
@@ -803,20 +845,39 @@
     <span class="wcbtn wc-close" id="wc-close" title="Close" role="button" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
   </div>
 
-  <aside class="sessions" aria-label="Groups">
+  <aside class="sessions" aria-label="Sidebar" data-sxtab="sessions">
     <div class="sx-head"><span>Groups</span><span class="n" id="sx-count">1</span><span class="sxsp"></span>
       <span class="upbadge" id="upbadge" role="button" tabindex="0" aria-label="Update available" title="A new version is available — click to download"></span>
       <span class="sxbtn" id="open-palette" title="Command palette (Ctrl+Shift+P)" role="button" aria-label="Command palette"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></span>
       <span class="sxbtn" id="open-notif" title="Notifications (Ctrl+Alt+N)" role="button" aria-label="Notifications"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg><span class="nbadge" id="notif-badge" style="display:none">0</span></span>
     </div>
-    <!-- The deck is the product's core claim, so it has to reach a screen reader too:
-         "needs you" going 0 -> 1 is exactly the moment you must not miss. -->
-    <div class="sx-deck" role="status" aria-live="polite" aria-label="Fleet status">
-      <div class="stat work"><div class="v" id="d-work">0</div><div class="l">Working</div></div>
-      <div class="stat need"><div class="v" id="d-need">0</div><div class="l">Needs you</div></div>
-      <div class="stat idle"><div class="v" id="d-idle">0</div><div class="l">Idle</div></div>
+    <!-- SB arc: the Obsidian model — a slim icon strip switches sidebar panels.
+         Desktop/half only; on the phone the strip hides and the relocatable
+         controls (bell, palette, update badge) move back into .sx-head above. -->
+    <div class="sx-tabs" id="sx-tabs" role="tablist" aria-label="Sidebar panels">
+      <span class="sxbtn sxtab" id="sxtab-sessions" role="tab" title="Sessions" aria-label="Sessions panel"><svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15h4.5"/></svg></span>
+      <span class="sxbtn sxtab" id="sxtab-projects" role="tab" title="Projects" aria-label="Projects panel"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg></span>
+      <span class="sxsp" id="sx-tabs-sp"></span>
     </div>
-    <div class="sx-list" id="sx-list"></div>
+    <div class="sx-panel" id="sxp-sessions">
+      <div class="sx-sect"><span>Groups</span><span class="n" id="sx-count2">1</span></div>
+      <!-- The deck is the product's core claim, so it has to reach a screen reader too:
+           "needs you" going 0 -> 1 is exactly the moment you must not miss. -->
+      <div class="sx-deck" role="status" aria-live="polite" aria-label="Fleet status">
+        <div class="stat work"><div class="v" id="d-work">0</div><div class="l">Working</div></div>
+        <div class="stat need"><div class="v" id="d-need">0</div><div class="l">Needs you</div></div>
+        <div class="stat idle"><div class="v" id="d-idle">0</div><div class="l">Idle</div></div>
+      </div>
+      <div class="sx-list" id="sx-list"></div>
+    </div>
+    <div class="sx-panel" id="sxp-projects">
+      <div class="sx-sect"><span>Projects</span></div>
+      <div class="sx-plist" id="sx-plist"></div>
+    </div>
+    <!-- #npanel is moved in here by placeSidebarControls() on desktop; on the
+         phone it moves back to <body> so the bottom-sheet flow stays untouched. -->
+    <div class="sx-panel" id="sxp-notif"></div>
+    <div class="sx-resize" id="sx-resize" title="Drag to resize — double-click to reset"></div>
     <div class="sx-foot">
       <span class="sxbtn" id="open-new" title="New terminal (Alt+T)" role="button" aria-label="New terminal"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>
       <span class="sxbtn" id="open-newgroup" title="New group" role="button" aria-label="New group"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><path d="M12 10v6M9 13h6"/></svg></span>

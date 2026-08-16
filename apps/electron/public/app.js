@@ -76,6 +76,7 @@
     cursorStyle: 'block', cursorBlink: true, scrollback: 5000,
     copyOnSelect: false, rightClickPaste: false, confirmClose: true,
     defaultShell: '', startFolder: '', gpuRenderer: true, ligatures: false, osNotify: true, clipSync: false,
+    sidebarTab: 'sessions', sidebarWidth: 264,   // SB arc — which sidebar panel is up, and how wide the rail sits
     localEcho: true,   // SP-1 instant typing — predictive echo overlay; guards shut it off around secrets/TUIs
     commandBlocks: false,   // Phase 4 prototype — status gutter beside each command; OFF until the look is approved
     quakeEnabled: false, quakeHotkey: 'Control+`',   // Phase 7 — global hotkey drop; OFF so no system key is grabbed by default (Electron only)
@@ -322,6 +323,16 @@
     var mark = function (label) { if (dbg) { var n = performance.now(); dbg.m.push(label + ' ' + Math.round(n - dbg.t) + 'ms'); dbg.t = n; } };
     applyLigatures();
     mark('ligatures');
+    // SB arc: the rail width is a setting like any other — clamp and paint it here
+    // so a disk-config load (PT-6 authority) lands it without a reload.
+    try {
+      var sbw = Math.max(200, Math.min(420, Math.round(S.sidebarWidth) || 264));
+      document.documentElement.style.setProperty('--sbw', sbw + 'px');
+      // Re-assert the persisted panel too — but never yank an open Notifications
+      // view out from under the user just because a setting changed.
+      var sxa = document.querySelector('.sessions');
+      if (sxa && sxa.getAttribute('data-sxtab') !== 'notif') setSidebarTab(S.sidebarTab === 'projects' ? 'projects' : 'sessions');
+    } catch (e) {}
     eachTerm(function (t) { applyRenderer(t.term, !!(t.host && t.host.style.display !== 'none')); });
     mark('renderer');
     // SP-5 (speed arc): a settings change pays only for what the user can see.
@@ -922,6 +933,12 @@
     npanel.removeAttribute('data-open');
     npanel.classList.remove('sheet', 'in');
     var bd = document.getElementById('notif-backdrop'); if (bd) bd.remove();
+    // SB arc: on desktop the notifications live in a sidebar panel; closing them
+    // hands the rail back to the last resting tab (Sessions or Projects).
+    var aside = document.querySelector('.sessions');
+    if (currentMode !== 'narrow' && aside && aside.getAttribute('data-sxtab') === 'notif') {
+      setSidebarTab(S.sidebarTab === 'projects' ? 'projects' : 'sessions');
+    }
   }
   function toggleNotif(btn) {
     if (npanel.hasAttribute('data-open')) { closeNotif(); return; }
@@ -937,9 +954,11 @@
       void npanel.offsetHeight; npanel.classList.add('in');
       return;
     }
-    var r = btn.getBoundingClientRect();
-    npanel.style.top = (r.bottom + 6) + 'px';
-    npanel.style.left = Math.min(r.left, window.innerWidth - 356) + 'px';
+    // SB arc: on desktop the bell IS the third sidebar tab — no floating popover.
+    // A collapsed rail opens first so the panel has somewhere to appear.
+    npanel.style.top = ''; npanel.style.left = '';
+    if (root.getAttribute('data-sidebar') !== 'open') setSidebar('open');
+    setSidebarTab('notif');
   }
   npanel.addEventListener('click', function (e) {
     var mark = e.target.closest ? e.target.closest('[data-notif-read]') : null;
@@ -1120,6 +1139,8 @@
         if (pair[1]) box.removeAttribute('data-zero'); else box.setAttribute('data-zero', '');
       });
     if (countEl) countEl.textContent = String(groups.length);
+    var c2 = document.getElementById('sx-count2');
+    if (c2) c2.textContent = String(groups.length);
     var live = document.getElementById('nhead-live');
     if (live) { var n2 = totalTerms(); live.textContent = n2 + ' running'; }
   }
@@ -3746,28 +3767,57 @@
   var FOLDER_COLORS = ['#8a5cf5', '#e9973f', '#44cf6e', '#fb464c', '#3f9ae9', '#d05ce9'];
   function folderColor(s) { var h = 0; for (var i = 0; i < (s || '').length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return FOLDER_COLORS[Math.abs(h) % FOLDER_COLORS.length]; }
   var recentsCache = [];
+  // One row generator for every surface that lists recents (the projects overlay
+  // and the SB-arc sidebar panel), so the two can't drift apart.
+  function pjrowHTML(p, i) {
+    var file = baseName(p.path);
+    var chips = (p.shells || []).map(function (s) { return '<span class="pjrow-chip">' + esc(s) + '</span>'; }).join('');
+    var badge = p.missing
+      ? '<span class="pjrow-miss">missing</span>'
+      : '<span class="pjrow-badge">' + (p.tabs || 0) + ' tab' + (p.tabs === 1 ? '' : 's') + '</span>';
+    return '<div class="pjrow' + (p.missing ? ' missing' : '') + '" data-i="' + i + '" role="button" title="' + (p.missing ? 'File missing — click to remove' : 'Open this project') + '">' +
+      '<span class="pjrow-dot" style="background:' + folderColor(file) + '"></span>' +
+      '<div class="pjrow-main">' +
+        '<div class="pjrow-top"><span class="pjrow-name">' + esc(p.name || file) + '</span>' + badge + '</div>' +
+        (p.dir ? '<div class="pjrow-dir mono">' + esc(p.dir) + '</div>' : '') +
+        (chips ? '<div class="pjrow-chips">' + chips + '</div>' : '') +
+      '</div>' +
+      '<div class="pjrow-meta"><span class="pjrow-when">' + (p.opened ? esc(ago(p.opened)) : '') + '</span>' +
+        '<span class="pjrow-file mono">' + esc(file) + '</span></div>' +
+      '<span class="pjrow-del" data-del="' + i + '" title="Remove from recent">×</span></div>';
+  }
   function renderLayouts() {
     Projects.list().then(function (r) {
       recentsCache = (r && r.recents) || [];
+      refreshSxProjects();
       if (!recentsCache.length) { smList.innerHTML = '<div class="proj-empty">No projects yet. Name this workspace above and hit Save.</div>'; return; }
-      smList.innerHTML = recentsCache.map(function (p, i) {
-        var file = baseName(p.path);
-        var chips = (p.shells || []).map(function (s) { return '<span class="pjrow-chip">' + esc(s) + '</span>'; }).join('');
-        var badge = p.missing
-          ? '<span class="pjrow-miss">missing</span>'
-          : '<span class="pjrow-badge">' + (p.tabs || 0) + ' tab' + (p.tabs === 1 ? '' : 's') + '</span>';
-        return '<div class="pjrow' + (p.missing ? ' missing' : '') + '" data-i="' + i + '" role="button" title="' + (p.missing ? 'File missing — click to remove' : 'Open this project') + '">' +
-          '<span class="pjrow-dot" style="background:' + folderColor(file) + '"></span>' +
-          '<div class="pjrow-main">' +
-            '<div class="pjrow-top"><span class="pjrow-name">' + esc(p.name || file) + '</span>' + badge + '</div>' +
-            (p.dir ? '<div class="pjrow-dir mono">' + esc(p.dir) + '</div>' : '') +
-            (chips ? '<div class="pjrow-chips">' + chips + '</div>' : '') +
-          '</div>' +
-          '<div class="pjrow-meta"><span class="pjrow-when">' + (p.opened ? esc(ago(p.opened)) : '') + '</span>' +
-            '<span class="pjrow-file mono">' + esc(file) + '</span></div>' +
-          '<span class="pjrow-del" data-del="' + i + '" title="Remove from recent">×</span></div>';
-      }).join('');
+      smList.innerHTML = recentsCache.map(pjrowHTML).join('');
     }).catch(function () { smList.innerHTML = '<div class="proj-empty">Projects unavailable.</div>'; });
+  }
+  // Shared verbs behind a recents row, wherever the row lives. Open reads the
+  // file then routes through the same openSavedLayout path as ever; remove asks
+  // the same two-way question (drop the row vs delete the file), then refreshes
+  // via the caller's `after`.
+  function openRecent(p) {
+    closeLayoutMenu();
+    Projects.read(p.path).then(function (r) {
+      if (!r || !r.layout) { notify('Open failed', (r && r.error) || 'could not read the project'); return; }
+      openSavedLayout({ name: r.name || p.name, desc: r.layout, path: p.path });
+    });
+  }
+  function removeRecent(d, after) {
+    confirmDialog3('Remove “' + (d.name || baseName(d.path)) + '”?',
+      'Remove it from this list (the file stays in ' + (d.dir || 'its folder') + '), or delete the project file itself.',
+      'Remove from list', 'Delete the file',
+      function () { Projects.forget(d.path).then(after); },
+      function () {
+        Projects.forget(d.path, true).then(function () {
+          var cur = readCurrent();
+          if (cur && cur.path === d.path) { setCurrent(null); projectBaseline = null; if (typeof updateProjectRow === 'function') updateProjectRow(); }
+          after();
+          notify('Project deleted', (d.name || baseName(d.path)) + ' — file removed.');
+        });
+      });
   }
   // Recent & recoverable (PT-4): every saved scrollback the engine still holds,
   // with its age and its expiry in plain sight — the 235 invisible files problem.
@@ -3874,21 +3924,9 @@
     if (del) {
       e.stopPropagation();
       var d = recentsCache[parseInt(del.getAttribute('data-del'), 10)];
-      if (!d) return;
       // Delete is a real verb now (PT-5), so the × asks which one you meant:
       // drop the row (file untouched) or delete the file itself, confirmed.
-      confirmDialog3('Remove “' + (d.name || baseName(d.path)) + '”?',
-        'Remove it from this list (the file stays in ' + (d.dir || 'its folder') + '), or delete the project file itself.',
-        'Remove from list', 'Delete the file',
-        function () { Projects.forget(d.path).then(renderLayouts); },
-        function () {
-          Projects.forget(d.path, true).then(function () {
-            var cur = readCurrent();
-            if (cur && cur.path === d.path) { setCurrent(null); projectBaseline = null; if (typeof updateProjectRow === 'function') updateProjectRow(); }
-            renderLayouts();
-            notify('Project deleted', (d.name || baseName(d.path)) + ' — file removed.');
-          });
-        });
+      if (d) removeRecent(d, renderLayouts);
       return;
     }
     var row = e.target.closest ? e.target.closest('[data-i]') : null;
@@ -3896,12 +3934,128 @@
     var p = recentsCache[parseInt(row.getAttribute('data-i'), 10)];
     if (!p) return;
     if (p.missing) { Projects.forget(p.path).then(renderLayouts); return; }
-    closeLayoutMenu();
-    Projects.read(p.path).then(function (r) {
-      if (!r || !r.layout) { notify('Open failed', (r && r.error) || 'could not read the project'); return; }
-      openSavedLayout({ name: r.name || p.name, desc: r.layout, path: p.path });
-    });
+    openRecent(p);
   });
+
+  // ------------------------------------------------- sidebar tabs (SB arc)
+  // The Obsidian model Edward asked for: the left rail hosts several panels
+  // behind a slim icon strip — Sessions (the fleet), Projects (saved layouts),
+  // Notifications (the bell IS the third tab). Desktop/half only; on narrow the
+  // strip hides, the relocated controls go home to .sx-head, and the settled
+  // phone drill-in flow is untouched.
+  var sxAside = document.querySelector('.sessions');
+  function sxTabEl(name) {
+    return name === 'notif' ? document.getElementById('open-notif') : document.getElementById('sxtab-' + name);
+  }
+  function setSidebarTab(name) {
+    if (!sxAside) return;
+    // Leaving the Notifications panel closes it properly (badge/backdrop rules
+    // live in closeNotif; here we only drop the visual open state).
+    if (name !== 'notif') npanel.removeAttribute('data-open');
+    sxAside.setAttribute('data-sxtab', name);
+    ['sessions', 'projects', 'notif'].forEach(function (k) {
+      var el = sxTabEl(k);
+      if (el) { if (k === name) el.setAttribute('data-active', ''); else el.removeAttribute('data-active'); }
+    });
+    if (name === 'projects') renderSxProjects();
+    // Notifications are transient attention, not a resting place — the persisted
+    // tab is always Sessions or Projects, so a reload never lands on the bell.
+    if (name !== 'notif' && S.sidebarTab !== name) { S.sidebarTab = name; saveSettings(); }
+  }
+  // Keep the relocatable controls (bell, palette, update badge) and #npanel in
+  // the container that owns them for the current mode. Single nodes with single
+  // ids — same relocation pattern as #winctl — so every existing listener,
+  // badge, and harness hook rides along untouched.
+  function placeSidebarControls() {
+    var strip = document.getElementById('sx-tabs');
+    var head = sxAside && sxAside.querySelector('.sx-head');
+    if (!strip || !head) return;
+    var bell = document.getElementById('open-notif');
+    var pal = document.getElementById('open-palette');
+    var up = document.getElementById('upbadge');
+    var sp = document.getElementById('sx-tabs-sp');
+    if (currentMode === 'narrow') {
+      if (up) head.appendChild(up);
+      if (pal) head.appendChild(pal);
+      if (bell) head.appendChild(bell);
+      if (npanel.parentElement !== document.body) document.body.appendChild(npanel);
+      // Notif is never a resting tab; make sure a return to desktop lands on one.
+      if (sxAside.getAttribute('data-sxtab') === 'notif') setSidebarTab(S.sidebarTab === 'projects' ? 'projects' : 'sessions');
+    } else {
+      if (bell && sp) strip.insertBefore(bell, sp);
+      if (up) strip.appendChild(up);
+      if (pal) strip.appendChild(pal);
+      var slot = document.getElementById('sxp-notif');
+      if (slot && npanel.parentElement !== slot) slot.appendChild(npanel);
+    }
+  }
+  var sxProjCache = [];
+  function renderSxProjects() {
+    var list = document.getElementById('sx-plist');
+    if (!list) return;
+    Projects.list().then(function (r) {
+      sxProjCache = (r && r.recents) || [];
+      if (!sxProjCache.length) { list.innerHTML = '<div class="proj-empty">No projects yet. Save one from the footer and it lands here.</div>'; return; }
+      list.innerHTML = sxProjCache.map(pjrowHTML).join('');
+    }).catch(function () { list.innerHTML = '<div class="proj-empty">Projects unavailable.</div>'; });
+  }
+  // Called by renderLayouts so a save/remove in the overlay refreshes the panel.
+  function refreshSxProjects() {
+    if (currentMode !== 'narrow' && sxAside && sxAside.getAttribute('data-sxtab') === 'projects') renderSxProjects();
+  }
+  document.getElementById('sx-plist').addEventListener('click', function (e) {
+    var del = e.target.closest ? e.target.closest('[data-del]') : null;
+    if (del) {
+      e.stopPropagation();
+      var d = sxProjCache[parseInt(del.getAttribute('data-del'), 10)];
+      if (d) removeRecent(d, renderSxProjects);
+      return;
+    }
+    var row = e.target.closest ? e.target.closest('[data-i]') : null;
+    if (!row) return;
+    var p = sxProjCache[parseInt(row.getAttribute('data-i'), 10)];
+    if (!p) return;
+    if (p.missing) { Projects.forget(p.path).then(renderSxProjects); return; }
+    openRecent(p);
+  });
+  document.getElementById('sxtab-sessions').addEventListener('click', function () { setSidebarTab('sessions'); });
+  document.getElementById('sxtab-projects').addEventListener('click', function () { setSidebarTab('projects'); });
+  // Drag-resize on the rail's right edge. During the drag only the CSS var
+  // moves (cheap); terminals refit once on release, same as the pane dividers.
+  (function () {
+    var h = document.getElementById('sx-resize');
+    if (!h || !sxAside) return;
+    function setSbw(px, save) {
+      px = Math.max(200, Math.min(420, Math.round(px)));
+      document.documentElement.style.setProperty('--sbw', px + 'px');
+      if (save && S.sidebarWidth !== px) { S.sidebarWidth = px; saveSettings(); }
+      return px;
+    }
+    window.__winmuxSidebarWidth = function (px) { var v = setSbw(px, true); setTimeout(function () { panes.forEach(fitActive); }, 30); return v; };
+    // Boot: paint the persisted width now — applySettings only re-runs when the
+    // disk config differs from the warm cache, so it can't be the only painter.
+    setSbw(Math.round(S.sidebarWidth) || 264, false);
+    h.addEventListener('mousedown', function (e) {
+      if (currentMode === 'narrow') return;
+      e.preventDefault();
+      h.classList.add('drag');
+      var left = sxAside.getBoundingClientRect().left;
+      function mv(ev) { setSbw(ev.clientX - left, false); }
+      function up(ev) {
+        document.removeEventListener('mousemove', mv);
+        document.removeEventListener('mouseup', up);
+        h.classList.remove('drag');
+        setSbw(ev.clientX - left, true);
+        setTimeout(function () { panes.forEach(fitActive); }, 30);
+      }
+      document.addEventListener('mousemove', mv);
+      document.addEventListener('mouseup', up);
+    });
+    h.addEventListener('dblclick', function () { setSbw(264, true); setTimeout(function () { panes.forEach(fitActive); }, 30); });
+  })();
+  // Boot: land on the persisted resting tab (never the bell — notif is transient).
+  setSidebarTab(S.sidebarTab === 'projects' ? 'projects' : 'sessions');
+
   // Close project (PT-5, STATE.md): unbind from the named file and return to the
   // unnamed workspace. One question, three honest outcomes — keep the sessions
   // running, end this project's sessions, or save first. Closing NEVER deletes
@@ -4617,6 +4771,10 @@
   document.getElementById('open-help').addEventListener('click', openCheat);
   document.getElementById('open-settings').addEventListener('click', function () { openSettings(); });
   document.addEventListener('mousedown', function (e) {
+    // SB arc: outside-click dismissal is a popover behavior. On desktop the
+    // notifications are a sidebar panel now — panels stay put (Obsidian rule);
+    // only the phone bottom sheet still closes on a stray tap.
+    if (currentMode !== 'narrow') return;
     if (npanel.hasAttribute('data-open') && !npanel.contains(e.target) && !e.target.closest('#open-notif') && !e.target.closest('#notif-backdrop')) closeNotif();
   });
 
@@ -4788,8 +4946,15 @@
   function applyMode() {
     var m = modeFor(window.innerWidth);
     if (m === currentMode) { if (m === 'narrow') paintNbar(paneById(activePaneId)); return; }
+    var crossedNarrow = (m === 'narrow') !== (currentMode === 'narrow');
     currentMode = m;
     root.setAttribute('data-mode', m);
+    // SB arc: an open notifications surface doesn't survive the narrow boundary —
+    // the desktop panel and the phone sheet are different animals, so close it and
+    // let the user reopen in the shape the new mode uses. Then park the relocatable
+    // controls (bell, palette, update badge, #npanel) in this mode's container.
+    if (crossedNarrow && npanel.hasAttribute('data-open')) closeNotif();
+    placeSidebarControls();
     if (m === 'narrow') {
       // Land on the shallowest screen that still has a choice on it: many groups →
       // the group list; one group with several terminals → its session list; one

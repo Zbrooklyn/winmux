@@ -116,6 +116,7 @@ const PORT_RECOVER = 9979;    // PT-4: Recent & recoverable — saved scrollback
 const PORT_CLOSEVERB = 9980;  // PT-5: Close project = unbind with three honest outcomes; Delete is real and confirmed
 const PORT_SOT = 9981;        // PT-6: the engine's config.json is the settings authority; localStorage is only a cache
 const PORT_LOCALECHO = 9982;  // SP-1: predictive local echo — instant paint, honest reconcile, no secret leak
+const PORT_SIDEBAR = 9983;    // SB: Obsidian-style sidebar tabs — switch, persist, notif-in-rail, drag-resize
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -2635,6 +2636,118 @@ check('approve', PORT_APPROVE, async ({ browser, base, t, shot }) => {
   await page.waitForTimeout(400);
   const notif = await page.evaluate(() => (document.getElementById('npanel').textContent || ''));
   t('Approve reports it sent the keystroke (notification)', /Approved/.test(notif), notif.slice(0, 120));
+
+  await page.close();
+});
+
+// --- sidebar-tabs: the left rail is a real sidebar (SB arc) --------------------
+// Edward: "the whole point of the sidebar is that I can have multiple tabs within
+// the sidebar, similar style to Obsidian." Three panels behind a slim icon strip:
+// Sessions (deck+groups), Projects (saved layouts), Notifications (the bell IS the
+// third tab, #npanel parked inside the rail). Mechanics are measured — computed
+// display values, node parents, pixel widths — never eyeballed. Desktop only; the
+// phone checks prove narrow stayed untouched.
+check('sidebar-tabs', PORT_SIDEBAR, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+
+  const state = () => page.evaluate(() => {
+    const cs = (el) => el ? getComputedStyle(el).display : 'MISSING';
+    const aside = document.querySelector('.sessions');
+    const np = document.getElementById('npanel');
+    return {
+      tab: aside.getAttribute('data-sxtab'),
+      strip: cs(document.getElementById('sx-tabs')),
+      head: cs(document.querySelector('.sx-head')),
+      sess: cs(document.getElementById('sxp-sessions')),
+      proj: cs(document.getElementById('sxp-projects')),
+      notif: cs(document.getElementById('sxp-notif')),
+      width: Math.round(aside.getBoundingClientRect().width),
+      bellIn: (document.getElementById('open-notif').parentElement || {}).id,
+      npOpen: np.hasAttribute('data-open'),
+      npIn: (np.parentElement || {}).id,
+      npPos: getComputedStyle(np).position,
+    };
+  });
+
+  let s = await state();
+  t('desktop shows the icon strip, not the old header', s.strip === 'flex' && s.head === 'none', s);
+  t('the rail boots on the Sessions panel', s.tab === 'sessions' && s.sess === 'flex' && s.proj === 'none', s);
+  t('the bell lives in the strip as the third tab', s.bellIn === 'sx-tabs', s.bellIn);
+  t('#npanel is parked inside the rail slot', s.npIn === 'sxp-notif', s.npIn);
+
+  // Projects tab: seed one project so the panel has a row, then switch.
+  await page.evaluate(() => fetch('/api/project', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Sidebar Probe', path: null, layout: { cols: [] } }) }).then((r) => r.json()));
+  const tSwitch = await page.evaluate(() => {
+    const t0 = performance.now();
+    document.getElementById('sxtab-projects').click();
+    return performance.now() - t0;
+  });
+  await page.waitForTimeout(600);
+  s = await state();
+  t('clicking the folder icon swaps to the Projects panel', s.tab === 'projects' && s.proj === 'flex' && s.sess === 'none', s);
+  t('the panel swap is instant (≤ a frame\'s worth of work)', tSwitch <= 40, Math.round(tSwitch) + 'ms');
+  const rows = await page.evaluate(() => document.querySelectorAll('#sx-plist .pjrow').length);
+  t('the Projects panel lists the saved project', rows >= 1, String(rows));
+  await shot(page, 'sidebar-tabs-projects');
+
+  // Notifications: the bell toggles the third panel in-rail, then returns.
+  await page.evaluate(() => document.getElementById('open-notif').click());
+  await page.waitForTimeout(300);
+  s = await state();
+  t('the bell opens Notifications inside the rail (no floating popover)', s.tab === 'notif' && s.npOpen && s.npPos === 'static', s);
+  await page.evaluate(() => document.getElementById('open-notif').click());
+  await page.waitForTimeout(300);
+  s = await state();
+  t('the bell toggles closed and lands back on the resting tab', s.tab === 'projects' && !s.npOpen, s);
+
+  // Drag-resize: real mouse on the grab strip, measured width, clamped, painted.
+  const hb = await page.evaluate(() => {
+    const b = document.getElementById('sx-resize').getBoundingClientRect();
+    return { x: b.x + b.width / 2, y: b.y + 300 };
+  });
+  await page.mouse.move(hb.x, hb.y);
+  await page.mouse.down();
+  await page.mouse.move(340, hb.y, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  s = await state();
+  t('dragging the right edge resizes the rail (340px target)', Math.abs(s.width - 340) <= 2, String(s.width));
+  const clamps = await page.evaluate(() => [window.__winmuxSidebarWidth(999), window.__winmuxSidebarWidth(50)]);
+  t('the width clamps to 200–420', clamps[0] === 420 && clamps[1] === 200, clamps.join('/'));
+  await page.evaluate(() => window.__winmuxSidebarWidth(340));
+
+  // Persistence: the resting tab and the width both survive a reload.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(3000);
+  s = await state();
+  t('the active tab survives a reload', s.tab === 'projects', s.tab);
+  t('the rail width survives a reload', Math.abs(s.width - 340) <= 2, String(s.width));
+
+  // Narrow: the whole system goes dormant — strip gone, bell home in .sx-head,
+  // #npanel back on <body> for the settled bottom-sheet flow.
+  await page.setViewportSize({ width: 400, height: 800 });
+  await page.waitForTimeout(800);
+  const nr = await page.evaluate(() => ({
+    mode: document.querySelector('.cockpit').getAttribute('data-mode'),
+    strip: getComputedStyle(document.getElementById('sx-tabs')).display,
+    bellIn: document.getElementById('open-notif').parentElement.className,
+    npIn: document.getElementById('npanel').parentElement.tagName,
+    handle: getComputedStyle(document.getElementById('sx-resize')).display,
+    sess: getComputedStyle(document.getElementById('sxp-sessions')).display,
+  }));
+  t('narrow hides the strip and the resize handle', nr.mode === 'narrow' && nr.strip === 'none' && nr.handle === 'none', nr);
+  t('narrow sends the bell home to .sx-head and #npanel to <body>', /sx-head/.test(nr.bellIn) && nr.npIn === 'BODY', nr);
+  t('narrow always shows the Sessions panel', nr.sess === 'flex', nr.sess);
+
+  // And back: growing to desktop restores the strip arrangement.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForTimeout(800);
+  s = await state();
+  t('returning to desktop restores the strip arrangement', s.bellIn === 'sx-tabs' && s.npIn === 'sxp-notif' && s.tab === 'projects', s);
+  await shot(page, 'sidebar-tabs-restored');
 
   await page.close();
 });
