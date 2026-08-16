@@ -3127,7 +3127,9 @@ check('onboard', PORT_ONBOARD, async ({ browser, base, t, shot }) => {
     title: ((document.querySelector('.wc-title') || {}).textContent) || '',
     hasStart: !!document.getElementById('wc-start'),
     hasPhone: !!document.getElementById('wc-phone'),
-    points: document.querySelectorAll('.wc-pt').length,
+    // Scoped to the welcome card: the agents-guide overlay reuses .wc-pt rows,
+    // and this check is about the welcome's three points, not the whole page.
+    points: document.querySelectorAll('#welcome-ovl .wc-pt').length,
   }));
   const first = await w();
   t('a first-time visitor is greeted by the welcome', first.open === true, first);
