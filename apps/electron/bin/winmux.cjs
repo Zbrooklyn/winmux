@@ -260,6 +260,7 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
         //   "<prompt>"               run headless Claude (`claude -p`)
         //   "<prompt>" --tui         run interactive Claude Code, streaming in the pane
         //   --split right|down       open in a split pane of the current tab
+        //   --model <m>              worker model (default sonnet; 'inherit' = account default)
         // PowerShell-family shells.
         const os = require('os');
         const psq = (s) => "'" + String(s).replace(/'/g, "''") + "'";   // PowerShell single-quote escape
@@ -269,6 +270,11 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
         const prompt = (argv[2] && !argv[2].startsWith('--')) ? argv[2] : null;
         const tui = has(argv, '--tui');
         const splitDir = flag(argv, '--split');
+        // Workers default to Sonnet — spawning fleets on the account-default (top-tier)
+        // model burns the budget. --model sonnet|haiku|opus|<full-id> overrides;
+        // --model inherit uses the account default.
+        const model = (flag(argv, '--model') || 'sonnet').toLowerCase();
+        const modelArg = model === 'inherit' ? '' : '--model ' + model + ' ';
         if (!rawCmd && !prompt) die('spawn needs a prompt or --cmd: winmux agent spawn "fix the failing test"  |  winmux agent spawn --cmd "npm test"');
         if (tui && !prompt) die('--tui runs interactive Claude Code and needs a prompt, not --cmd');
         let sid = null;
@@ -301,15 +307,17 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
           // Worker hooks (working/done lanes, no idle-notification noise) when present.
           const hooks = path.join(__dirname, '..', 'config', 'claude-hooks-worker.json');
           const pf = path.join(dir, 'prompt.txt');
+          // Imperative, this-turn contract: weaker models read "when you are done"
+          // as future protocol and stall waiting for another instruction.
           fs.writeFileSync(pf, prompt +
-            ' When you are completely done: 1) write your full final answer to the file ' + rf.replace(/\\/g, '/') +
-            ' using the Write tool, 2) then run this exact Bash command: node "' + cliPath.replace(/\\/g, '/') + '" agent done --job ' + jobId + ' --result-file "' + rf.replace(/\\/g, '/') + '"', 'utf8');
+            ' The above is your ENTIRE assignment. Do it now, then in this same turn, without asking anything: 1) write your full final answer to the file ' + rf.replace(/\\/g, '/') +
+            ' using the Write tool, 2) run this exact Bash command: node "' + cliPath.replace(/\\/g, '/') + '" agent done --job ' + jobId + ' --result-file "' + rf.replace(/\\/g, '/') + '". You are not finished until step 2 has run.', 'utf8');
           lines.push('[Console]::OutputEncoding=[System.Text.Encoding]::UTF8');
           lines.push('$__p = Get-Content -Raw -LiteralPath ' + psq(pf));
-          lines.push((fs.existsSync(hooks) ? 'claude --settings ' + psq(hooks) + ' ' : 'claude ') + '--dangerously-skip-permissions $__p');
+          lines.push((fs.existsSync(hooks) ? 'claude --settings ' + psq(hooks) + ' ' : 'claude ') + modelArg + '--dangerously-skip-permissions $__p');
         } else {
           let taskExpr = rawCmd;
-          if (!rawCmd) { const pf = path.join(dir, 'prompt.txt'); fs.writeFileSync(pf, prompt, 'utf8'); taskExpr = 'Get-Content -Raw -LiteralPath ' + psq(pf) + ' | claude -p'; }
+          if (!rawCmd) { const pf = path.join(dir, 'prompt.txt'); fs.writeFileSync(pf, prompt, 'utf8'); taskExpr = 'Get-Content -Raw -LiteralPath ' + psq(pf) + ' | claude -p ' + modelArg.trim(); }
           lines.push('& { ' + taskExpr + ' } *>&1 | Tee-Object -FilePath ' + psq(rf) + ' | Out-Host');
           lines.push('$__x = $LASTEXITCODE');
           lines.push('if ($null -eq $__x -or $__x -eq 0) { & node ' + psq(cliPath) + ' agent done --job ' + jobId + ' --result-file ' + psq(rf) +
@@ -325,6 +333,19 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
           await sleep(750);
         }
         await rpc('send', { data: '& ' + psq(launcher), enter: true, target: String(sid) });
+        if (tui) {
+          // A worker in an untrusted folder stalls forever on Claude Code's one-time
+          // workspace-trust dialog. The caller explicitly asked for an autonomous
+          // worker here (it already runs --dangerously-skip-permissions), so answer
+          // the dialog; stop watching once the TUI is up.
+          for (let i = 0; i < 25; i++) {
+            await sleep(2000);
+            const sc = await rpc('read-screen', { target: String(sid), lines: 30 }).catch(() => null);
+            const s = (sc && sc.screen) || '';
+            if (/trust this folder/i.test(s)) { await rpc('send', { data: '', enter: true, target: String(sid) }); break; }
+            if (/shift\+tab|bypass permissions|for shortcuts/i.test(s)) break;
+          }
+        }
         return emit('spawned job ' + jobId + ' in session ' + sid + '  —  winmux agent wait --job ' + jobId, { jobId, sid, job: reg.job });
       }
       if (JOB_VERBS.indexOf(state) >= 0 || ((state === 'done' || state === 'failed') && flag(argv, '--job'))) {

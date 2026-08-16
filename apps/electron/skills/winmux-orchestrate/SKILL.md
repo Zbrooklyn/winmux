@@ -11,18 +11,28 @@ You are running inside a WinMux tab (`WINMUX_SID` = your tab id, `WINMUX_PORT` =
 
 If tools named `winmux_agent_spawn`, `winmux_agent_wait`, and `winmux_agent_result` are available, use them — no shell commands needed:
 
-1. `winmux_agent_spawn` with `{ task, name, cwd, split }` → returns `{ jobId }`. `split: "right"` for the first worker and `"down"` for later ones opens them in split panes of the current tab (use when the user wants to watch sessions side by side); omit `split` for new tabs.
+1. `winmux_agent_spawn` with `{ task, name, cwd, split, model }` → returns `{ jobId }`. `split: "right"` for the first worker and `"down"` for later ones opens them in split panes of the current tab (use when the user wants to watch sessions side by side); omit `split` for new tabs.
 2. `winmux_agent_wait` with `{ jobId, timeoutSec: 300 }` → job state. `"working"` means the timeout elapsed — call it again with the same jobId.
 3. `winmux_agent_result` with `{ jobId }` → the worker's full result.
 
 ## Fallback: the winmux CLI (Bash)
 
-    node "C:/Users/EDWAR/Dropbox/AI_Projects_Claude/projects/winmux/apps/electron/bin/winmux.cjs" agent spawn "<task>" --tui --name "<short label>" --cwd "<dir>" [--split right|down] --json
+    node "C:/Users/EDWAR/Dropbox/AI_Projects_Claude/projects/winmux/apps/electron/bin/winmux.cjs" agent spawn "<task>" --tui --name "<short label>" --cwd "<dir>" [--split right|down] [--model sonnet|haiku|opus|inherit] --json
 
 Returns `{"jobId": ...}`. Then wait / read with the same CLI:
 
     node ".../bin/winmux.cjs" agent wait --job <jobId> --timeout 300     (exit 3 = still working, run again)
     node ".../bin/winmux.cjs" agent result --job <jobId>
+
+## Choose each worker's model (token budget)
+
+Pick `model` per task — spawning every worker on the account-default top-tier model burns the budget:
+
+- **Omit / `"sonnet"` (the default)** — reviews, plans, audits, research, code reading, routine builds. Use this unless you have a reason not to.
+- **`"haiku"`** — trivial mechanical tasks: run a command and summarize, format, extract, simple checks.
+- **`"opus"` or `"inherit"` (account default)** — ONLY when the task genuinely needs top-tier reasoning (hard debugging, subtle architecture, high-stakes judgment), and say so in your summary.
+
+If the user names a model, that wins.
 
 ## Rules
 

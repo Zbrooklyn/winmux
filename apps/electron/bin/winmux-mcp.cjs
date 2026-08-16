@@ -74,14 +74,15 @@ const TOOLS = [
     schema: { type: 'object', properties: { state: { type: 'string', enum: ['working', 'needs-you', 'done', 'idle'] }, message: { type: 'string' }, id: { type: 'number' } }, required: ['state'] },
     cmd: 'agent', map: (a) => ({ state: a.state, message: a.message, target: a.id }) },
   // --- orchestration: spawn a worker session and track its job as data ------
-  { name: 'winmux_agent_spawn', desc: 'Spawn a worker Claude Code session in a new WinMux tab (or split pane) to do a task, registered as a job. Streams live in the pane; the worker reports its own completion + result. Returns { jobId, sid }. split: "right"|"down" opens a split pane of the current tab (use when the user wants sessions side by side); omit for a new tab. headless runs `claude -p` instead of the interactive session.',
-    schema: { type: 'object', properties: { task: { type: 'string' }, name: { type: 'string' }, cwd: { type: 'string' }, split: { type: 'string', enum: ['right', 'down'] }, headless: { type: 'boolean' } }, required: ['task'] },
+  { name: 'winmux_agent_spawn', desc: 'Spawn a worker Claude Code session in a new WinMux tab (or split pane) to do a task, registered as a job. Streams live in the pane; the worker reports its own completion + result. Returns { jobId, sid }. split: "right"|"down" opens a split pane of the current tab (use when the user wants sessions side by side); omit for a new tab. model picks the worker model — default "sonnet" (cost-safe); "haiku" for trivial mechanical tasks; "opus" or "inherit" (account default) only when the task genuinely needs top-tier reasoning. headless runs `claude -p` instead of the interactive session.',
+    schema: { type: 'object', properties: { task: { type: 'string' }, name: { type: 'string' }, cwd: { type: 'string' }, split: { type: 'string', enum: ['right', 'down'] }, model: { type: 'string' }, headless: { type: 'boolean' } }, required: ['task'] },
     run: async (a) => {
       const args = ['agent', 'spawn', a.task, '--json'];
       if (!a.headless) args.push('--tui');
       if (a.name) args.push('--name', a.name);
       if (a.cwd) args.push('--cwd', a.cwd);
       if (a.split) args.push('--split', a.split);
+      if (a.model) args.push('--model', a.model);
       const r = await cli(args, 120000);
       if (r.code !== 0) throw new Error(r.err || r.out || 'spawn failed');
       const j = JSON.parse(r.out);
