@@ -26,6 +26,7 @@ Feel is measured, not argued (Rule 21 sibling): every claim in this arc is a bef
 Strict ratings; "unmeasured" scores low on principle — we don't get credit for speed we can't prove.
 
 1. Do we know, in numbers, our slowest user-facing actions? — Startup/typing measured; the ~12 daily actions never measured. **2/10** → IF-2.
+   **IF-2 partial result (2026-08-16): perf-actions.cjs landed (13 probes, idle + --load). Dev-stack baseline: idle worst 31ms, under 10-stream load worst 38ms — chrome actions are instant in a clean browser. Re-rated 2→6.** Remaining to 10: measure inside the installed Electron shells, the webview browser leaf, startup/window-restore, typing echo on the Rust engine, and Edward's named slow moments.
 2. Does every input acknowledge within ~100ms? — Unmeasured; code suspects say no. **3/10 (unproven)** → IF-2 then IF-3.
 3. Is anything artificially delayed? — Yes: 400ms welcome, 60ms click chains, assorted throttles; some justified, none revisited since written. **4/10** → IF-3.
 4. Is work done on the click path that could happen before or after? — Settings rebuilds its whole DOM on open; some opens fetch before paint. **4/10 (suspected)** → IF-3.
