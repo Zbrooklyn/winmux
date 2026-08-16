@@ -48,6 +48,7 @@ Same law as the instant-feel arc: feel is measured, not argued. Every unit ships
 
 - **SP-7 — Ship + hand-feel gate.** Full harness green (with the new checks), action table + echo probe re-run on the installed build, release (v0.2.4), Edward's hands on the real app.
   **Done:** release live; Edward says it feels instant — the box only he can check.
+- **SP-7 ✅ (release live; Edward's hand-feel is the one open box).** **444/444 on BOTH engines** (Node and Rust, same frozen check code) — the first-ever full Rust-engine run since the PT arc, which surfaced and fixed four harness debts: prediction earned in rounds (slow-echo shutoff is by design), buffer reads instead of `.xterm-rows` (the phone terminal now genuinely gets WebGL), a run-start sweep of persisted workspace/instance state (each run starts from the fresh-clone slate), and the resume template written through the engine config (the PT-6 authority). Release: [v0.2.4](https://github.com/Zbrooklyn/winmux/releases/tag/v0.2.4) (id 371416075), tag on master eea844b, all four installers uploaded. Installed 0.2.4 primary re-proven: attach 1,123ms cold, **every action ≤22ms**; Tauri updated to 0.2.4 (engine reports 0.2.4); Node + Rust identities staged, not installed (live sessions). Screenshot of the shipped app delivered.
 
 ## Scorecard (strict; baseline from the instant-feel arc where shared)
 
