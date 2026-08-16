@@ -311,6 +311,34 @@ function writeConfigAtomic(obj) {
   } catch (e) { return false; }
 }
 
+// The live workspace file (PT-3). Per-identity: derived from the instance file's
+// name (instance.json → workspace.json, instance.rust.json → workspace.rust.json)
+// so each installed identity keeps its own, exactly like discovery and trust.
+// WINMUX_WORKSPACE_FILE overrides for tests. Under WINMUX_NO_INSTANCE with no
+// override there is no identity to own a file, so the workspace is held in memory
+// only — a harness or perf server must never write into the real ~/.winmux.
+const WORKSPACE_FILE = process.env.WINMUX_WORKSPACE_FILE || (() => {
+  if (process.env.WINMUX_NO_INSTANCE) return null;   // memory-only
+  const inst = process.env.WINMUX_INSTANCE_FILE || path.join(os.homedir(), '.winmux', 'instance.json');
+  return path.join(path.dirname(inst), path.basename(inst).replace(/^instance/, 'workspace'));
+})();
+let memWorkspace = null;
+function readWorkspace() {
+  if (!WORKSPACE_FILE) return memWorkspace;
+  try { const w = JSON.parse(fs.readFileSync(WORKSPACE_FILE, 'utf8')); return (w && typeof w === 'object') ? w : null; }
+  catch (e) { return null; }
+}
+function writeWorkspace(doc) {
+  if (!WORKSPACE_FILE) { memWorkspace = doc; return true; }
+  try {
+    fs.mkdirSync(path.dirname(WORKSPACE_FILE), { recursive: true });
+    const tmp = WORKSPACE_FILE + '.' + process.pid + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(doc, null, 2));
+    fs.renameSync(tmp, WORKSPACE_FILE);
+    return true;
+  } catch (e) { return false; }
+}
+
 // ---- projects: workspaces saved as real files on disk -----------------------
 // A project is a `.json` the user can back up, move, or share; the server owns the
 // filesystem so every face (Electron, browser, phone) and both engines reach it the
@@ -849,6 +877,37 @@ function handle(req, res, viaPhone) {
     }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({ ok: true, config: readConfig() }));
+    return;
+  }
+
+  // The live workspace — the always-auto-saved current layout (STATE.md contract).
+  // The engine owns it as a real file so it survives a wiped browser profile and a
+  // reinstall; the window's localStorage copy is only a warm cache. One workspace
+  // per installed identity, so the file rides the identity's instance-file name
+  // (instance.rust.json → workspace.rust.json). Desk-door only, like projects: the
+  // phone attaches to the desk's workspace and never owns one.
+  if (urlPath === '/api/workspace') {
+    if (viaPhone) {
+      res.writeHead(403, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ error: 'the workspace lives at the PC, not over the network' }));
+    }
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (d) => { body += d; if (body.length > 4000000) req.destroy(); });
+      req.on('end', () => {
+        let incoming = {};
+        try { incoming = JSON.parse(body || '{}') || {}; } catch (e) {}
+        const ok = (incoming.workspace && typeof incoming.workspace === 'object')
+          ? writeWorkspace({ winmuxWorkspace: 1, savedAt: Date.now(), workspace: incoming.workspace })
+          : false;
+        res.writeHead(ok ? 200 : 400, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok }));
+      });
+      return;
+    }
+    const doc = readWorkspace();
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ ok: true, workspace: doc ? doc.workspace : null, savedAt: doc ? doc.savedAt || 0 : 0 }));
     return;
   }
 

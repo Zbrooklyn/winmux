@@ -399,6 +399,7 @@ async fn main() {
         .route("/api/findpath", get(api_findpath))
         .route("/api/clip", get(api_clip_get).post(api_clip_post))
         .route("/api/config", get(api_config_get).post(api_config_post))
+        .route("/api/workspace", get(api_workspace_get).post(api_workspace_post))
         .route("/api/projects", get(api_projects_list))
         .route("/api/project", get(api_project_get).post(api_project_post).delete(api_project_delete))
         .route("/api/update", get(api_update))
@@ -1114,6 +1115,7 @@ fn phone_router(state: Arc<AppState>) -> Router {
         // Desk-door only over the tailnet: reading the host disk is refused even
         // with a valid key (#210).
         .route("/api/md", get(phone_denied))
+        .route("/api/workspace", get(phone_denied).post(phone_denied))
         .route("/api/findpath", get(phone_denied))
         .route("/api/claude-sessions", get(phone_denied))
         .route("/api/projects", get(phone_denied))
@@ -1287,6 +1289,58 @@ async fn api_config_post(Json(incoming): Json<Value>) -> impl IntoResponse {
     let tmp = file.with_extension(format!("{}.tmp", std::process::id()));
     let ok = std::fs::write(&tmp, cur.to_string()).and_then(|_| std::fs::rename(&tmp, &file)).is_ok();
     Json(json!({"ok": ok}))
+}
+
+// ---- /api/workspace (desk-door only) -------------------------------------
+// The live workspace — the always-auto-saved current layout (STATE.md contract,
+// PT-3). Same semantics as server.cjs, byte-for-byte on the wire: the file is
+// per-identity, derived from the instance file's name (instance.rust.json →
+// workspace.rust.json); WINMUX_WORKSPACE_FILE overrides for tests; under
+// WINMUX_NO_INSTANCE with no override the workspace is held in memory only so a
+// harness never writes into the real ~/.winmux.
+fn workspace_file() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("WINMUX_WORKSPACE_FILE") { return Some(PathBuf::from(p)); }
+    if std::env::var("WINMUX_NO_INSTANCE").is_ok() { return None; }
+    let inst = std::env::var("WINMUX_INSTANCE_FILE").map(PathBuf::from).unwrap_or_else(|_| {
+        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
+        PathBuf::from(home).join(".winmux").join("instance.json")
+    });
+    let name = inst.file_name().and_then(|n| n.to_str()).unwrap_or("instance.json")
+        .replacen("instance", "workspace", 1);
+    Some(inst.parent().map(|p| p.join(&name)).unwrap_or_else(|| PathBuf::from(name)))
+}
+static MEM_WORKSPACE: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+fn read_workspace() -> Option<Value> {
+    match workspace_file() {
+        None => MEM_WORKSPACE.lock().unwrap().clone(),
+        Some(f) => std::fs::read_to_string(f).ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .filter(|v| v.is_object()),
+    }
+}
+async fn api_workspace_get() -> impl IntoResponse {
+    let doc = read_workspace();
+    let ws = doc.as_ref().and_then(|d| d.get("workspace")).cloned().unwrap_or(Value::Null);
+    let saved = doc.as_ref().and_then(|d| d.get("savedAt")).and_then(|v| v.as_i64()).unwrap_or(0);
+    Json(json!({"ok": true, "workspace": ws, "savedAt": saved}))
+}
+async fn api_workspace_post(Json(incoming): Json<Value>) -> impl IntoResponse {
+    let ws = incoming.get("workspace").filter(|v| v.is_object());
+    let Some(ws) = ws else {
+        return (StatusCode::BAD_REQUEST, Json(json!({"ok": false})));
+    };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64).unwrap_or(0);
+    let doc = json!({"winmuxWorkspace": 1, "savedAt": now, "workspace": ws});
+    let ok = match workspace_file() {
+        None => { *MEM_WORKSPACE.lock().unwrap() = Some(doc); true }
+        Some(file) => {
+            if let Some(dir) = file.parent() { let _ = std::fs::create_dir_all(dir); }
+            let tmp = file.with_extension(format!("{}.tmp", std::process::id()));
+            std::fs::write(&tmp, doc.to_string()).and_then(|_| std::fs::rename(&tmp, &file)).is_ok()
+        }
+    };
+    (if ok { StatusCode::OK } else { StatusCode::INTERNAL_SERVER_ERROR }, Json(json!({"ok": ok})))
 }
 
 // ---- /api/projects + /api/project (desk-door only) ----------------------

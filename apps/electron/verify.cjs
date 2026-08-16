@@ -111,6 +111,7 @@ const PORT_PREDICT = 9958;    // Phase 2: pwsh PSReadLine inline history predict
 const PORT_IMAGES = 9959;     // Phase 3: inline images (addon-image) + `winmux image` verb
 const PORT_DPRFIX = 9977;     // MR-1: a devicePixelRatio-stuck WebGL canvas is resynced (prompt-float fix)
 const PORT_AGENTJOB = 9968;   // Stage 3: server-side agent-job store (spawn/wait/result), no browser needed
+const PORT_WORKSPACE = 9978;  // PT-3: the engine-owned workspace file survives a wiped browser profile
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -1267,6 +1268,51 @@ check('reload', PORT_RELOAD, async ({ browser, base, t, shot }) => {
   }
 });
 
+// PT-3: the engine owns the workspace as a real file, so the layout survives a
+// wiped browser profile (STATE.md invariant: losing the workspace should require
+// deleting the file on purpose). Two pages, two isolated browser contexts: the
+// first builds a two-tab layout and we assert the engine's file holds it; the
+// second boots with EMPTY localStorage — the wiped-profile case that used to mean
+// total layout loss — and must come back with both tabs, restored from the engine.
+check('workspace', PORT_WORKSPACE, async ({ browser, base, t, shot }) => {
+  const wsFile = path.join(OUT, 'workspace-' + PORT_WORKSPACE + '.json');
+  try { fs.unlinkSync(wsFile); } catch (e) {}
+  const pageA = await desktop(browser);
+  try {
+    await pageA.goto(base, { waitUntil: 'domcontentloaded' });
+    await pageA.waitForTimeout(3500);
+    await pageA.evaluate(() => document.getElementById('open-new').click());
+    await pageA.waitForTimeout(4000);   // sid learned → persistLive → throttled push lands
+    const tabsA = await pageA.evaluate(() => document.querySelectorAll('.ptab').length);
+    t('two terminal tabs are open in the first window', tabsA >= 2, { tabsA });
+
+    // The engine's copy: real file on disk, wrapped and stamped.
+    let doc = null;
+    try { doc = JSON.parse(fs.readFileSync(wsFile, 'utf8')); } catch (e) {}
+    t('the engine wrote the workspace file', !!doc, { wsFile, exists: fs.existsSync(wsFile) });
+    t('the file is a stamped workspace document, not a bare blob',
+      !!doc && doc.winmuxWorkspace === 1 && doc.savedAt > 0 && doc.workspace && typeof doc.workspace === 'object',
+      doc && { winmuxWorkspace: doc.winmuxWorkspace, savedAt: doc.savedAt });
+    const apiGet = JSON.parse((await get(base + '/api/workspace')).body);
+    t('GET /api/workspace returns the same layout the file holds',
+      apiGet.ok === true && JSON.stringify(apiGet.workspace) === JSON.stringify(doc && doc.workspace));
+  } finally {
+    await pageA.close();   // beforeunload flushes a final keepalive save
+  }
+
+  // A brand-new browser context: empty localStorage, i.e. the wiped profile.
+  const pageB = await desktop(browser);
+  try {
+    await pageB.goto(base, { waitUntil: 'domcontentloaded' });
+    await pageB.waitForTimeout(4500);   // engine round-trip + restore + reattach
+    const tabsB = await pageB.evaluate(() => document.querySelectorAll('.ptab').length);
+    t('a fresh profile restores the layout from the engine (both tabs back)', tabsB >= 2, { tabsB });
+    await shot(pageB, 'workspace-survives-profile-wipe');
+  } finally {
+    await pageB.close();
+  }
+}, { WINMUX_WORKSPACE_FILE: path.join(OUT, 'workspace-9978.json') });
+
 // ST6: non-terminal leaves survive a page reload. Both a diff leaf AND a markdown
 // leaf, opened as pane tabs, must be persisted in the live snapshot and rebuilt on
 // reload — before ST6, snapshot() filtered leaves out, so they vanished. This proves
@@ -1686,8 +1732,10 @@ check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
   await p.close();
 
   // The phone can only show one level at a time, so it is three screens. This
-  // context is a fresh browser — one group, one terminal — so the walk starts at
-  // the bottom and climbs, which is exactly the back-arrow chain a phone needs.
+  // context is a fresh browser with empty storage — which, since PT-3, means it
+  // inherits the engine-owned shared workspace (STATE.md: one workspace per
+  // identity), so it arrives holding the desk's two groups. The walk still starts
+  // at the bottom and climbs, which is exactly the back-arrow chain a phone needs.
   const ph = await phoneCtx(browser);
   await ph.goto(base + '/', { waitUntil: 'domcontentloaded' });
   await ph.waitForTimeout(5000);
@@ -1740,7 +1788,11 @@ check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
   await ph.click('#nhead-ctx');
   await ph.waitForTimeout(600);
   const phRows = await ph.evaluate(SIDEBAR);
-  t('the phone group list shows both groups', phRows.rows.length === 2, phRows.rows.map((r) => r.name));
+  // The desk's two groups came in with the shared workspace; the phone's new
+  // group joins them — three groups, nothing lost and nothing duplicated.
+  t('the phone group list shows the shared groups plus the new one',
+    phRows.rows.length === 3 && phRows.rows.some((r) => r.name === 'Phone group'),
+    phRows.rows.map((r) => r.name));
   await shot(ph, 'phone-groups');
 
   // And the way back down: group → its sessions → a terminal.

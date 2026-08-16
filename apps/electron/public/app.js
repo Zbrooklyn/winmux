@@ -3349,7 +3349,32 @@
   // back in the running shells instead of orphaning them. Saved on the way out and
   // whenever a session id is first learned, so a crash that skips beforeunload still
   // leaves a recent copy. This is NOT a named layout; it is the working state.
-  function persistLive() { try { localStorage.setItem('ct-live', JSON.stringify(snapshot())); } catch (e) {} }
+  function persistLive() {
+    try { localStorage.setItem('ct-live', JSON.stringify(snapshot())); } catch (e) {}
+    pushWorkspace();
+  }
+  // The engine's copy of the workspace (STATE.md: the engine owns it as a real
+  // file; localStorage above is the warm cache). Pushes are throttled: layout
+  // churn (drag-resize, rapid splits) coalesces into one write every few seconds,
+  // with a trailing send so the last state always lands. Gated on workspaceReady
+  // exactly like configReady — until boot has read the engine copy once, nothing
+  // may overwrite it.
+  var workspaceReady = false;
+  var wsPushLast = 0, wsPushTimer = null;
+  function pushWorkspaceNow(keepalive) {
+    wsPushLast = Date.now();
+    try {
+      fetch('/api/workspace', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        keepalive: !!keepalive, body: JSON.stringify({ workspace: snapshot() }) }).catch(function () {});
+    } catch (e) {}
+  }
+  function pushWorkspace() {
+    if (!workspaceReady) return;
+    var since = Date.now() - wsPushLast;
+    if (since >= 2000) { pushWorkspaceNow(); return; }
+    if (wsPushTimer) return;
+    wsPushTimer = setTimeout(function () { wsPushTimer = null; pushWorkspaceNow(); }, 2000 - since);
+  }
   // Restoring a layout that spanned several groups must land each terminal back in
   // its own group, making any group the layout names but this browser lacks.
   function groupByName(name) {
@@ -4561,19 +4586,17 @@
   // the same running shells instead of silently starting a fresh one and orphaning the
   // old. Any session the server no longer holds simply returns as a fresh shell in its
   // slot. First-ever open (no saved state) gets the default single shell.
-  window.addEventListener('beforeunload', persistLive);
+  // On the way out, the throttle would eat the final save — flush it with a
+  // keepalive POST the browser is allowed to finish after the page dies.
+  window.addEventListener('beforeunload', function () {
+    persistLive();
+    if (workspaceReady) pushWorkspaceNow(true);
+  });
   migrateLayoutsOnce();   // fold any old browser-storage layouts into project files, once
   var restored = false;
-  try {
-    var liveState = JSON.parse(localStorage.getItem('ct-live') || 'null');
-    // restoreLayout validates, migrates, and is crash-safe; trust its verdict so a
-    // refused or failed restore falls through to a clean default rather than a lie.
-    if (liveState) restored = restoreLayout(liveState);
-  } catch (e) {}
-  // If this window is still bound to a project, treat the restored layout as the
-  // saved baseline so save-on-close only fires on changes made this session.
-  try { if (readCurrent()) markProjectClean(); } catch (e) {}
-  if (!restored) {
+  var liveState = null;
+  try { liveState = JSON.parse(localStorage.getItem('ct-live') || 'null'); } catch (e) {}
+  function bootDefault() {
     // Wait for the real shell list before opening the first-ever tab, so it lands on the
     // true default (PowerShell 7 when installed) instead of the 'powershell' placeholder.
     // The pane frame is created now (instant), the shell attached once shellsReady settles
@@ -4581,6 +4604,34 @@
     var first = makePane(makeCol());
     focusPane(first.id);
     shellsReady.then(function () { newTerm(first, startShell()); });
+  }
+  function workspaceUp() {
+    // The engine copy has been consulted (or the engine is unreachable, in which
+    // case there is nothing to protect) — saves are safe now. Seed it immediately
+    // so the cache and the engine file converge on what this boot restored.
+    workspaceReady = true;
+    pushWorkspaceNow();
+  }
+  if (liveState) {
+    // Warm cache: restore instantly, no round-trip on the boot path. The cache was
+    // written by this window on its way out, so it is at least as fresh as the
+    // engine's copy. restoreLayout validates, migrates, and is crash-safe; trust
+    // its verdict so a refused restore falls through to a clean default, not a lie.
+    try { restored = restoreLayout(liveState); } catch (e) {}
+    try { if (readCurrent()) markProjectClean(); } catch (e) {}
+    if (!restored) bootDefault();
+    workspaceUp();
+  } else {
+    // No cache — a fresh install, or a wiped browser profile. This is exactly what
+    // the engine-owned workspace file exists for: ask the engine before falling
+    // back to the first-ever default. One localhost round-trip, fresh-boot only.
+    fetch('/api/workspace', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+      var ws = j && j.ok && j.workspace;
+      if (ws) { try { restored = restoreLayout(ws); } catch (e) {} }
+      try { if (readCurrent()) markProjectClean(); } catch (e) {}
+      if (!restored) bootDefault();
+      workspaceUp();
+    }).catch(function () { if (!restored) bootDefault(); workspaceUp(); });
   }
   applyMode();
   setTimeout(layoutAllTabs, 100);
