@@ -115,6 +115,7 @@ const PORT_WORKSPACE = 9978;  // PT-3: the engine-owned workspace file survives 
 const PORT_RECOVER = 9979;    // PT-4: Recent & recoverable — saved scrollbacks are listed, restorable, dismissable
 const PORT_CLOSEVERB = 9980;  // PT-5: Close project = unbind with three honest outcomes; Delete is real and confirmed
 const PORT_SOT = 9981;        // PT-6: the engine's config.json is the settings authority; localStorage is only a cache
+const PORT_LOCALECHO = 9982;  // SP-1: predictive local echo — instant paint, honest reconcile, no secret leak
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -1427,6 +1428,77 @@ check('sot', PORT_SOT, async ({ browser, base, t }) => {
     await page.close();
   }
 }, { WINMUX_CONFIG_FILE: path.join(OUT, 'sot-config.json') });
+
+// SP-1: instant typing (predictive local echo). A typed character paints the
+// same frame as the keystroke via an overlay — the buffer is never touched, so
+// reality always wins on reconcile. The guards are the contract: a masked
+// password prompt must never see its character predicted on screen, and typing
+// must re-earn prediction after echo returns.
+check('localecho', PORT_LOCALECHO, async ({ browser, base, t }) => {
+  const page = await desktop(browser, { gpuRenderer: false });
+  const ovShown = (ch) => page.evaluate((c) => new Promise((res) => {
+    const start = performance.now();
+    function look() {
+      const hit = [...document.querySelectorAll('.xterm-screen > div')].some((o) =>
+        o.style.pointerEvents === 'none' && o.style.display !== 'none' && o.textContent.endsWith(c));
+      if (hit) { res(Math.round(performance.now() - start)); return; }
+      if (performance.now() - start > 500) { res(-1); return; }
+      requestAnimationFrame(look);
+    }
+    look();
+  }), ch);
+  try {
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(4500);
+    await page.click('.xterm');
+    await page.waitForTimeout(300);
+    // Two echoed keystrokes earn prediction; the third must paint instantly.
+    for (const c of ['e', 'f']) { await page.keyboard.press(c); await page.waitForTimeout(300); }
+    await page.keyboard.press('g');
+    const ms = await ovShown('g');
+    t('a typed character is painted the same frame, ahead of the shell', ms >= 0 && ms <= 32, { ms });
+    // Reality wins: after the echo lands, the buffer holds the text and the
+    // overlay has stood down.
+    await page.waitForTimeout(600);
+    const rec = await page.evaluate(() => ({
+      rows: ((document.querySelector('.xterm-rows') || {}).innerText || '').replace(/\s+$/, ''),
+      ov: [...document.querySelectorAll('.xterm-screen > div')].some((o) => o.style.pointerEvents === 'none' && o.style.display !== 'none'),
+    }));
+    t('the shell echo reconciles — buffer truthful, overlay stood down', /efg$/.test(rec.rows) && !rec.ov, rec);
+    // The secret gate: a masked prompt must never see its keystroke predicted.
+    await page.keyboard.press('Escape');
+    await page.keyboard.type('Read-Host -AsSecureString -Prompt "Password"');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(1500);
+    await page.keyboard.press('x');
+    const leak = await ovShown('x');
+    t('a password keystroke is never painted predictively', leak === -1, { leak });
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(600);
+    // Prediction must re-earn itself once echo is back.
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(800);
+    for (const c of ['m', 'n']) { await page.keyboard.press(c); await page.waitForTimeout(300); }
+    await page.keyboard.press('o');
+    const back = await ovShown('o');
+    t('prediction returns after the secure prompt ends', back >= 0, { back });
+    // The off switch is honest: with the setting off, nothing predicts.
+    await page.evaluate(() => {
+      const s = JSON.parse(localStorage.getItem('ct-settings') || '{}'); s.localEcho = false;
+      localStorage.setItem('ct-settings', JSON.stringify(s));
+    });
+    await page.evaluate(() => fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: { localEcho: false } }) }));
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(4000);
+    await page.click('.xterm');
+    for (const c of ['p', 'q']) { await page.keyboard.press(c); await page.waitForTimeout(300); }
+    await page.keyboard.press('r');
+    const off = await ovShown('r');
+    t('the Settings switch really turns prediction off', off === -1, { off });
+  } finally {
+    await page.close();
+  }
+});
 
 // PT-5: the Close-project verb exists and is honest. Closing unbinds the window
 // from the named file and returns to the unnamed workspace — it never deletes the

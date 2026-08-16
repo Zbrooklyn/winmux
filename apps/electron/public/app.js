@@ -76,6 +76,7 @@
     cursorStyle: 'block', cursorBlink: true, scrollback: 5000,
     copyOnSelect: false, rightClickPaste: false, confirmClose: true,
     defaultShell: '', startFolder: '', gpuRenderer: true, ligatures: false, osNotify: true, clipSync: false,
+    localEcho: true,   // SP-1 instant typing — predictive echo overlay; guards shut it off around secrets/TUIs
     commandBlocks: false,   // Phase 4 prototype — status gutter beside each command; OFF until the look is approved
     quakeEnabled: false, quakeHotkey: 'Control+`',   // Phase 7 — global hotkey drop; OFF so no system key is grabbed by default (Electron only)
     // Auto-resume: the command template an armed tab re-runs in its folder when
@@ -1809,6 +1810,96 @@
       .catch(function () { done(false); });
   }
 
+  // ------------------------------------------ instant typing (SP-1 local echo)
+  // Predictive local echo, the Mosh technique: a typed character is painted the
+  // same frame as the keystroke, in an OVERLAY above the cursor cell — the
+  // terminal buffer is never touched, so a wrong guess can't corrupt anything
+  // and heals on the very next real byte from the shell (~85ms later, measured).
+  // Display is gated four ways, stacked as defence in depth:
+  //   1. confidence — shown only after recent keystrokes came back echoed, so a
+  //      password prompt (echo off) shuts prediction down after one keystroke;
+  //   2. the cursor line must not look like a secret prompt (heuristic);
+  //   3. the cells right of the cursor must be empty (no mid-line cover-ups);
+  //   4. the alternate screen (TUIs) never predicts.
+  // ASCII printables only; paste, control keys, and IME all clear and stand down.
+  function makePredictor(term, host) {
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:absolute;pointer-events:none;z-index:12;white-space:pre;display:none;';
+    var pending = [];        // typed chars awaiting their shell echo [{ch, at}]
+    var shown = '';          // what the overlay currently displays
+    var confidence = 0;      // consecutive confirmed echoes; display needs >= 2
+    var sweepTimer = null;
+    var SECRET = /passw|passphrase|secret|\bpin\b|passcode|token/i;
+    var dec = new TextDecoder();
+
+    function screenEl() { return host.querySelector('.xterm-screen'); }
+    function lineText() {
+      try {
+        var b = term.buffer.active;
+        var ln = b.getLine(b.baseY + b.cursorY);
+        return ln ? ln.translateToString(true) : '';
+      } catch (e) { return ''; }
+    }
+    function clearRight() {
+      try { return lineText().length <= term.buffer.active.cursorX; } catch (e) { return false; }
+    }
+    function paint() {
+      var s = screenEl();
+      if (!s) return;
+      if (ov.parentNode !== s) { s.style.position = 'relative'; s.appendChild(ov); }
+      var b = term.buffer.active;
+      var cw = s.clientWidth / term.cols, ch = s.clientHeight / term.rows;
+      ov.style.left = Math.round(b.cursorX * cw) + 'px';
+      ov.style.top = Math.round(b.cursorY * ch) + 'px';
+      ov.style.font = term.options.fontSize + 'px ' + term.options.fontFamily;
+      ov.style.lineHeight = ch + 'px';
+      ov.style.color = (themeColors().foreground || '#dadada');
+      ov.textContent = shown;
+      ov.style.display = 'block';
+    }
+    function clear() { if (shown) { shown = ''; ov.style.display = 'none'; } }
+    function sweep() {
+      // A keystroke whose echo never came back means echo is off (secret entry):
+      // confidence collapses and stays down until typing is visibly echoed again.
+      sweepTimer = null;
+      var now = Date.now();
+      while (pending.length && now - pending[0].at > 400) { confidence = 0; pending.shift(); }
+      if (pending.length) sweepTimer = setTimeout(sweep, 200);
+    }
+    return {
+      // Every user input from term.onData. Printable ASCII predicts; anything
+      // else (enter, arrows, backspace, paste, IME output) clears and resets.
+      key: function (d) {
+        if (!S.localEcho) return;
+        if (d.length !== 1 || d < ' ' || d > '~') { pending = []; clear(); return; }
+        try { if (term.buffer.active.type === 'alternate') { clear(); return; } } catch (e) {}
+        pending.push({ ch: d, at: Date.now() });
+        if (!sweepTimer) sweepTimer = setTimeout(sweep, 200);
+        var ok = confidence >= 2 && !SECRET.test(lineText()) && clearRight();
+        try { if (localStorage.getItem('ct-pred-debug')) console.log('[pred]', JSON.stringify({ d: d, conf: confidence, pend: pending.length, ok: ok, secret: SECRET.test(lineText()), clearR: clearRight() })); } catch (e) {}
+        if (ok) { shown += d; paint(); }
+      },
+      // Every output chunk, called just before term.write. Reality wins: the
+      // overlay stands down and the real paint replaces it within a frame.
+      data: function (raw) {
+        if (shown) clear();
+        if (!pending.length) return;             // fast path for streaming output
+        var plain;
+        try { plain = dec.decode(raw); } catch (e) { return; }
+        // Strip OSC + CSI noise so PSReadLine's recolouring still counts as echo.
+        plain = plain.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)?/g, '').replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '');
+        var now = Date.now();
+        while (pending.length) {
+          var p = pending[0], at = plain.indexOf(p.ch);
+          if (at !== -1) { confidence = Math.min(confidence + 1, 8); plain = plain.slice(at + 1); pending.shift(); continue; }
+          if (now - p.at > 400) { confidence = 0; pending.shift(); continue; }
+          break;                                  // still in flight — judge later
+        }
+      },
+      clear: clear,
+    };
+  }
+
   function newTerm(p, shellKey, cwd, seedSid, resumeCmd, resumeId, pinnedByHand, opts) {
     shellKey = shellKey || startShell();
     var id = ++termSeq;
@@ -1968,6 +2059,7 @@
       autoResumePending: false, _openedOnce: false,
     };
     if (t.resume) tabEl.classList.add('armed');   // restored/reopened armed tab shows the ↻ marker
+    t.pred = makePredictor(term, host);           // SP-1 instant typing — see makePredictor
     // A tab can be dragged into another pane, so never close over `p` — look the pane up live.
     function pn() { return paneById(t.paneId) || p; }
 
@@ -2153,6 +2245,7 @@
         // types onto a ready line. One-shot; a warm reattach cleared the pending
         // flag in the meta handler, so scheduleResume is a no-op there.
         scheduleResume();
+        if (t.pred) t.pred.data(ev.data);   // reality arrived — predictions stand down first
         term.write(new Uint8Array(ev.data));
         // A lost session with kept scrollback: once the fresh shell has printed and
         // gone quiet (so its startup clear is already done), reset and paint the
@@ -2221,6 +2314,7 @@
     t.retryNow = retryNow;
 
     term.onData(function (d) {
+      if (t.pred) t.pred.key(d);   // instant typing: paint the char this frame, reconcile on echo
       if (broadcastOn) {
         allTerms().forEach(function (x) { if (x.ws && x.ws.readyState === WebSocket.OPEN) x.ws.send(JSON.stringify({ t: 'i', d: d })); });
         return;
@@ -3819,6 +3913,7 @@
     if (t === 'Terminal') {
       return frow('Cursor style', '', sel('cursorStyle', [['block', 'Block'], ['underline', 'Underline'], ['bar', 'Bar']], S.cursorStyle)) +
         frow('Cursor blink', '', sw('cursorBlink', S.cursorBlink)) +
+        frow('Instant typing', 'Paints each key the moment you press it and reconciles with the shell a beat later. Turns itself off around password prompts and full-screen apps.', sw('localEcho', S.localEcho)) +
         frow('Scrollback lines', 'How much history each terminal keeps', '<input class="ctl" type="number" min="500" max="100000" step="500" value="' + S.scrollback + '" data-set="scrollback" style="width:92px">') +
         frow('Copy on select', 'Selecting text copies it straight away', sw('copyOnSelect', S.copyOnSelect)) +
         frow('Right-click pastes', 'Otherwise right-click opens the menu', sw('rightClickPaste', S.rightClickPaste)) +

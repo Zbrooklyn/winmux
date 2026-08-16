@@ -51,28 +51,40 @@ const RUST_EXE = path.join(ROOT, '..', '..', 'core', 'rust', 'target', 'release'
   await page.waitForTimeout(300);
 
   const samples = [];
+  const predicted = [];
   const chars = 'abcdefghijklmno'.split('');
   for (const c of chars) {
     await page.keyboard.press(c);
-    // Poll every frame until the char is the LAST non-space char on the prompt line.
-    const ms = await page.evaluate((ch) => new Promise((resolve) => {
+    // Two numbers per keystroke: when the char shows AT ALL (the SP-1 prediction
+    // overlay — the felt latency), and when the real shell echo lands in the rows.
+    const r = await page.evaluate((ch) => new Promise((resolve) => {
       const start = performance.now();
+      let pred = -1;
       function look() {
+        if (pred < 0) {
+          const hit = [...document.querySelectorAll('.xterm-screen > div')].some((o) =>
+            o.style.pointerEvents === 'none' && o.style.display !== 'none' && o.textContent.endsWith(ch));
+          if (hit) pred = Math.round(performance.now() - start);
+        }
         const rows = document.querySelector('.xterm-rows');
         const text = rows ? rows.innerText.replace(/\s+$/g, '') : '';
-        if (text.endsWith(ch)) { resolve(Math.round(performance.now() - start)); return; }
-        if (performance.now() - start > 3000) { resolve(-1); return; }
+        if (text.endsWith(ch)) { resolve({ echo: Math.round(performance.now() - start), pred }); return; }
+        if (performance.now() - start > 3000) { resolve({ echo: -1, pred }); return; }
         requestAnimationFrame(look);
       }
       look();
     }), c);
-    samples.push(ms);
+    samples.push(r.echo);
+    predicted.push(r.pred);
     await page.waitForTimeout(120);
   }
   const good = samples.filter((s) => s >= 0).sort((a, b) => a - b);
   const median = good[Math.floor(good.length / 2)];
-  console.log('samples(ms): ' + samples.join(', '));
+  const pGood = predicted.filter((s) => s >= 0).sort((a, b) => a - b);
+  console.log('echo samples(ms): ' + samples.join(', '));
+  console.log('predicted samples(ms): ' + predicted.join(', '));
   console.log(ENGINE + ' typing echo — median ' + median + 'ms, max ' + Math.max(...good) + 'ms, n=' + good.length);
+  if (pGood.length) console.log(ENGINE + ' FELT (predicted paint) — median ' + pGood[Math.floor(pGood.length / 2)] + 'ms, max ' + Math.max(...pGood) + 'ms, n=' + pGood.length + ' (first keystrokes earn confidence, so early ones are unpredicted by design)');
   await browser.close();
   server.kill();
   process.exit(0);
