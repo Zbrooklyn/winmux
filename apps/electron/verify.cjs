@@ -1785,6 +1785,11 @@ check('colour', PORT_COLOUR, async ({ browser, base, t, shot }) => {
   } finally { await lightPage.close(); }
 
   // The Settings picker has to actually reach the shell, not just the dropdown.
+  // Since PT-6 the engine's config.json is the settings authority and wins over
+  // the localStorage cache on boot — an earlier page in this check may already
+  // have POSTed its aurora settings here, which would honestly override a
+  // cache-only pin. So the palette pick goes to the authority too.
+  await post(base + '/api/config', JSON.stringify({ settings: { palette: 'ember', gpuRenderer: false } }));
   const ember = await desktop(browser);
   try {
     await ember.addInitScript(() => {
