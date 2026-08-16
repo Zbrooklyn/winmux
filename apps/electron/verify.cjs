@@ -2149,6 +2149,9 @@ check('electron', PORT_GROUPS, async ({ t }) => {
   // toggle reveals a hidden window. (A real keypress needs a human at a real display.)
   t('the global quake hotkey registers with the OS', !!json && json.quakeRegistered === true, json && { quakeRegistered: json.quakeRegistered, quakeError: json.quakeError });
   t('the quake toggle drops a hidden window into view', !!json && json.quakeDrops === true, json && { quakeDrops: json.quakeDrops });
+  // SP-2: the summon must be instant — the part main owns (position+show+focus)
+  // inside the 100ms budget, measured on the real window, every smoke run.
+  t('the summon reveals within the 100ms budget', !!json && typeof json.quakeMs === 'number' && json.quakeMs >= 0 && json.quakeMs <= 100, json && { quakeMs: json.quakeMs });
   t('the frameless tab bar resolves to a real drag handle',
     !!json && json.ptabsRegion === 'drag', json && json.ptabsRegion);
   t('the smoke run hit no error', !!json && !json.error, json && json.error);

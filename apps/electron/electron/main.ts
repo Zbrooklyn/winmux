@@ -324,6 +324,7 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
       const before = w.isVisible();     // false — just hid it
       dropQuake();
       result.quakeDrops = !before && w.isVisible();   // hidden -> revealed
+      result.quakeMs = lastQuakeMs;     // SP-2: summon must be <=100ms, measured
       applyQuake(false, '');            // release the key; the run stays headless
       w.hide();
     } catch (qe) {
@@ -349,9 +350,14 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
 // (Settings → Behaviour), so nothing grabs a system-wide key by default. The
 // renderer owns on/off + which key; main owns the OS binding and the show/hide.
 let quakeKey: string | null = null;
+// The speed arc's SP-2 contract: hotkey -> visible+focused in <=100ms. The part
+// main owns (this function) is timed on every summon and logged, so the number
+// is always one `[quake]` log line away instead of an argument.
+let lastQuakeMs = -1;
 function dropQuake(): void {
   if (!win) return;
   if (win.isVisible() && win.isFocused()) { win.hide(); return; }
+  const t0 = Date.now();
   // Land at the top-centre of whichever monitor the cursor is on — the classic
   // drop-down-terminal spot — then reveal and focus so you can type immediately.
   try {
@@ -362,6 +368,8 @@ function dropQuake(): void {
   } catch (e) { /* keep the window where it is if the display query fails */ }
   win.show();
   win.focus();
+  lastQuakeMs = Date.now() - t0;
+  console.log('[quake] summon ' + lastQuakeMs + 'ms');
 }
 function applyQuake(enabled: boolean, hotkey: string): boolean {
   if (quakeKey) { try { globalShortcut.unregister(quakeKey); } catch (e) { /* already gone */ } quakeKey = null; }
