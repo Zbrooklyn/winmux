@@ -261,6 +261,80 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
       }
       return emit('opened ' + opened.filter(Boolean).length + ' terminal(s) from ' + argv[1], { opened });
     }
+    if (cmd === 'transcript') {
+      // Per-turn history of a Claude Code session, read straight from its .jsonl
+      // (Phase 11's "richer transcript reader"). Pure local file read — works with
+      // no app or server attached, so an orchestrator can inspect what a worker
+      // actually did, turn by turn.
+      //   winmux transcript                          newest session for this cwd
+      //   winmux transcript --cwd <dir>              newest session for that cwd
+      //   winmux transcript --session <uuid>         that session, wherever it lives
+      //   winmux transcript --file <path.jsonl>      an exact transcript file
+      //   --turns N (default 20, 0 = all)  --full (untruncated text)  --json
+      const os = require('os');
+      const projRoot = path.join(os.homedir(), '.claude', 'projects');
+      // Claude Code encodes a project cwd by dashing every non-alphanumeric char
+      // (spaces and dots included — "Claude Folder" -> "Claude-Folder").
+      const encDir = (d) => path.join(projRoot, String(d).replace(/[^A-Za-z0-9-]/g, '-'));
+      let file = flag(argv, '--file');
+      if (!file && flag(argv, '--session')) {
+        const uuid = String(flag(argv, '--session')).replace(/[^a-zA-Z0-9-]/g, '');
+        try {
+          for (const d of fs.readdirSync(projRoot)) {
+            const p = path.join(projRoot, d, uuid + '.jsonl');
+            if (fs.existsSync(p)) { file = p; break; }
+          }
+        } catch (e) {}
+        if (!file) die('no transcript found for session ' + uuid);
+      }
+      if (!file) {
+        const dir = encDir(flag(argv, '--cwd') || process.cwd());
+        try {
+          const newest = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'))
+            .map((f) => ({ f, m: fs.statSync(path.join(dir, f)).mtimeMs }))
+            .sort((a, b) => b.m - a.m)[0];
+          if (newest) file = path.join(dir, newest.f);
+        } catch (e) {}
+        if (!file) die('no Claude transcripts for ' + (flag(argv, '--cwd') || process.cwd()) + ' (looked in ' + dir + ')');
+      }
+      let lines;
+      try { lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean); }
+      catch (e) { die('cannot read ' + file + ': ' + e.message); }
+      // Fold the raw entries into logical turns: consecutive same-role entries are
+      // one turn, and user entries that only carry tool_result blocks belong to the
+      // assistant's work, not to the human.
+      const turns = [];
+      for (const line of lines) {
+        let j; try { j = JSON.parse(line); } catch (e) { continue; }
+        if (j.type !== 'user' && j.type !== 'assistant') continue;
+        const raw = j.message && j.message.content;
+        const blocks = Array.isArray(raw) ? raw : (raw != null ? [{ type: 'text', text: String(raw) }] : []);
+        const texts = blocks.filter((b) => b && b.type === 'text' && b.text).map((b) => b.text);
+        const tools = blocks.filter((b) => b && b.type === 'tool_use' && b.name).map((b) => b.name);
+        const onlyResults = blocks.length > 0 && blocks.every((b) => b && b.type === 'tool_result');
+        const role = (j.type === 'user' && onlyResults) ? 'assistant' : j.type;
+        if (!texts.length && !tools.length && role === 'user') continue;   // pure tool_result / attachment noise
+        const last = turns[turns.length - 1];
+        if (last && last.role === role) {
+          last.text += (last.text && texts.length ? '\n' : '') + texts.join('\n');
+          last.tools.push(...tools);
+          last.end = j.timestamp || last.end;
+        } else if (texts.length || tools.length) {
+          turns.push({ n: turns.length + 1, role, start: j.timestamp || null, end: j.timestamp || null, text: texts.join('\n'), tools });
+        }
+      }
+      const want = flag(argv, '--turns') != null ? Number(flag(argv, '--turns')) : 20;
+      const shown = want > 0 ? turns.slice(-want) : turns;
+      if (has(argv, '--json')) return out({ file, turns: shown.map((t) => ({ n: t.n, role: t.role, start: t.start, end: t.end, tools: t.tools, text: has(argv, '--full') ? t.text : t.text.slice(0, 2000) })), totalTurns: turns.length });
+      if (!shown.length) return out('(no conversational turns in ' + file + ')');
+      const cap = has(argv, '--full') ? Infinity : 300;
+      return out(shown.map((t) => {
+        const when = t.start ? new Date(t.start).toLocaleTimeString() : '';
+        const tl = t.tools.length ? '  [tools: ' + t.tools.join(', ') + ']' : '';
+        const txt = t.text.length > cap ? t.text.slice(0, cap) + '…' : t.text;
+        return t.n + '. ' + t.role.toUpperCase() + (when ? ' ' + when : '') + tl + (txt ? '\n   ' + txt.replace(/\n/g, '\n   ') : '');
+      }).join('\n') + '\n(' + shown.length + ' of ' + turns.length + ' turns — ' + path.basename(file) + ')');
+    }
     if (cmd === 'agent') {
       // Agent lifecycle → cockpit state. `winmux agent <state> [message]`.
       // --sid targets a session (defaults to $WINMUX_SID so a hook needs no args);
@@ -282,7 +356,7 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
         if (!tp || !fs.existsSync(tp)) {
           try {
             const os2 = require('os');
-            const proj = path.join(os2.homedir(), '.claude', 'projects', process.cwd().replace(/[:\\\/.]/g, '-'));
+            const proj = path.join(os2.homedir(), '.claude', 'projects', process.cwd().replace(/[^A-Za-z0-9-]/g, '-'));
             const newest = fs.readdirSync(proj).filter((f) => f.endsWith('.jsonl'))
               .map((f) => ({ f, m: fs.statSync(path.join(proj, f)).mtimeMs }))
               .sort((a, b) => b.m - a.m)[0];
@@ -315,7 +389,7 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
             if (result == null) {
               try {
                 const os2 = require('os');
-                const proj = path.join(os2.homedir(), '.claude', 'projects', process.cwd().replace(/[:\\\/.]/g, '-'));
+                const proj = path.join(os2.homedir(), '.claude', 'projects', process.cwd().replace(/[^A-Za-z0-9-]/g, '-'));
                 const newest = fs.readdirSync(proj).filter((f) => f.endsWith('.jsonl'))
                   .map((f) => ({ f, m: fs.statSync(path.join(proj, f)).mtimeMs }))
                   .sort((a, b) => b.m - a.m)[0];

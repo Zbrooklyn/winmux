@@ -43,6 +43,10 @@ If the user names a model, that wins.
 
 This is for model/context management of sessions you spawned — it is NOT a way to give a worker new tasks or authorize work beyond the user's mandate (the no-sends rule below still stands).
 
+## Inspect what a worker actually did
+
+`winmux_transcript` with `{ cwd }` (the worker's --cwd) returns that session's per-turn history from its transcript on disk — role, time, tools used, text per turn; `{ session: "<uuid>" }` targets an exact session, `turns` limits to the last N. CLI fallback: `node ".../bin/winmux.cjs" transcript --cwd "<dir>" [--turns N] [--json]`. Use it when a job's result needs auditing (did the worker really run the tests it claims?) or after a `failed` job to see how far it got. Read-only — it never touches the worker.
+
 ## Rules
 
 - Put any safety constraints (e.g. "read-only on the repo: do not modify, create, or commit anything") inside the task text — the worker only knows what you tell it.

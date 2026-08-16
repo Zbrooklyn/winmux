@@ -104,6 +104,18 @@ const TOOLS = [
       if (r.code !== 0) throw new Error(r.err || r.out || 'slash failed');
       return { ok: true, sent: a.command };
     } },
+  { name: 'winmux_transcript', desc: "Per-turn history of a Claude Code session, read from its transcript on disk — what a worker actually did, turn by turn (role, time, tools used, text). Pick the session by cwd (newest session in that folder), by session uuid, or omit both for the newest session in the current folder. turns limits to the last N (default 20, 0 = all).",
+    schema: { type: 'object', properties: { cwd: { type: 'string' }, session: { type: 'string' }, turns: { type: 'number' }, full: { type: 'boolean' } } },
+    run: async (a) => {
+      const args = ['transcript', '--json'];
+      if (a.cwd) args.push('--cwd', String(a.cwd));
+      if (a.session) args.push('--session', String(a.session));
+      if (a.turns != null) args.push('--turns', String(a.turns));
+      if (a.full) args.push('--full');
+      const r = await cli(args, 60000);
+      if (r.code !== 0) throw new Error(r.err || r.out || 'transcript failed');
+      try { return JSON.parse(r.out); } catch (e) { return { raw: r.out }; }
+    } },
 ];
 
 // Run the winmux CLI as a child process (for tools that are client-side flows,
