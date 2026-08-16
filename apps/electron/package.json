@@ -2,7 +2,7 @@
   "name": "winmux",
   "version": "0.2.0",
   "private": true,
-  "description": "WinMux — a terminal multiplexer for Windows: one node-pty server with three faces (native Electron app, browser, and phone over Tailscale).",
+  "description": "A terminal multiplexer and agent cockpit for Windows — native desktop app, browser, and phone over Tailscale.",
   "license": "MIT",
   "author": "Zbrooklyn",
   "homepage": "https://github.com/Zbrooklyn/winmux#readme",

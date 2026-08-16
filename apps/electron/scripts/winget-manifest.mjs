@@ -28,8 +28,12 @@ const identifier = publisherId + '.' + packageName;             // Zbrooklyn.Win
 const url = arg('url', 'PLACEHOLDER_INSTALLER_URL');
 const sha = arg('sha', 'PLACEHOLDER_SHA256').toUpperCase();
 const MANIFEST_VERSION = '1.6.0';
-const homepage = (pkg.repository && (pkg.repository.url || pkg.repository)) || 'https://github.com/Zbrooklyn/winmux';
+// npm-style repository urls carry git+ / .git decorations; winget wants the plain page.
+const homepage = String((pkg.repository && (pkg.repository.url || pkg.repository)) || 'https://github.com/Zbrooklyn/winmux')
+  .replace(/^git\+/, '').replace(/\.git$/, '');
 const desc = pkg.description || 'A terminal multiplexer and agent cockpit — desktop, browser, and phone over Tailscale.';
+// Single-quote a YAML scalar so colons/dashes in free text never break the parse.
+const yq = (s) => "'" + String(s).replace(/'/g, "''") + "'";
 
 // A flat winget manifest is simple enough to emit without a YAML dependency.
 const versionYaml = [
@@ -69,7 +73,7 @@ const localeYaml = [
   'Publisher: ' + publisherId,
   'PackageName: ' + packageName,
   'License: ' + (pkg.license || 'MIT'),
-  'ShortDescription: ' + desc,
+  'ShortDescription: ' + yq(desc),
   'PackageUrl: ' + homepage,
   'ManifestType: defaultLocale',
   'ManifestVersion: ' + MANIFEST_VERSION,
