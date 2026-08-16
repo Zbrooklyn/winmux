@@ -1,6 +1,6 @@
 [package]
 name = "winmux-core"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 description = "WinMux v2 native core (Rust) — Stage 1 skeleton: serves public/ + /pty WebSocket over portable-pty."
 license = "MIT"

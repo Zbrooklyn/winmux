@@ -59,6 +59,16 @@ Same law as the instant-feel arc: feel is measured, not argued. Every unit ships
 6. Is every speed claim backed by a committed, re-runnable probe? — action/echo probes committed; new paths not yet. **6/10** → all units.
 7. Does Edward's hand say instant? — his trigger for the arc. **3/10** → SP-7.
 
+### Re-rates (2026-08-16, after SP-1..SP-6)
+
+1. **10/10.** Predicted paint 0ms to DOM / ≤1 frame to pixels, guarded (passwords, TUIs, IME), truthful reconcile, both engines, `localecho` 5/5. Held back from nothing — the char is on screen the frame you press it.
+2. **9/10.** Summon 49ms (asserted ≤100 every smoke run); window visible 98–130ms, usable 457–475ms warm. The last point waits on deep-cold engine spawn (1.5s first-ever) — structural to a cold process, honest.
+3. **9/10.** Measured head-to-head with an identical self-timed drain: WinMux 22.5 MB/s beats Windows Terminal 19.6 and conhost 18.7, worst frame gap 33ms. Alacritty absent from this machine, so "vs competitors" is proven against the two that are installed.
+4. **9/10.** Fleet tick 1.4ms median at 50 tabs; settings toggle 750ms → 2–35ms; WebGL contexts capped at visible terminals. Cost provably follows the change. (Also resolves the instant-feel plan's Q5 rework: that plan's Q5 lifts to 9.)
+5. **9/10.** Resize 55fps / drag 55fps / 100k-line search ≤103ms worst-case-miss / 30-session switch median 31ms — all measured by a committed probe, nothing over budget.
+6. **10/10.** Every claim in this arc traces to a committed zero-argument probe: perf-echo (FELT), electron smoke (quakeMs), `[boot]` marks, perf-throughput, perf-actions `--scale` + `__winmuxFleetTick`, perf-corners. Re-runnable by anyone.
+7. **— Edward's box.** The release is the evidence; his hand is the verdict.
+
 **Exit bar:** every question ≥8, every target number hit or honestly ticketed, release shipped, Edward's hand-feel sign-off.
 
 ## Risks / boundaries

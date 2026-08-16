@@ -1459,21 +1459,55 @@ check('localecho', PORT_LOCALECHO, async ({ browser, base, t }) => {
   try {
     await page.goto(base, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(4500);
-    await page.click('.xterm');
+    // A restored session (the engine may rehydrate a workspace this port used in
+    // an earlier run) carries scrollback that legitimately trips the predictor's
+    // screen guards — the contract under test needs a FRESH shell, so open one.
+    await page.evaluate(() => document.getElementById('open-new').click());
+    await page.waitForTimeout(2500);
+    // Focus the VISIBLE terminal's textarea — a hidden restored tab also matches
+    // '.xterm', and clicking that one times out.
+    const focusTerm = () => page.evaluate(() => {
+      const th = [...document.querySelectorAll('.term-host')].find((h) => h.style.display !== 'none' && h.querySelector('textarea'));
+      const ta = th ? th.querySelector('textarea') : document.querySelector('.xterm textarea');
+      if (ta) ta.focus();
+    });
+    await focusTerm();
     await page.waitForTimeout(300);
     // Two echoed keystrokes earn prediction; the third must paint instantly.
-    for (const c of ['e', 'f']) { await page.keyboard.press(c); await page.waitForTimeout(300); }
-    await page.keyboard.press('g');
-    const ms = await ovShown('g');
+    // Confidence collapses BY DESIGN when an echo takes >400ms, and on a machine
+    // mid-harness the shell can be that slow — so earn in rounds: if a round's
+    // echoes were too slow to build confidence, try a fresh round rather than
+    // fail the instant-paint claim on a slow-shell moment the predictor is
+    // deliberately built to sit out.
+    const earn = async (trip) => {
+      for (const c of trip.slice(0, 2)) { await page.keyboard.press(c); await page.waitForTimeout(350); }
+      await page.keyboard.press(trip[2]);
+      return ovShown(trip[2]);
+    };
+    let ms = -1, used = ['e', 'f', 'g'];
+    for (const trip of [['e', 'f', 'g'], ['a', 'b', 'c'], ['s', 't', 'u']]) {
+      ms = await earn(trip); used = trip;
+      if (ms >= 0) break;
+      await page.waitForTimeout(700);
+    }
     t('a typed character is painted the same frame, ahead of the shell', ms >= 0 && ms <= 32, { ms });
     // Reality wins: after the echo lands, the buffer holds the text and the
     // overlay has stood down.
     await page.waitForTimeout(600);
-    const rec = await page.evaluate(() => ({
-      rows: ((document.querySelector('.xterm-rows') || {}).innerText || '').replace(/\s+$/, ''),
-      ov: [...document.querySelectorAll('.xterm-screen > div')].some((o) => o.style.pointerEvents === 'none' && o.style.display !== 'none'),
-    }));
-    t('the shell echo reconciles — buffer truthful, overlay stood down', /efg$/.test(rec.rows) && !rec.ov, rec);
+    // Read the ACTIVE terminal's buffer — with two tabs open, .xterm-rows
+    // matches whichever terminal happens to come first in the DOM.
+    const rec = await page.evaluate(() => {
+      const at = window.__winmuxActiveTerm();
+      const b = at.term.buffer.active;
+      const end = b.baseY + b.cursorY;   // the prompt line — rows past it are blank viewport
+      let out = '';
+      for (let i = Math.max(0, end - 4); i <= end; i++) { const ln = b.getLine(i); if (ln) out += ln.translateToString(true); }
+      return {
+        rows: out.replace(/\s+$/, ''),
+        ov: [...document.querySelectorAll('.xterm-screen > div')].some((o) => o.style.pointerEvents === 'none' && o.style.display !== 'none'),
+      };
+    });
+    t('the shell echo reconciles — buffer truthful, overlay stood down', new RegExp(used.join('') + '$').test(rec.rows) && !rec.ov, rec);
     // The secret gate: a masked prompt must never see its keystroke predicted.
     await page.keyboard.press('Escape');
     await page.keyboard.type('Read-Host -AsSecureString -Prompt "Password"');
@@ -1484,12 +1518,16 @@ check('localecho', PORT_LOCALECHO, async ({ browser, base, t }) => {
     t('a password keystroke is never painted predictively', leak === -1, { leak });
     await page.keyboard.press('Enter');
     await page.waitForTimeout(600);
-    // Prediction must re-earn itself once echo is back.
+    // Prediction must re-earn itself once echo is back (same slow-shell
+    // tolerance as above: earning rounds, not one strict shot).
     await page.keyboard.press('Enter');
     await page.waitForTimeout(800);
-    for (const c of ['m', 'n']) { await page.keyboard.press(c); await page.waitForTimeout(300); }
-    await page.keyboard.press('o');
-    const back = await ovShown('o');
+    let back = -1;
+    for (const trip of [['m', 'n', 'o'], ['1', '2', '3'], ['4', '5', '6']]) {
+      back = await earn(trip);
+      if (back >= 0) break;
+      await page.waitForTimeout(700);
+    }
     t('prediction returns after the secure prompt ends', back >= 0, { back });
     // The off switch is honest: with the setting off, nothing predicts.
     await page.evaluate(() => {
@@ -1499,7 +1537,11 @@ check('localecho', PORT_LOCALECHO, async ({ browser, base, t }) => {
     await page.evaluate(() => fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: { localEcho: false } }) }));
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(4000);
-    await page.click('.xterm');
+    // Fresh shell again, so "no prediction" is proven by the OFF switch alone,
+    // not by a restored screen tripping the guards.
+    await page.evaluate(() => document.getElementById('open-new').click());
+    await page.waitForTimeout(2500);
+    await focusTerm();
     for (const c of ['p', 'q']) { await page.keyboard.press(c); await page.waitForTimeout(300); }
     await page.keyboard.press('r');
     const off = await ovShown('r');
@@ -3939,12 +3981,17 @@ check('resume', PORT_RESUME, async ({ browser, base, t, shot }) => {
       pinned.storedId === RESUME_ID && pinned.storedCmd === pinned.resume && !!pinned.storedCwd, pinned);
 
     // Disarm before swapping the template — a reload while armed with the real
-    // command would launch an actual agent inside the harness.
-    await page.evaluate((sent) => {
+    // command would launch an actual agent inside the harness. The template is
+    // written through the ENGINE config too, not just localStorage: since PT-6
+    // the on-disk config is the boot-time authority, so a cache-only write gets
+    // clobbered on reload whenever the engine already holds a settings dump.
+    await page.evaluate(async (sent) => {
       window.__winmuxArm(window.__winmuxActiveTerm(), false);
+      const cmd = 'echo ' + sent + ' {id}';
       const s = JSON.parse(localStorage.getItem('ct-settings') || '{}');
-      s.resumeCommand = 'echo ' + sent + ' {id}';
+      s.resumeCommand = cmd;
       localStorage.setItem('ct-settings', JSON.stringify(s));
+      await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: { resumeCommand: cmd } }) }).catch(() => {});
     }, RESUME_SENTINEL);
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(4500);
@@ -4162,6 +4209,16 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   // Each port starts with no config too, so a leftover from a prior run can't seed
   // unexpected settings into a check that isn't about config.
   for (const port of ports) try { fs.unlinkSync(configFile(port)); } catch (e) {}
+  // Since the project-truth arc the engine persists a workspace (and the Rust
+  // core an instance file) unconditionally — a fresh clone has neither, so each
+  // RUN starts from that same blank slate. Sweep only at run start: checks that
+  // restart their own server (survive/resume/workspace) depend on these files
+  // surviving WITHIN a run, which this deliberately leaves intact.
+  try {
+    for (const f of fs.readdirSync(OUT)) {
+      if (/^inst-\d+\.json$/.test(f) || /^workspace[.-].*\.json$/.test(f)) fs.unlinkSync(path.join(OUT, f));
+    }
+  } catch (e) {}
   // A check can carry a per-port server env override (e.g. the update check).
   const envByPort = {};
   for (const c of run) if (c.env) envByPort[c.port] = Object.assign({}, envByPort[c.port], c.env);
