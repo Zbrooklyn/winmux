@@ -1689,8 +1689,10 @@
     // "Empty" means empty *of this group* — a pane still holding another group's
     // terminals is not empty, it is just not showing them.
     if (visibleTerms(p).length === 0) {
-      // A pinned pane survives its last tab — it gets a fresh shell instead of disappearing.
-      if (p.terms.length === 0 && panes.length > 1 && !p.pinned) { closePane(p); return; }
+      // The split collapses even when other groups' hidden terms still live
+      // here (collapsePane re-homes them). A pinned or last-remaining pane
+      // survives with a fresh shell instead of disappearing.
+      if (collapsePane(p)) return;
       newTerm(p, startShell()); updateChrome(); return;
     }
     if (p.activeTermId === termId) {
@@ -2760,6 +2762,29 @@
     focusPane(panes[Math.max(0, idx - 1)].id);
     panes.forEach(fitActive);
   }
+  // Collapsing a split must not strand another group's terminals: a pane whose
+  // last visible tab went away may still home hidden terms from other groups.
+  // Those are re-parented to a surviving pane (shells keep running, exactly as
+  // if the tabs were dragged there) and then the pane closes. Returns false
+  // when the layout can't collapse — single pane, or the pane is pinned — so
+  // the caller respawns a shell instead.
+  function collapsePane(p) {
+    if (panes.length <= 1 || p.pinned) return false;
+    var np = null;
+    for (var i = 0; i < panes.length; i++) if (panes[i] !== p) { np = panes[i]; break; }
+    while (p.terms.length) {
+      var t = p.terms[0];
+      p.terms.splice(0, 1);
+      var mi = p.mru.indexOf(t.id); if (mi >= 0) p.mru.splice(mi, 1);
+      np.termArea.appendChild(t.host);
+      np.tabscroll.appendChild(t.tabEl);
+      t.paneId = np.id;
+      np.terms.push(t);
+    }
+    closePane(p);
+    layoutTabs(np);
+    return true;
+  }
   function askClosePane(p) {
     if (panes.length <= 1) return;
     // A pinned pane refuses to close — that is the whole point of pinning it.
@@ -2963,8 +2988,9 @@
     np.terms.push(t);
     var ovis = visibleTerms(op);
     if (ovis.length === 0) {
-      if (op.terms.length === 0 && panes.length > 1 && !op.pinned) closePane(op);
-      else newTerm(op, startShell());
+      // Same rule as closeTerm: hidden other-group terms ride along to a
+      // surviving pane instead of pinning the old pane open with a fresh shell.
+      if (!collapsePane(op)) newTerm(op, startShell());
     } else if (op.activeTermId === t.id) {
       var nid = null;
       for (var m = 0; m < op.mru.length && nid == null; m++) {
@@ -3775,10 +3801,21 @@
     var badge = p.missing
       ? '<span class="pjrow-miss">missing</span>'
       : '<span class="pjrow-badge">' + (p.tabs || 0) + ' tab' + (p.tabs === 1 ? '' : 's') + '</span>';
-    return '<div class="pjrow' + (p.missing ? ' missing' : '') + '" data-i="' + i + '" role="button" title="' + (p.missing ? 'File missing — click to remove' : 'Open this project') + '">' +
+    // The sidebar panel renders the same row in the sessions-list language: a
+    // folder tile instead of the bare dot, and a one-line sub ("open now" for
+    // the bound project) instead of the badge. Overlay CSS hides both extras.
+    var cur = readCurrent();
+    var isCur = !!(cur && cur.path === p.path && !p.missing);
+    var sub = p.missing
+      ? 'file missing — click to remove'
+      : (isCur ? 'open now · ' : '') + (p.tabs || 0) + ' tab' + (p.tabs === 1 ? '' : 's') +
+        (!isCur && p.opened ? ' · ' + ago(p.opened) : '');
+    return '<div class="pjrow' + (p.missing ? ' missing' : '') + '" data-i="' + i + '"' + (isCur ? ' data-current' : '') + ' role="button" title="' + (p.missing ? 'File missing — click to remove' : 'Open this project') + '">' +
       '<span class="pjrow-dot" style="background:' + folderColor(file) + '"></span>' +
+      '<span class="pjrow-folder" style="color:' + folderColor(file) + '">' + FOLDER_SVG + '</span>' +
       '<div class="pjrow-main">' +
         '<div class="pjrow-top"><span class="pjrow-name">' + esc(p.name || file) + '</span>' + badge + '</div>' +
+        '<div class="pjrow-sub">' + esc(sub) + '</div>' +
         (p.dir ? '<div class="pjrow-dir mono">' + esc(p.dir) + '</div>' : '') +
         (chips ? '<div class="pjrow-chips">' + chips + '</div>' : '') +
       '</div>' +
@@ -3995,6 +4032,8 @@
     if (!list) return;
     Projects.list().then(function (r) {
       sxProjCache = (r && r.recents) || [];
+      var n = document.getElementById('sx-pcount');
+      if (n) n.textContent = String(sxProjCache.length);
       if (!sxProjCache.length) { list.innerHTML = '<div class="proj-empty">No projects yet. Save one from the footer and it lands here.</div>'; return; }
       list.innerHTML = sxProjCache.map(pjrowHTML).join('');
     }).catch(function () { list.innerHTML = '<div class="proj-empty">Projects unavailable.</div>'; });
@@ -4017,6 +4056,8 @@
     if (!p) return;
     if (p.missing) { Projects.forget(p.path).then(renderSxProjects); return; }
     openRecent(p);
+    // Continuity: opening a project takes you to what it opened — the sessions.
+    setSidebarTab('sessions');
   });
   document.getElementById('sxtab-sessions').addEventListener('click', function () { setSidebarTab('sessions'); });
   document.getElementById('sxtab-projects').addEventListener('click', function () { setSidebarTab('projects'); });

@@ -117,6 +117,7 @@ const PORT_CLOSEVERB = 9980;  // PT-5: Close project = unbind with three honest 
 const PORT_SOT = 9981;        // PT-6: the engine's config.json is the settings authority; localStorage is only a cache
 const PORT_LOCALECHO = 9982;  // SP-1: predictive local echo — instant paint, honest reconcile, no secret leak
 const PORT_SIDEBAR = 9983;    // SB: Obsidian-style sidebar tabs — switch, persist, notif-in-rail, drag-resize
+const PORT_SPLITCLOSE = 9984; // FB: closing a split's last visible tab collapses the split, even across groups
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -2691,6 +2692,25 @@ check('sidebar-tabs', PORT_SIDEBAR, async ({ browser, base, t, shot }) => {
   t('the panel swap is instant (≤ a frame\'s worth of work)', tSwitch <= 40, Math.round(tSwitch) + 'ms');
   const rows = await page.evaluate(() => document.querySelectorAll('#sx-plist .pjrow').length);
   t('the Projects panel lists the saved project', rows >= 1, String(rows));
+  // FB arc: the project rows speak the SAME row language as the sessions list —
+  // 34px folder tile, 15px/600 name, 12px sub line — with the overlay-only
+  // badge/dot suppressed. Measured, not eyeballed.
+  const lang = await page.evaluate(() => {
+    const cs = (sel, prop) => { const el = document.querySelector(sel); return el ? getComputedStyle(el)[prop] : 'MISSING'; };
+    return {
+      tile: cs('#sx-plist .pjrow-folder', 'width'),
+      name: cs('#sx-plist .pjrow-name', 'fontSize'),
+      weight: cs('#sx-plist .pjrow-name', 'fontWeight'),
+      sub: cs('#sx-plist .pjrow-sub', 'display'),
+      badge: cs('#sx-plist .pjrow-badge', 'display'),
+      dot: cs('#sx-plist .pjrow-dot', 'display'),
+      count: (document.getElementById('sx-pcount') || {}).textContent,
+    };
+  });
+  t('the project rows adopt the sessions-row language (34px tile, 15px/600 name, sub line)',
+    lang.tile === '34px' && lang.name === '15px' && lang.weight === '600' && lang.sub === 'block', lang);
+  t('the overlay-style badge and dot are suppressed in the rail', lang.badge === 'none' && lang.dot === 'none', lang);
+  t('the Projects header carries a live count like Groups does', lang.count === String(rows), lang.count + ' vs ' + rows);
   await shot(page, 'sidebar-tabs-projects');
 
   // Notifications: the bell toggles the third panel in-rail, then returns.
@@ -2748,6 +2768,88 @@ check('sidebar-tabs', PORT_SIDEBAR, async ({ browser, base, t, shot }) => {
   s = await state();
   t('returning to desktop restores the strip arrangement', s.bellIn === 'sx-tabs' && s.npIn === 'sxp-notif' && s.tab === 'projects', s);
   await shot(page, 'sidebar-tabs-restored');
+
+  await page.close();
+});
+
+// --- split-collapse: closing the last visible tab collapses the split ----------
+// Edward: "when im in split screen when i close the left tab it just opens a new
+// one." Root cause: a pane still homing another group's HIDDEN terminals counted
+// as non-empty, so closeTerm respawned a shell instead of collapsing the split.
+// collapsePane now re-homes those hidden terms to a surviving pane (shells keep
+// running) and closes the pane. Proven on the real user path: the tab's × button
+// plus the confirm dialog, panes counted from the DOM.
+check('split-collapse', PORT_SPLITCLOSE, async ({ browser, base, t }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_SPLITCLOSE), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => o += d);
+    proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);          // the app connects to /control
+
+  const state = () => page.evaluate(() => {
+    const ps = [...document.querySelectorAll('.workspace .pane')];
+    return { panes: ps.length, tabs: ps.map((p) => p.querySelectorAll('.ptab').length) };
+  });
+  // The real path: click the left pane's tab ×, then answer the confirm dialog.
+  const closeLeftTab = async () => {
+    await page.evaluate(() => {
+      const pane = document.querySelectorAll('.workspace .pane')[0];
+      const x = pane && pane.querySelector('.ptab .x');
+      if (x) x.click();
+    });
+    await page.waitForTimeout(400);
+    await page.evaluate(() => {
+      const open = document.querySelector('.ovl[data-open]');
+      const ok = open && open.querySelector('[data-ok]');
+      if (ok) ok.click();
+    });
+    await page.waitForTimeout(1500);
+  };
+
+  // Plain split: close the left tab, the split collapses.
+  await winmux(['split', 'right']);
+  await page.waitForTimeout(2000);
+  let s = await state();
+  t('a split gives two panes', s.panes === 2, s);
+  await closeLeftTab();
+  s = await state();
+  t('closing the left tab collapses a plain split (no respawned shell)', s.panes === 1, s);
+
+  // Edward's case: another group's hidden terminal lives in the left pane.
+  await page.evaluate(() => { document.getElementById('open-newgroup').click(); });
+  await page.waitForTimeout(400);
+  await page.evaluate(() => {
+    const body = document.getElementById('dlg-body');
+    const input = body.querySelector('.dlg-in');
+    if (input) input.value = 'Split Probe B';
+    body.querySelector('[data-ok]').click();
+  });
+  await page.waitForTimeout(2000);
+  const groupCount = await page.evaluate(() => document.querySelectorAll('.prow').length);
+  t('a second group exists for the cross-group case', groupCount === 2, String(groupCount));
+  await page.evaluate(() => { document.querySelector('.prow[data-switch] .pinfo').click(); });   // back to group A
+  await page.waitForTimeout(1000);
+  await winmux(['split', 'right']);
+  await page.waitForTimeout(2000);
+  s = await state();
+  t('group A splits into two panes again', s.panes === 2, s);
+  await closeLeftTab();
+  s = await state();
+  t('the split still collapses when the pane homes another group\'s hidden terminal', s.panes === 1, s);
+  t('that hidden terminal rides along instead of dying (2 tabs homed in the survivor)', s.tabs[0] === 2, s);
+  const bTerm = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('.prow')];
+    const b = rows.find((r) => /Split Probe B/.test(r.textContent));
+    return b ? b.querySelector('.psub').textContent : 'GROUP GONE';
+  });
+  t('group B still reports its session alive after the collapse', /1 session/.test(bTerm), bTerm);
 
   await page.close();
 });

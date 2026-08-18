@@ -801,12 +801,34 @@
     font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
   .sx-sect .n { margin-left: auto; }
   .cockpit[data-mode="narrow"] .sx-sect { display: none; }
-  /* Projects panel: same .pjrow rows as the projects overlay, compacted for a
-     ~264px rail — the right-hand meta column folds away, the dir line carries
-     the place, the × keeps its hover-reveal. */
-  .sx-plist { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; }
-  .sx-plist .pjrow { padding: 8px 6px 8px 10px; gap: 9px; border-radius: 8px; }
-  .sx-plist .pjrow:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+  /* Projects panel (FB arc): the rows speak the SAME language as the sessions
+     list — 34px folder tile, 15px/600 name, 12px muted sub line, full-bleed
+     hairline rows, soft accent fill on the currently open project — so the two
+     panels read as one product, not two bolted-together lists. Everything here
+     is .sx-plist-scoped; the projects OVERLAY keeps its own richer look, and
+     the .pjrow-folder/.pjrow-sub nodes the shared generator adds are hidden
+     there by default. */
+  .pjrow-folder, .pjrow-sub { display: none; }
+  /* Projects overlay: a flex column shrinks its children by default, and a
+     shrunken .proj-list painted its overflowing rows straight over the section
+     below it (Recent rows over the recoverable-sessions list). Keep natural
+     heights — .proj-body already scrolls. cockpit.css frozen; fixed here. */
+  .proj-body .proj-list { flex-shrink: 0; }
+  .sx-plist { flex: 1; min-height: 0; overflow-y: auto; padding: 0 0 8px; }
+  .sx-plist .pjrow { align-items: center; padding: 15px 12px 15px 14px; gap: 12px; border-radius: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent); }
+  .sx-plist .pjrow:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+  .sx-plist .pjrow[data-current] { background: var(--accent-soft); }
+  .sx-plist .pjrow-dot { display: none; }
+  .sx-plist .pjrow-folder { width: 34px; height: 34px; border-radius: 9px; background: var(--bg2);
+    display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+  .sx-plist .pjrow[data-current] .pjrow-folder { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .sx-plist .pjrow-folder svg { width: 18px; height: 18px; }
+  .sx-plist .pjrow-name { font-size: 15px; font-weight: 600; }
+  .sx-plist .pjrow-sub { display: block; font-size: 12px; color: var(--faint); margin-top: 3px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sx-plist .pjrow-badge, .sx-plist .pjrow-miss { display: none; }  /* the sub line carries it */
+  .sx-plist .pjrow-dir { display: none; }                           /* full detail lives in the overlay */
   .sx-plist .pjrow-meta { display: none; }
   .sx-plist .pjrow-chips { display: none; }
   /* Notifications panel: the same #npanel node, parked inside the sidebar on
@@ -871,7 +893,7 @@
       <div class="sx-list" id="sx-list"></div>
     </div>
     <div class="sx-panel" id="sxp-projects">
-      <div class="sx-sect"><span>Projects</span></div>
+      <div class="sx-sect"><span>Projects</span><span class="n" id="sx-pcount">0</span></div>
       <div class="sx-plist" id="sx-plist"></div>
     </div>
     <!-- #npanel is moved in here by placeSidebarControls() on desktop; on the
