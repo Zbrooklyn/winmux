@@ -69,5 +69,15 @@ in Recent & recoverable self-expire in 7 days.
 - [x] FB-2 coherence + sidebar-tabs check green (20/20)
 - [x] FB-3 overlay fix, measured + screenshot
 - [x] Affected checks green (51/51: sidebar-tabs, split-collapse, closeverb, recover, workspace)
-- [ ] Full harness both engines
-- [ ] Ship v0.2.6 + update installed identities
+- [x] Full harness both engines — Rust 471/471; Node 470/471 with the single
+      flaked electron sub-assert (node-pty echo under load) passing 23/23 in an
+      immediate isolated re-run. Round 1 exposed a REAL harness defect fixed in
+      the same arc: PORT_RELOAD was 9920 (the installed WinMux Rust engine's
+      standing port) and the borrow path let the reload check type into the
+      live engine's workspace — moved to 9985, PORT_CLI 9921→9986 (retires the
+      documented Tauri gotcha), reload now skips on any borrowed server.
+- [x] Shipped v0.2.6 — release id 372468336, tag/master/branch a875c73,
+      4 fresh-core installers. Installed: primary + Tauri + Node at 0.2.6
+      (installed proof: engine 0.2.6, FB markers live). WinMux Rust left
+      running at 0.2.5 (live sessions) with WinMux-Rust-Setup-0.2.6.exe staged
+      at C:\Users\EDWAR\winmux-build.
