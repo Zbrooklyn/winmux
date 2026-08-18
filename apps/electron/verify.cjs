@@ -56,12 +56,17 @@ const PORT_DROP = 9917;
 const PORT_COLOUR = 9918;
 const PORT_GROUPS = 9919;
 // Reopening the page must reattach to the running shell, not orphan it.
-const PORT_RELOAD = 9920;
+// NOT 9920: that is the installed WinMux Rust engine's standing port — the
+// harness would borrow the LIVE engine and type into Edward's real workspace.
+const PORT_RELOAD = 9985;
 // A full reboot kills the server; its scrollback must survive on disk and replay.
 const PORT_RESTART = 9960;
 // The CLI check needs its own server + a connected app, on a port nobody else
 // is driving, so `winmux new-tab` counts don't race another group's terminals.
-const PORT_CLI = 9921;
+// NOT 9921: that is the installed WinMux Tauri engine's standing port — a
+// running Tauri app kept /control connected and made "no app connected"
+// impossible (the old documented gotcha; the port move retires it).
+const PORT_CLI = 9986;
 // The markdown check opens a viewer surface and edits the file under it, so it
 // needs a server whose /api/md nobody else is racing and a /control of its own.
 const PORT_MD = 9922;
@@ -1234,7 +1239,11 @@ check('survive', PORT_SURVIVE, async ({ browser, base, t, shot }) => {
 // now saves the live layout with each session id and restores it on load, reconnecting
 // by id. The harness reloads the whole page and asks the two questions that matter: is
 // it the same one shell with nobody orphaned, and is the work still inside it.
-check('reload', PORT_RELOAD, async ({ browser, base, t, shot }) => {
+check('reload', PORT_RELOAD, async ({ browser, base, t, shot, skip }) => {
+  // This check TYPES into the active terminal. On a borrowed server that would
+  // be somebody's real shell — never acceptable.
+  if (SERVERS[PORT_RELOAD] && SERVERS[PORT_RELOAD].borrowed)
+    return skip('borrowed a server already on ' + PORT_RELOAD + ' — typing into a live workspace is off-limits');
   const info = async () => JSON.parse((await get(base + '/api/info')).body);
   const page = await desktop(browser);
   const screen = () => page.evaluate(() => {
@@ -2738,6 +2747,9 @@ check('sidebar-tabs', PORT_SIDEBAR, async ({ browser, base, t, shot }) => {
   const clamps = await page.evaluate(() => [window.__winmuxSidebarWidth(999), window.__winmuxSidebarWidth(50)]);
   t('the width clamps to 200–420', clamps[0] === 420 && clamps[1] === 200, clamps.join('/'));
   await page.evaluate(() => window.__winmuxSidebarWidth(340));
+  // The width save rides the settings POST to the engine — give it time to land
+  // before tearing the page down, or the reload can race the clamp-test values.
+  await page.waitForTimeout(900);
 
   // Persistence: the resting tab and the width both survive a reload.
   await page.reload({ waitUntil: 'domcontentloaded' });
