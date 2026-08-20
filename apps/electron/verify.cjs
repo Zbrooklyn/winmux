@@ -137,6 +137,7 @@ const PORT_CFGSAFE = 9998;     // AUDIT-10: a damaged settings file is kept and 
 const PORT_BUSYBAR = 9995;     // the busy underline actually paints, and grows, while a shell works
 const PORT_ORPHAN = 9974;      // AUDIT-8: closing a tab whose socket is down still ends its shell
 const PORT_NOSTRAND = 9972;    // AUDIT-4: a slow answer never strands a live engine and its shells
+const PORT_EXITTRUTH = 9970;   // AUDIT-1: a shell that ends says so, on both engines
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -4256,6 +4257,85 @@ check('detach', PORT_SURVIVE2, async ({ t }) => {
     if (boundPort) { try { await shutdownServer(boundPort); } catch (e) {} }
     try { fs.unlinkSync(instanceFile); } catch (e) {}
   }
+});
+
+// --- exittruth: a shell that ends says so (AUDIT-1) -------------------------
+// The audit's worst-ranked defect, and it only existed on the engine we ship.
+// Type `exit` and the shell dies — but nothing told anyone. The tab stayed, the
+// sidebar kept counting the session, every keystroke went into a dead pipe, and
+// a reload replayed the corpse as a live session. The app looked completely
+// healthy while nothing behind it was, which is the shape of half this page.
+check('exittruth', PORT_EXITTRUTH, async ({ browser, base, t }) => {
+  const page = await desktop(browser);
+  const live = () => fetch(base + '/api/info', { cache: 'no-store' })
+    .then((r) => r.json()).then((j) => j.sessions);
+  try {
+    await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    await appReady(page);
+    const before = await live();
+    t('a shell is running before we end it', before >= 1, before);
+
+    // End it the way a user does: type `exit` at the prompt.
+    await page.locator('.xterm-helper-textarea').first().focus();
+    await page.keyboard.type('exit');
+    await page.keyboard.press('Enter');
+
+    // The engine must stop counting it. Wait for the condition, not a guess.
+    const dropped = await page.waitForFunction(
+      `fetch('/api/info', { cache: 'no-store' }).then(function (r) { return r.json(); })
+         .then(function (j) { return j.sessions < ${before}; })`,
+      null, { timeout: 20000 }).then(() => true).catch(() => false);
+    t('the engine stops counting a shell that has exited', dropped, { before, after: await live() });
+
+    // And the tab must say so rather than sitting there looking alive. The app
+    // writes "[session ended]" and marks the tab closed on the exit message.
+    const said = await page.waitForFunction(`(function () {
+      var txt = [].map.call(document.querySelectorAll('.xterm-rows > div'),
+        function (d) { return d.textContent; }).join('|');
+      return /session ended/i.test(txt);
+    })()`, null, { timeout: 20000 }).then(() => true).catch(() => false);
+    t('the tab tells you the session ended, instead of looking alive', said,
+      said ? true : await page.evaluate(() =>
+        [].map.call(document.querySelectorAll('.xterm-rows > div'), (d) => d.textContent)
+          .join('|').slice(-300)));
+
+    // The chrome around the terminal has to be as honest as the terminal. The
+    // first version of this fix left the tab telling the truth while the sidebar
+    // put a red "1 needs you" on a shell that had finished cleanly and the header
+    // called it "disconnected" — sending you hunting for a network fault that
+    // was really just you typing `exit`.
+    const chrome = await page.evaluate(() => ({
+      need: (document.getElementById('d-need') || {}).textContent,
+      groupSub: [].map.call(document.querySelectorAll('.psub'), (d) => d.textContent).join(' | '),
+      conn: (document.querySelector('.conntext') || {}).textContent || '',
+    }));
+    // groupSub must be non-empty, or the "no needs you" half of this passes on a
+    // string that was never found — a check that greens itself.
+    t('and nothing asks for you — the shell finished, it did not fail',
+      chrome.need === '0' && /session/i.test(chrome.groupSub)
+        && !/needs you/i.test(chrome.groupSub), chrome);
+    t('and the header calls it an ended session, not a lost connection',
+      /session ended/i.test(chrome.conn), chrome);
+
+    // The half a user hits next: reload. The tab is restored from disk pointing
+    // at a session id that no longer exists, and the app gives it a fresh shell —
+    // which is right. What must never happen is the fresh shell arriving in
+    // silence, wearing the dead one's clothes, so the person types into what they
+    // think is the session they left. The app draws a divider and says so; if the
+    // engine never registered the exit, the reload reattaches instead and the
+    // person gets a live-looking prompt with no divider at all.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await appReady(page);
+    const owned = await page.waitForFunction(`(function () {
+      var txt = [].map.call(document.querySelectorAll('.xterm-rows > div'),
+        function (d) { return d.textContent; }).join('|');
+      return /fresh shell|new shell/i.test(txt);
+    })()`, null, { timeout: 20000 }).then(() => true).catch(() => false);
+    t('and after a reload it owns up to being a fresh shell, not the old one', owned,
+      owned ? true : await page.evaluate(() =>
+        [].map.call(document.querySelectorAll('.xterm-rows > div'), (d) => d.textContent)
+          .join('|').slice(-300)));
+  } finally { await page.close(); }
 });
 
 // --- nostrand: a slow answer never strands a live engine (AUDIT-4) ----------

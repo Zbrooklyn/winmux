@@ -1067,6 +1067,14 @@
   // ---------------------------------------------------------------- sidebar
   function totalTerms() { return panes.reduce(function (n, p) { return n + p.terms.length; }, 0); }
   function dotClass(t) { return t.status === 'closed' ? 'error' : (t.status === 'needsyou' ? 'needsyou' : (t.status === 'working' ? 'working' : 'idle')); }
+  // A tab is only asking for you if it ended badly. A shell you finished with by
+  // typing `exit` is done — counting it as "needs you" put a red number on the
+  // sidebar for a session that wanted nothing, which is the same dishonesty as a
+  // dead tab looking alive, just pointing the other way.
+  function wantsYou(t) {
+    if (t.status === 'needsyou') return true;
+    return t.status === 'closed' && !t.calmEnd;
+  }
   function termName(t) { return t.tabEl ? t.tabEl.querySelector('.tt').textContent : labelFor(t.shell); }
   function statusLine(t) {
     if (t.offline && t.state === 'reconnecting') return 'Offline — retrying';
@@ -1077,7 +1085,7 @@
     return 'Idle';
   }
   function statusTone(t) {
-    if (t.status === 'needsyou' || t.status === 'closed') return 'hot';
+    if (wantsYou(t)) return 'hot';
     return t.status === 'working' ? 'work' : 'mut';
   }
   // "What's it doing" — the most recent meaningful output line of a session, shown
@@ -1161,7 +1169,7 @@
   function groupStatus(ts) {
     var st = 'idle';
     for (var i = 0; i < ts.length; i++) {
-      if (ts[i].status === 'needsyou' || ts[i].status === 'closed') return 'needsyou';
+      if (wantsYou(ts[i])) return 'needsyou';
       if (ts[i].status === 'working') st = 'working';
     }
     return st;
@@ -1169,7 +1177,7 @@
   // The group header's live half: "N sessions · 2 needs you" — everything on the
   // line that a status change can move.
   function groupSub(ts) {
-    var need = ts.filter(function (t) { return t.status === 'needsyou' || t.status === 'closed'; }).length;
+    var need = ts.filter(wantsYou).length;
     var work = ts.filter(function (t) { return t.status === 'working'; }).length;
     var n = ts.length;
     return n + ' session' + (n === 1 ? '' : 's') + ' · ' +
@@ -1181,7 +1189,7 @@
     var counts = { working: 0, needsyou: 0, idle: 0 };
     eachTerm(function (t) {
       if (t.status === 'working') counts.working++;
-      else if (t.status === 'needsyou' || t.status === 'closed') counts.needsyou++;
+      else if (wantsYou(t)) counts.needsyou++;
       else counts.idle++;
     });
     // A zero counter still reads as loud as a three, so the eye lands on nothing
@@ -1442,7 +1450,7 @@
   // One session card on the phone's session screen (shared by the full render
   // above and the SP-5 single-row patch).
   function ncardHTML(t) {
-    var attn = t.status === 'needsyou' || t.status === 'closed';
+    var attn = wantsYou(t);
     // An unrenamed terminal is already named after its shell, so printing the
     // shell again on the same line just reads "PowerShell   PowerShell".
     var nm = termName(t), kind = leafKind(t);
@@ -1689,9 +1697,12 @@
     var offline = !!(t && t.offline && s === 'reconnecting');
     var vis = offline ? 'offline' : (s === 'open' ? 'open' : (s === 'closed' ? 'closed' : (s === 'reconnecting' ? 'reconnecting' : 'idle')));
     p.pill.setAttribute('data-state', vis);
+    // A shell you ended yourself is not a connection failure. Calling it
+    // "disconnected" sends you looking for a network problem that isn't there.
     p.connText.textContent = vis === 'offline' ? 'offline — retrying'
       : (s === 'open' ? 'connected'
-      : (s === 'closed' ? 'disconnected' : (s === 'reconnecting' ? 'reconnecting…' : 'connecting…')));
+      : (s === 'closed' ? (t && t.ended ? 'session ended' : 'disconnected')
+      : (s === 'reconnecting' ? 'reconnecting…' : 'connecting…')));
   }
   function focusPane(id) {
     activePaneId = id;
@@ -2412,7 +2423,10 @@
           }
           // The shell chose to leave. That is the real ending, and the only one
           // worth telling the person about.
-          if (m.exited) { t.ended = true; return; }
+          // A clean exit is the person finishing with the shell; a non-zero code
+          // is the shell dying on them. Both end the tab — only one of them is
+          // worth putting a red "needs you" next to.
+          if (m.exited) { t.ended = true; t.calmEnd = m.code === 0 || m.code == null; return; }
           if (m.sid) { t.sid = m.sid; persistLive(); }
           if (m.shell && ttEl && !t.renamed) ttEl.textContent = m.shell;
           if (m.cwd) { t.cwd = m.cwd; }

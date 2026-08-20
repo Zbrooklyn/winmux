@@ -11,7 +11,7 @@
 //   GET /api/info — read-only server + fleet snapshot the `winmux status` verb reads.
 
 use axum::{
-    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
     extract::{ConnectInfo, Query, Request, State},
     http::{header, HeaderValue, StatusCode},
     middleware::Next,
@@ -48,7 +48,9 @@ struct Session {
     sid: String,
     shell: String,
     cwd: String,
-    master: Mutex<Box<dyn MasterPty + Send>>,
+    // Option, not a bare handle: closing the master is what releases the ConPTY and
+    // unblocks the reader thread once the shell is gone. See end_session.
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     writer: Mutex<Box<dyn Write + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     inner: Mutex<SinkState>,
@@ -58,7 +60,15 @@ struct Session {
 }
 struct SinkState {
     scrollback: VecDeque<u8>,
-    attached: Option<UnboundedSender<Vec<u8>>>,
+    attached: Option<UnboundedSender<Out>>,
+}
+// What the reader thread can hand to whatever socket is attached right now.
+// Terminal bytes are the normal case; Exited is the shell's own death, which has
+// to reach the client as a message rather than as silence — otherwise the tab
+// sits there looking alive with everything typed into it going nowhere.
+enum Out {
+    Data(Vec<u8>),
+    Exited(Option<i64>),
 }
 
 // ── Agent job store (Stage 3) — parity with the Node server ─────────────────
@@ -561,6 +571,28 @@ async fn pty_ws_phone(
     ws.on_upgrade(move |socket| handle_pty(socket, state, q, Some((id, rx))))
 }
 
+// The shell ended. Do the ending exactly once, whoever notices first.
+//
+// AUDIT-1: this used to hang off the reader thread seeing EOF, which on Windows
+// never happens — ConPTY keeps the master readable for as long as we hold the
+// handle, so a shell could exit and the engine would never find out. The tab sat
+// there looking alive, the sidebar kept counting it, every keystroke went into a
+// dead pipe, and a supervised job waited for a shell that was already gone.
+// Now the child itself is the signal, and the reader is only a second opinion.
+fn end_session(state: &Arc<AppState>, session: &Arc<Session>) {
+    // The latch. Only the first caller through does the ending.
+    if !session.alive.swap(false, Ordering::Relaxed) { return; }
+    let code = session.child.lock().unwrap().try_wait().ok().flatten().map(|s| s.exit_code() as i64);
+    // P6 supervision: fail any job still riding this session so a waiting
+    // orchestrator wakes with `failed` + the reason instead of hanging.
+    state.fail_jobs_for_sid(&session.sid, code);
+    state.sessions.lock().unwrap().remove(&session.sid);
+    if let Some(tx) = &session.inner.lock().unwrap().attached { let _ = tx.send(Out::Exited(code)); }
+    // Closing the master releases the ConPTY and lets the blocked reader thread
+    // finish; without this every ended shell left a thread and a console behind.
+    session.master.lock().unwrap().take();
+}
+
 // Spawn a brand-new shell as a registry Session with a lifelong reader thread.
 fn spawn_session(shell_key: &str, cwd: &str, state: &Arc<AppState>) -> Result<(String, Arc<Session>), String> {
     let (exec, args, label) = shell_cmd(shell_key);
@@ -595,7 +627,7 @@ fn spawn_session(shell_key: &str, cwd: &str, state: &Arc<AppState>) -> Result<(S
         sid: sid.clone(),
         shell: label,
         cwd: cwd.to_string(),
-        master: Mutex::new(pair.master),
+        master: Mutex::new(Some(pair.master)),
         writer: Mutex::new(writer),
         child: Mutex::new(child),
         inner: Mutex::new(SinkState { scrollback: VecDeque::new(), attached: None }),
@@ -620,18 +652,30 @@ fn spawn_session(shell_key: &str, cwd: &str, state: &Arc<AppState>) -> Result<(S
                     let mut inner = sref.inner.lock().unwrap();
                     for &b in &bytes { inner.scrollback.push_back(b); }
                     while inner.scrollback.len() > SCROLLBACK_CAP { inner.scrollback.pop_front(); }
-                    if let Some(tx) = &inner.attached { let _ = tx.send(bytes); }
+                    if let Some(tx) = &inner.attached { let _ = tx.send(Out::Data(bytes)); }
                     drop(inner);
                     sref.dirty.store(true, Ordering::Relaxed);
                 }
             }
         }
-        sref.alive.store(false, Ordering::Relaxed);
-        // P6 supervision: the shell died — fail any job still riding this session
-        // so a waiting orchestrator wakes with `failed` + the reason instead of
-        // hanging until its timeout.
-        let code = sref.child.lock().unwrap().try_wait().ok().flatten().map(|s| s.exit_code() as i64);
-        stref.fail_jobs_for_sid(&sref.sid, code);
+        end_session(&stref, &sref);
+    });
+
+    // The shell's own death certificate. On Windows the reader above is not a
+    // reliable end-of-shell signal — ConPTY keeps the master readable while we
+    // hold the handle — so watch the child itself. This is the thread that
+    // actually notices `exit` in practice; the reader's call is the backstop for
+    // a pty that closes without the child being reapable.
+    let wref = session.clone();
+    let wstate = state.clone();
+    std::thread::spawn(move || {
+        loop {
+            let done = { wref.child.lock().unwrap().try_wait().ok().flatten().is_some() };
+            if done { break; }
+            if !wref.alive.load(Ordering::Relaxed) { return; }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        end_session(&wstate, &wref);
     });
 
     // Flusher: every 600ms, if the scrollback changed, persist it to disk. This is
@@ -688,20 +732,36 @@ async fn handle_pty(
 
     // Attach this socket: replay backlog then become the live sink, atomically under the
     // inner lock so the reader can't interleave bytes between snapshot and attach.
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Out>();
     {
         let mut inner = session.inner.lock().unwrap();
         if resumed && !inner.scrollback.is_empty() {
             let snapshot: Vec<u8> = inner.scrollback.iter().copied().collect();
-            let _ = tx.send(snapshot);
+            let _ = tx.send(Out::Data(snapshot));
         }
         inner.attached = Some(tx);
     }
     session.detach_epoch.fetch_add(1, Ordering::Relaxed);
 
     let out = tokio::spawn(async move {
-        while let Some(bytes) = rx.recv().await {
-            if sink.send(Message::Binary(bytes)).await.is_err() { break; }
+        while let Some(item) = rx.recv().await {
+            match item {
+                Out::Data(bytes) => {
+                    if sink.send(Message::Binary(bytes)).await.is_err() { break; }
+                }
+                // The shell ended. Say it in the shape the app already understands
+                // — the same meta frame and the same close code the Node engine
+                // sends — so the tab reports "session ended" instead of sitting
+                // there looking alive, and the client does NOT try to reconnect.
+                Out::Exited(code) => {
+                    let _ = sink.send(Message::Text(
+                        json!({"type":"meta","exited":true,"code":code}).to_string())).await;
+                    let _ = sink.send(Message::Close(Some(CloseFrame {
+                        code: 4005, reason: "shell exited".into(),
+                    }))).await;
+                    break;
+                }
+            }
         }
     });
 
@@ -739,7 +799,9 @@ async fn handle_pty(
                     Some("r") => {
                         let cols = v.get("c").and_then(|x| x.as_u64()).unwrap_or(80) as u16;
                         let rows = v.get("r").and_then(|x| x.as_u64()).unwrap_or(24) as u16;
-                        let _ = session.master.lock().unwrap().resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+                        if let Some(m) = session.master.lock().unwrap().as_ref() {
+                            let _ = m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+                        }
                         // Fresh shell only, once: the prompt rendered blind at 80x24; now that
                         // the real size has landed, send Ctrl+L (PSReadLine ClearScreen) so it
                         // repaints top-anchored instead of stranded mid-screen. Mirrors the Node

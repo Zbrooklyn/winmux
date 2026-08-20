@@ -1939,12 +1939,16 @@ function spawnSession(shell, cwd) {
   term.onExit((ev) => {
     const si = spares.indexOf(s);
     if (si !== -1) { spares.splice(si, 1); ensureSpare(); return; }   // a spare died before it was ever used
-    failJobsForSid(s.id, ev && typeof ev.exitCode === 'number' ? ev.exitCode : null);
+    const code = ev && typeof ev.exitCode === 'number' ? ev.exitCode : null;
+    failJobsForSid(s.id, code);
     if (!SESSIONS.has(s.id)) return;
     SESSIONS.delete(s.id);
     if (s.timer) { clearTimeout(s.timer); s.timer = null; }
     if (s.ws && s.ws.readyState === s.ws.OPEN) {
-      try { s.ws.send(JSON.stringify({ type: 'meta', exited: true })); } catch (e) {}
+      // The code rides along: it is the only thing that separates "you typed
+      // exit" from "it died on you", and the app has to tell those apart before
+      // it decides whether to ask for your attention.
+      try { s.ws.send(JSON.stringify({ type: 'meta', exited: true, code: code })); } catch (e) {}
       try { s.ws.close(4005, 'shell exited'); } catch (e) {}
     }
   });
