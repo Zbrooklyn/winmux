@@ -1587,14 +1587,58 @@ fn trust_file() -> PathBuf {
         PathBuf::from(home).join(".winmux").join("devices.json")
     })
 }
-fn read_config() -> Value {
-    std::fs::read_to_string(config_file()).ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .filter(|v| v.is_object())
-        .unwrap_or_else(|| json!({}))
+// "There is no config" and "the config is damaged" are completely different
+// facts, and treating them the same was destructive: a parse error was swallowed,
+// the app started on empty defaults, and the very next settings change wrote onto
+// that empty base — silently erasing every imported theme and custom keybinding,
+// then answering "saved". This file is explicitly advertised as hand-editable, so
+// one stray comma cost the user everything in it. A damaged file is now preserved
+// with a timestamp, never overwritten, and the reason is reported.
+static CONFIG_TROUBLE: std::sync::OnceLock<Mutex<Option<(String, String)>>> = std::sync::OnceLock::new();
+fn config_trouble() -> &'static Mutex<Option<(String, String)>> {
+    CONFIG_TROUBLE.get_or_init(|| Mutex::new(None))
 }
+
+fn read_config() -> Value {
+    let path = config_file();
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return json!({}),   // genuinely no file yet — defaults are correct
+    };
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(v) if v.is_object() => {
+            if let Ok(mut g) = config_trouble().lock() { *g = None; }
+            v
+        }
+        other => {
+            let why = match other {
+                Err(e) => e.to_string(),
+                _ => "the settings file is not a settings object".to_string(),
+            };
+            if let Ok(mut g) = config_trouble().lock() {
+                if g.is_none() {
+                    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs()).unwrap_or(0);
+                    let backup = path.with_extension(format!("damaged-{}.json", stamp));
+                    let moved = std::fs::rename(&path, &backup).is_ok();
+                    *g = Some((why, if moved { backup.to_string_lossy().to_string() } else { String::new() }));
+                }
+            }
+            json!({})
+        }
+    }
+}
+
 async fn api_config_get() -> impl IntoResponse {
-    Json(json!({"ok": true, "config": read_config()}))
+    let cfg = read_config();
+    // If the file was damaged, say so in the same breath as handing over the
+    // defaults — otherwise the user just sees their themes and keys gone.
+    let trouble = config_trouble().lock().ok().and_then(|g| g.clone());
+    match trouble {
+        Some((why, backup)) => Json(json!({
+            "ok": true, "config": cfg, "configError": why, "configBackup": backup })),
+        None => Json(json!({ "ok": true, "config": cfg })),
+    }
 }
 async fn api_config_post(Json(incoming): Json<Value>) -> impl IntoResponse {
     let mut cur = read_config();

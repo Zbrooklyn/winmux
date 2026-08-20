@@ -140,6 +140,24 @@
     function done() { configReady = true; }
     try {
       fetch('/api/config', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+        // A damaged settings file used to be indistinguishable from no settings
+        // file: the app started on defaults and the next change wrote over the
+        // user's themes and keybindings without a word. The engine now keeps the
+        // damaged file and says so — this is where the user finds out, BEFORE
+        // they change a setting and overwrite what's left.
+        if (j && j.configError) {
+          notify('Your settings file could not be read',
+            (j.configBackup
+              ? 'It has been kept as ' + j.configBackup.split(/[\\/]/).pop() + ' and WinMux started on defaults. '
+              : 'WinMux started on defaults. ')
+            + 'Imported themes and custom shortcuts are not loaded. (' + j.configError + ')');
+          // A badge the user has to go and find is not being told. Their themes
+          // and shortcuts are silently absent right now, and the next settings
+          // change writes over what is left — so this one opens the panel itself.
+          setTimeout(function () {
+            try { if (!npanel.hasAttribute('data-open')) toggleNotif(document.getElementById('open-notif')); } catch (e) {}
+          }, 0);
+        }
         if (j && j.ok && j.config) {
           DISK_CONFIG = j.config;
           if (DISK_CONFIG.themes && typeof DISK_CONFIG.themes === 'object') USER_THEMES = DISK_CONFIG.themes;

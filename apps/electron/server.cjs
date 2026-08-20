@@ -321,9 +321,39 @@ loadTrust();
 // clobber each other.
 const CONFIG_FILE = process.env.WINMUX_CONFIG_FILE
   || path.join(os.homedir(), '.winmux', process.env.WINMUX_PROFILE === 'dev' ? 'config.dev.json' : 'config.json');
+// "There is no config" and "the config is damaged" are completely different
+// facts, and treating them the same was destructive: a parse error was swallowed,
+// the app started on empty defaults, and the very next settings change wrote onto
+// that empty base — silently erasing every imported theme and custom keybinding,
+// then answering "saved". This file is explicitly advertised as hand-editable, so
+// one stray comma cost the user everything in it.
+//
+// Now a damaged file is preserved, never overwritten: it is moved aside with a
+// timestamp so the user can fix and restore it, and the reason is reported.
+let configTrouble = null;   // {error, backup} — what the app is missing and where it went
+
 function readConfig() {
-  try { const c = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); return (c && typeof c === 'object') ? c : {}; }
-  catch (e) { return {}; }   // no file yet, or unreadable — the app runs on its defaults
+  let raw;
+  try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); }
+  catch (e) { return {}; }   // genuinely no file yet — defaults are correct
+  try {
+    const c = JSON.parse(raw);
+    if (c && typeof c === 'object' && !Array.isArray(c)) { configTrouble = null; return c; }
+    throw new Error('the settings file is not a settings object');
+  } catch (e) {
+    if (configTrouble) return {};   // already quarantined this one; do not thrash
+    let backup = '';
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      backup = CONFIG_FILE.replace(/\.json$/, '') + '.damaged-' + stamp + '.json';
+      fs.renameSync(CONFIG_FILE, backup);
+    } catch (e2) { backup = ''; }
+    configTrouble = {
+      error: String((e && e.message) || e).slice(0, 200),
+      backup: backup,
+    };
+    return {};
+  }
 }
 function writeConfigAtomic(obj) {
   // Temp file + rename, like the trust file: a crash mid-write can never leave a
@@ -925,7 +955,14 @@ function handle(req, res, viaPhone) {
       return;
     }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ ok: true, config: readConfig() }));
+    {
+      const cfg = readConfig();
+      // If the file was damaged, say so in the same breath as handing over the
+      // defaults — otherwise the user just sees their themes and keys gone.
+      res.end(JSON.stringify(configTrouble
+        ? { ok: true, config: cfg, configError: configTrouble.error, configBackup: configTrouble.backup }
+        : { ok: true, config: cfg }));
+    }
     return;
   }
 

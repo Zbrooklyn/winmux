@@ -133,6 +133,7 @@ const PORT_SHIPPED05 = 9993;   // AUDIT-7: the four features that were broken on
 const PORT_UPDFEED = 9994;     // AUDIT-7's own stand-in release feed, so the update path is proven for real
 const PORT_NOCLOBBER = 9997;   // AUDIT-8: saving a project never writes over a different project
 const PORT_KEYBACK = 9996;     // AUDIT-9: a dialog that took the keyboard gives it back however it is dismissed
+const PORT_CFGSAFE = 9998;     // AUDIT-10: a damaged settings file is kept and reported, never quietly replaced
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -293,10 +294,16 @@ async function server(port, extraEnv) {
   // WINMUX_VERIFY_BORROW=1 opts back in for driving a dev server by hand.
   if (await inUse('127.0.0.1', port)) {
     if (process.env.WINMUX_VERIFY_BORROW === '1') return { port, borrowed: true, stop() {} };
-    throw new Error(
-      'port ' + port + ' is already taken by another process, so this check would have graded '
-      + 'something that is not ours and ignored its own environment. ' + whoHas(port)
-      + ' Stop that process, or set WINMUX_VERIFY_BORROW=1 to deliberately test against it.');
+    // Fail the checks on THIS port, not the whole run — servers are started
+    // up front, so throwing here would let one stray process cost five hundred
+    // checks instead of the handful it actually invalidates.
+    return {
+      port,
+      foreign: 'port ' + port + ' is already taken by another process, so this check would have '
+        + 'graded something that is not ours and ignored its own environment. ' + whoHas(port)
+        + ' Stop that process, or set WINMUX_VERIFY_BORROW=1 to deliberately test against it.',
+      stop() {},
+    };
   }
   const proc = RUST_CORE
     ? spawn(RUST_CORE, [], {
@@ -1709,15 +1716,35 @@ check('delhonest', PORT_DELHONEST, async ({ base, t }) => {
 
   // FileShare.None is the realistic lock: readable by its holder, undeletable.
   const holder = spawn('pwsh', ['-NoProfile', '-Command',
-    `$f=[System.IO.File]::Open('${file}','Open','Read','None'); Start-Sleep -Seconds 20; $f.Close()`], { stdio: 'ignore' });
-  await new Promise((r) => setTimeout(r, 2000));
+    // Retry the open: this sandbox lives under Dropbox, which grabs a handle on
+    // every file it sees appear. Its handle is transient, ours is the point of
+    // the check — so wait it out rather than failing and blaming the product.
+    `$f=$null; $d=(Get-Date).AddSeconds(20)
+     while (-not $f -and (Get-Date) -lt $d) {
+       try { $f=[System.IO.File]::Open('${file}','Open','Read','None') }
+       catch { Start-Sleep -Milliseconds 50 }
+     }
+     if ($f) { Start-Sleep -Seconds 20; $f.Close() } else { Write-Error 'never got the lock' }`,
+  ], { stdio: ['ignore', 'ignore', 'pipe'] });
+  let holderErr = '';
+  holder.stderr.on('data', (b) => { holderErr += b.toString(); });
+  holder.on('error', (e) => { holderErr += 'spawn failed: ' + e.message; });
+  // Wait for the lock to actually be held, not for a guessed number of milliseconds:
+  // pwsh startup varies wildly under a loaded suite, and a stopwatch that loses the
+  // race deletes an unlocked file and blames the product.
+  const locked = () => { try { fs.closeSync(fs.openSync(file, 'r')); return false; } catch (e) { return true; } };
+  const holdBy = Date.now() + 15000;
+  while (!locked() && Date.now() < holdBy) await new Promise((r) => setTimeout(r, 50));
+  t('the lock this check depends on is actually held', locked(),
+    locked() ? true : 'never took hold in 15s; pwsh said: ' + (holderErr.trim() || '(nothing)'));
   const blocked = await api('DELETE', '/api/project?path=' + encodeURIComponent(file) + '&trash=1');
   t('a delete that cannot happen is refused, not reported as done', blocked && blocked.ok === false, blocked);
   t('and it says why', typeof (blocked || {}).error === 'string', (blocked || {}).error);
   t('the file is still on disk', fs.existsSync(file), fs.existsSync(file));
   t('the project stays in the list, so we still know where it lives', await listed(file), true);
   try { holder.kill(); } catch (e) {}
-  await new Promise((r) => setTimeout(r, 1200));
+  const freeBy = Date.now() + 15000;
+  while (locked() && Date.now() < freeBy) await new Promise((r) => setTimeout(r, 50));
 
   const gone = await api('DELETE', '/api/project?path=' + encodeURIComponent(file) + '&trash=1');
   t('with nothing holding it, the delete succeeds', gone && gone.ok === true, gone);
@@ -2160,6 +2187,64 @@ check('keyback', PORT_KEYBACK, async ({ browser, base, t, shot }) => {
     await page.close();
   }
 }, { WINMUX_CONFIG_FILE: path.join(OUT, 'keyback-cfg', 'config.json') });
+
+// AUDIT-10 (register item 10). The settings file is advertised as hand-editable.
+// A parse error in it was swallowed and treated as "no file at all": the app
+// started on empty defaults and the next settings change wrote onto that empty
+// base, destroying every imported theme and custom keybinding — and answered
+// "saved". One stray comma cost the user the lot, and the recovery overwrote the
+// evidence. A damaged file must be KEPT and REPORTED, not quietly replaced.
+const CFGSAFE_FILE = path.join(os.tmpdir(), 'winmux-verify-cfgsafe', 'config.json');
+check('cfgsafe', PORT_CFGSAFE, async ({ browser, base, t }) => {
+  const dir = path.dirname(CFGSAFE_FILE);
+  fs.mkdirSync(dir, { recursive: true });
+  // Start from a clean sandbox: a backup left by an earlier run would let the
+  // "the damaged file is kept" assertions pass on last run's evidence.
+  for (const f of fs.readdirSync(dir)) fs.rmSync(path.join(dir, f), { force: true, recursive: true });
+  const damaged ='{ "themes": { "mine": { "bg": "#123456" } }, "keymap": { "split-right": "Ctrl+Alt+9" },\n';
+  fs.writeFileSync(CFGSAFE_FILE, damaged);   // truncated JSON — exactly a hand-edit slip
+  const cfg = await fetch(base + '/api/config', { cache: 'no-store' }).then((r) => r.json());
+
+  t('the engine reports that the settings file could not be read',
+    typeof cfg.configError === 'string' && cfg.configError.length > 0, cfg.configError);
+  t('and it does NOT pretend the file was empty', !!cfg.configError, { config: cfg.config });
+  t('the damaged file is kept, not destroyed', !!cfg.configBackup && fs.existsSync(cfg.configBackup),
+    cfg.configBackup && path.basename(cfg.configBackup));
+  t('and what was kept is the user\'s original bytes, untouched',
+    !!cfg.configBackup && fs.readFileSync(cfg.configBackup, 'utf8') === damaged);
+  t('the live settings path is now clear, so the app starts on real defaults',
+    !fs.existsSync(CFGSAFE_FILE), fs.existsSync(CFGSAFE_FILE));
+
+  // The destructive half: a settings change after a damaged read must not be
+  // able to bury the original. It can't, because the original is elsewhere.
+  // And the user is actually told — in the app, not just in a JSON field. This
+  // runs BEFORE the save below: once a good config is written the engine is
+  // healthy again and correctly stops reporting trouble, so a page opened after
+  // the save would prove nothing about what the user saw.
+  const page = await desktop(browser);
+  let told = '';
+  try {
+    await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    const SEEN = `[].slice.call(document.querySelectorAll('#npanel, .notif, .nrow, .ntitle'))
+      .map(function (n) { return n.textContent || ''; }).join(' | ')`;
+    // Wait for the notice to appear, not for a guessed number of seconds.
+    await page.waitForFunction(`/could not be read/i.test(${SEEN})`, null, { timeout: 20000 })
+      .catch(() => {});
+    told = await page.evaluate(SEEN);
+    t('the app tells the user their settings file could not be read',
+      /could not be read/i.test(told), told.slice(0, 200));
+  } finally {
+    await page.close();
+  }
+
+  const saved = await fetch(base + '/api/config', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ settings: { fontSize: 17 } }),
+  }).then((r) => r.json());
+  t('a settings change after a damaged read still saves', saved && saved.ok !== false, saved);
+  t('and the user\'s original themes and keys are STILL on disk afterwards',
+    !!cfg.configBackup && /"mine"/.test(fs.readFileSync(cfg.configBackup, 'utf8')));
+}, { WINMUX_CONFIG_FILE: CFGSAFE_FILE });
 
 // ST6: non-terminal leaves survive a page reload. Both a diff leaf AND a markdown
 // leaf, opened as pane tabs, must be persisted in the live snapshot and rebuilt on
@@ -5076,7 +5161,8 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
     servers[port] = await server(port, env);
   }
   for (const port of ports) {
-    console.log((servers[port].borrowed ? 'using the server already on ' : 'started a server on ') + port);
+    console.log(servers[port].foreign ? 'REFUSED port ' + port + ' — something else is on it'
+      : (servers[port].borrowed ? 'using the server already on ' : 'started a server on ') + port);
   }
 
   // Manufacture the port collision the failure checks exist for, once, before
@@ -5116,6 +5202,7 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
       bell = setTimeout(() => rej(new Error('check timed out after ' + (CHECK_TIMEOUT / 1000) + 's')), CHECK_TIMEOUT);
     });
     try {
+      if (servers[c.port] && servers[c.port].foreign) throw new Error(servers[c.port].foreign);
       await Promise.race([c.run({ browser, base: 'http://127.0.0.1:' + c.port, t, skip, shot, errs }), capped]);
     } catch (e) {
       fails++;
