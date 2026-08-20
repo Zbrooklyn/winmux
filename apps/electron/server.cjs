@@ -987,9 +987,19 @@ function handle(req, res, viaPhone) {
       let q = {}; try { q = Object.fromEntries(new URL(req.url, 'http://x').searchParams); } catch (e) {}
       const p = safeProjectPath(q.path);
       if (!p) return sendJson(400, { error: 'bad path' });
+      // Delete first, and only forget the project once the file is really gone.
+      // A file another program is holding open (Dropbox, an editor, a virus
+      // scan) survives the unlink — dropping the recents row then would tell the
+      // user it was deleted while leaving it on disk with nothing left pointing
+      // at where it lives. Already-missing counts as deleted; anything else is
+      // reported, not swallowed.
+      const wantTrash = q.trash === '1' || q.trash === 'true';
+      if (wantTrash) {
+        try { fs.unlinkSync(p); }
+        catch (e) { if (e.code !== 'ENOENT') return sendJson(409, { ok: false, error: 'could not delete the file (' + (e.code || e.message) + ')' }); }
+      }
       writeRecents(readRecents().filter((r) => r.path !== p));
-      if (q.trash === '1' || q.trash === 'true') { try { fs.unlinkSync(p); } catch (e) {} }
-      return sendJson(200, { ok: true });
+      return sendJson(200, { ok: true, deleted: wantTrash });
     }
     return sendJson(405, { error: 'method not allowed' });
   }

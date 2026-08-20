@@ -3857,7 +3857,15 @@
       'Remove from list', 'Delete the file',
       function () { Projects.forget(d.path).then(after); },
       function () {
-        Projects.forget(d.path, true).then(function () {
+        Projects.forget(d.path, true).then(function (r) {
+          // A delete that didn't happen must never say "file removed": the engine
+          // now reports a file it couldn't unlink, and the row stays put so the
+          // user still knows where the project lives.
+          if (r && r.ok === false) {
+            notify('Could not delete that project', (r.error || 'the file is in use') + ' — it is still in your list.');
+            after();
+            return;
+          }
           var cur = readCurrent();
           if (cur && cur.path === d.path) { setCurrent(null); projectBaseline = null; if (typeof updateProjectRow === 'function') updateProjectRow(); }
           after();

@@ -1569,12 +1569,25 @@ async fn api_project_delete(Query(q): Query<HashMap<String, String>>) -> impl In
         None => (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad path" }))),
         Some(path) => {
             let ps = path.to_string_lossy().to_string();
+            let trash = q.get("trash").map(|t| t == "1" || t == "true").unwrap_or(false);
+            // Delete first, and only forget the project once the file is really
+            // gone. A file another program is holding open (Dropbox, an editor,
+            // a virus scan) survives the unlink — dropping the recents row then
+            // would tell the user it was deleted while leaving it on disk with
+            // nothing left pointing at where it lives. Already-missing counts as
+            // deleted; anything else is reported, not swallowed.
+            if trash {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        return (StatusCode::CONFLICT,
+                            Json(json!({ "ok": false, "error": format!("could not delete the file ({})", e) })));
+                    }
+                }
+            }
             let kept: Vec<Value> = read_recents().into_iter()
                 .filter(|r| r.get("path").and_then(|v| v.as_str()) != Some(ps.as_str())).collect();
             write_recents(&kept);
-            let trash = q.get("trash").map(|t| t == "1" || t == "true").unwrap_or(false);
-            if trash { let _ = std::fs::remove_file(&path); }
-            (StatusCode::OK, Json(json!({ "ok": true })))
+            (StatusCode::OK, Json(json!({ "ok": true, "deleted": trash })))
         }
     }
 }

@@ -124,6 +124,7 @@ const PORT_LOCALECHO = 9982;  // SP-1: predictive local echo — instant paint, 
 const PORT_SIDEBAR = 9983;    // SB: Obsidian-style sidebar tabs — switch, persist, notif-in-rail, drag-resize
 const PORT_SPLITCLOSE = 9984; // FB: closing a split's last visible tab collapses the split, even across groups
 const PORT_WINCTL = 9987;     // AUDIT-1: the window's close button survives every pane layout at every size
+const PORT_DELHONEST = 9988;  // AUDIT-2: a delete that didn't happen never reports "file removed"
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -1648,6 +1649,55 @@ check('closeverb', PORT_CLOSEVERB, async ({ browser, base, t, shot }) => {
     await page.close();
   }
 }, { WINMUX_PROJECTS_DIR: path.join(OUT, 'closeverb-projects'), WINMUX_CONFIG_FILE: path.join(OUT, 'closeverb-cfg', 'config.json') });
+
+// AUDIT-2: "Delete the file" must never claim a file is gone when it isn't.
+// Both engines used to throw the unlink's result away and answer ok — and the
+// recents row was dropped BEFORE the delete was attempted, so a file another
+// program was holding open (Dropbox, an editor, a virus scan) stayed on disk
+// while the app forgot where it lived. Three cases, no browser needed: a locked
+// file must be refused with a reason and stay in the list; an unlocked one must
+// really go; and plain "remove from list" must still leave the file alone.
+check('delhonest', PORT_DELHONEST, async ({ base, t }) => {
+  const dir = path.join(OUT, 'delhonest-projects');
+  fs.mkdirSync(dir, { recursive: true });
+  const api = async (method, url, body) => {
+    const r = await fetch(base + url, {
+      method, headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return r.json().catch(() => null);
+  };
+  const listed = async (p) => ((await api('GET', '/api/projects')).recents || []).some((r) => r.path === p);
+  const file = path.join(dir, 'Held Open.winmux.json');
+
+  await api('POST', '/api/project', { name: 'Held Open', path: file, layout: { cols: [] } });
+  t('the project file exists to begin with', fs.existsSync(file), fs.existsSync(file));
+
+  // FileShare.None is the realistic lock: readable by its holder, undeletable.
+  const holder = spawn('pwsh', ['-NoProfile', '-Command',
+    `$f=[System.IO.File]::Open('${file}','Open','Read','None'); Start-Sleep -Seconds 20; $f.Close()`], { stdio: 'ignore' });
+  await new Promise((r) => setTimeout(r, 2000));
+  const blocked = await api('DELETE', '/api/project?path=' + encodeURIComponent(file) + '&trash=1');
+  t('a delete that cannot happen is refused, not reported as done', blocked && blocked.ok === false, blocked);
+  t('and it says why', typeof (blocked || {}).error === 'string', (blocked || {}).error);
+  t('the file is still on disk', fs.existsSync(file), fs.existsSync(file));
+  t('the project stays in the list, so we still know where it lives', await listed(file), true);
+  try { holder.kill(); } catch (e) {}
+  await new Promise((r) => setTimeout(r, 1200));
+
+  const gone = await api('DELETE', '/api/project?path=' + encodeURIComponent(file) + '&trash=1');
+  t('with nothing holding it, the delete succeeds', gone && gone.ok === true, gone);
+  t('and the file really is gone', !fs.existsSync(file), fs.existsSync(file));
+  t('and it leaves the list', !(await listed(file)), await listed(file));
+
+  const keep = path.join(dir, 'Keep Me.winmux.json');
+  await api('POST', '/api/project', { name: 'Keep Me', path: keep, layout: { cols: [] } });
+  const dropped = await api('DELETE', '/api/project?path=' + encodeURIComponent(keep));
+  t('"remove from list" reports success', dropped && dropped.ok === true, dropped);
+  t('"remove from list" says it deleted nothing', dropped && dropped.deleted === false, dropped);
+  t('and the file survives', fs.existsSync(keep), fs.existsSync(keep));
+  t('but it left the list', !(await listed(keep)), await listed(keep));
+}, { WINMUX_PROJECTS_DIR: path.join(OUT, 'delhonest-projects'), WINMUX_CONFIG_FILE: path.join(OUT, 'delhonest-cfg', 'config.json') });
 
 // ST6: non-terminal leaves survive a page reload. Both a diff leaf AND a markdown
 // leaf, opened as pane tabs, must be persisted in the live snapshot and rebuilt on
