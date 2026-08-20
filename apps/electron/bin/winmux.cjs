@@ -92,6 +92,9 @@ const HELP = [
   '  focus <id>                       focus a terminal',
   '  notify [--id N] <message>        flag a session as needing you (attention bus)',
   '  agent <state> [--sid S] [msg]    set a session\'s agent state: working|needs-you|done|idle',
+  '  slash "/cmd" [--id N] [--force]  drive a Claude Code session\'s slash commands',
+  '                                   (waits for it to be idle unless --force)',
+  '  transcript [--sid S] [--last N]  read a Claude session\'s turns back as text',
   '',
   '  browser open <url>               open the browser panel at a URL (desktop app)',
   '  browser snapshot                 list the page\'s interactive elements as @refs',
@@ -198,11 +201,24 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
       const target = flag(argv, '--id');
       const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
       if (!has(argv, '--force')) {
-        let idle = false;
+        // Two different "not now" answers, and they used to be one. The idle test
+        // looks for Claude Code's own prompt glyph, which a plain PowerShell tab
+        // never prints — so pointing this at an ordinary shell (what you get when
+        // you omit --id) sat here for the full 90 seconds and then reported
+        // "session is still working", which was not true and not the problem.
+        // Decide early: if the first few reads show no sign of Claude Code at all,
+        // say so and stop. Keep the long wait only for a session that IS Claude
+        // and is genuinely mid-turn.
+        let idle = false, sawClaude = false;
         for (let i = 0; i < 45; i++) {
           const sc = await rpc('read-screen', { target, lines: 25 }).catch(() => null);
           const s = (sc && sc.screen) || '';
+          if (/❯/.test(s) || /esc to interrupt/i.test(s)) sawClaude = true;
           if (/❯/.test(s) && !/esc to interrupt/i.test(s)) { idle = true; break; }
+          if (i >= 2 && !sawClaude) {
+            die('that session is not running Claude Code, so it has no slash commands — '
+              + 'target one with --id, or add --force to type it in anyway');
+          }
           await sleepMs(2000);
         }
         if (!idle) die('session is still working — retry when idle, or add --force to queue it');
