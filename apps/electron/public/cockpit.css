@@ -274,7 +274,7 @@
   .nrow:hover{background:color-mix(in srgb,var(--text) 6%,transparent)}
   .nrow .nu{width:7px;height:7px;border-radius:50%;background:var(--accent);margin-top:5px;flex:0 0 auto}
   .nrow .nu.read{background:transparent}
-  .nrow .nb{min-width:0;flex:1}.nrow .nws{font-size:11px;color:var(--faint)}.nrow .nt{font-size:12.5px;margin-top:2px}.nrow .ntm{font-size:10.5px;color:var(--faint);margin-top:3px}
+  .nrow .nb{min-width:0;flex:1}.nrow .nt{font-size:12.5px;font-weight:500}.nrow .nws{font-size:11px;color:var(--faint);margin-top:2px;line-height:1.45}.nrow .ntm{font-size:10.5px;color:var(--faint);margin-top:3px}
   /* orchestration panel (multi-agent runs) */
   .orch{display:none;flex:0 0 auto;margin:8px;border:1px solid color-mix(in srgb,var(--accent) 30%,var(--border));border-radius:10px;background:color-mix(in srgb,var(--accent) 6%,var(--bg1));overflow:hidden}
   .orch.on{display:block}

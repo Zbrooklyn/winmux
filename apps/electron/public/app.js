@@ -976,7 +976,11 @@
     if (!notifs.length) html += '<div style="padding:16px 12px;color:var(--faint);font-size:12.5px">Nothing yet. Terminal bells and ended sessions show up here.</div>';
     notifs.forEach(function (n) {
       html += '<div class="nrow" data-notif="' + n.id + '"><span class="nu' + (n.unread ? '' : ' read') + '"></span>' +
-        '<div class="nb"><div class="nws">' + esc(n.sub) + '</div><div class="nt">' + esc(n.title) + '</div><div class="ntm">' + ago(n.ts) + '</div></div></div>';
+        // Title first. Every notify() call passes the headline as the title and
+        // the explanation as the sub, but the row painted the sub above it — so
+        // "Unpin it (Alt+P) before closing." sat above "Pane is pinned", and a
+        // long explanation buried its own headline five faint lines down.
+        '<div class="nb"><div class="nt">' + esc(n.title) + '</div><div class="nws">' + esc(n.sub) + '</div><div class="ntm">' + ago(n.ts) + '</div></div></div>';
     });
     npanel.innerHTML = html;
   }

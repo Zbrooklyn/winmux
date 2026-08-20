@@ -1599,6 +1599,25 @@ fn config_trouble() -> &'static Mutex<Option<(String, String)>> {
     CONFIG_TROUBLE.get_or_init(|| Mutex::new(None))
 }
 
+/// A UTC timestamp a person can read, safe to put in a Windows filename:
+/// 2026-08-20T20-39-27Z. Not worth a date crate for one filename, so the
+/// civil-date conversion (Howard Hinnant's days-from-civil, inverted) is here.
+fn stamp_for_filename() -> String {
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let (days, rem) = ((secs / 86400) as i64, secs % 86400);
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;                                     // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);              // [0, 365]
+    let mp = (5 * doy + 2) / 153;                                   // [0, 11], March-based
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    format!("{:04}-{:02}-{:02}T{:02}-{:02}-{:02}Z",
+        y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60)
+}
+
 fn read_config() -> Value {
     let path = config_file();
     let raw = match std::fs::read_to_string(&path) {
@@ -1617,9 +1636,11 @@ fn read_config() -> Value {
             };
             if let Ok(mut g) = config_trouble().lock() {
                 if g.is_none() {
-                    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_secs()).unwrap_or(0);
-                    let backup = path.with_extension(format!("damaged-{}.json", stamp));
+                    // The user has to find this file in Explorer, so date it the way
+                    // they read dates. An epoch second tells them nothing, and the
+                    // Node engine already writes a readable stamp - same name, either
+                    // engine, or the instructions we give them only work on one.
+                    let backup = path.with_extension(format!("damaged-{}.json", stamp_for_filename()));
                     let moved = std::fs::rename(&path, &backup).is_ok();
                     *g = Some((why, if moved { backup.to_string_lossy().to_string() } else { String::new() }));
                 }

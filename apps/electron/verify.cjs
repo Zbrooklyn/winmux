@@ -610,15 +610,27 @@ check('busyport', PORT_BUSY, async ({ browser, base, t, shot, skip }) => {
   if (!busyHold) return skip('Tailscale is not running, so there is no tailnet side to collide with');
   const p = await desktop(browser);
   await p.goto(base + '/', { waitUntil: 'domcontentloaded' });
-  await p.waitForTimeout(4500);
-
-  await p.locator('.xterm-helper-textarea').first().focus();
-  await p.keyboard.type('"before " + $env:COMPUTERNAME');
-  await p.keyboard.press('Enter');
-  await p.waitForTimeout(2500);
   const rows = () => p.evaluate(() =>
     [].map.call(document.querySelectorAll('.xterm-rows > div'), (d) => d.textContent).join('|'));
-  t('a shell is alive before the flip', /before \w/.test(await rows()));
+  // Wait for the shell to answer, not for a stopwatch. Under a full-suite load a
+  // PowerShell takes longer than any interval worth guessing, and the failure
+  // then lands on "a shell is alive" — a precondition, blaming the product for
+  // the harness being early. `say` retries the line until its output appears.
+  const say = async (text, mark) => {
+    for (let i = 0; i < 12; i++) {
+      await p.locator('.xterm-helper-textarea').first().focus();
+      await p.keyboard.type(text);
+      await p.keyboard.press('Enter');
+      try {
+        await p.waitForFunction(`/${mark} \\w/.test([].map.call(
+          document.querySelectorAll('.xterm-rows > div'), function (d) { return d.textContent; }).join('|'))`,
+          null, { timeout: 5000 });
+        return true;
+      } catch (e) { /* shell not up yet — say it again */ }
+    }
+    return false;
+  };
+  t('a shell is alive before the flip', await say('"before " + $env:COMPUTERNAME', 'before'));
 
   await settings(p, 'Phone');
   await p.locator('[data-phone-toggle]').click();
@@ -634,12 +646,8 @@ check('busyport', PORT_BUSY, async ({ browser, base, t, shot, skip }) => {
   t('the app is still serving', (await p.evaluate(async () => (await fetch('/api/phone')).status)) === 200);
 
   await p.keyboard.press('Escape');
-  await p.waitForTimeout(500);
-  await p.locator('.xterm-helper-textarea').first().focus();
-  await p.keyboard.type('"after " + $env:COMPUTERNAME');
-  await p.keyboard.press('Enter');
-  await p.waitForTimeout(2500);
-  t('the same terminal still runs commands', /after \w/.test(await rows()));
+  await p.locator('.ovl[data-open]').first().waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+  t('the same terminal still runs commands', await say('"after " + $env:COMPUTERNAME', 'after'));
   await shot(p, 'busyport');
 });
 
@@ -2210,6 +2218,11 @@ check('cfgsafe', PORT_CFGSAFE, async ({ browser, base, t }) => {
   t('and it does NOT pretend the file was empty', !!cfg.configError, { config: cfg.config });
   t('the damaged file is kept, not destroyed', !!cfg.configBackup && fs.existsSync(cfg.configBackup),
     cfg.configBackup && path.basename(cfg.configBackup));
+  // The user has to find this file in Explorer. Both engines must date it the
+  // same readable way — the Rust core used to stamp it with an epoch second.
+  t('and it is named with a date a person can read',
+    /config\.damaged-\d{4}-\d{2}-\d{2}T[\d-]+Z?\.json$/.test(cfg.configBackup || ''),
+    cfg.configBackup && path.basename(cfg.configBackup));
   t('and what was kept is the user\'s original bytes, untouched',
     !!cfg.configBackup && fs.readFileSync(cfg.configBackup, 'utf8') === damaged);
   t('the live settings path is now clear, so the app starts on real defaults',
@@ -2233,6 +2246,17 @@ check('cfgsafe', PORT_CFGSAFE, async ({ browser, base, t }) => {
     told = await page.evaluate(SEEN);
     t('the app tells the user their settings file could not be read',
       /could not be read/i.test(told), told.slice(0, 200));
+    // And it reads as a notice, not a riddle: every notify() passes the headline
+    // as the title, so the title must come first in the row. It used to come
+    // after the body, which buried this one under five faint lines.
+    const order = await page.evaluate(`(function () {
+      var r = document.querySelector('.nrow'); if (!r) return null;
+      var t = r.querySelector('.nt'), s = r.querySelector('.nws');
+      if (!t || !s) return null;
+      return { titleTop: t.getBoundingClientRect().top, subTop: s.getBoundingClientRect().top };
+    })()`);
+    t('and the headline is above the explanation, not under it',
+      !!order && order.titleTop < order.subTop, order);
   } finally {
     await page.close();
   }
