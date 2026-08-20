@@ -2075,8 +2075,36 @@ async function start() {
     // copies (installed vs dev) never clobber one shared ~/.winmux/instance.json.
     const inst = process.env.WINMUX_INSTANCE_FILE || path.join(os.homedir(), '.winmux', 'instance.json');
     fs.mkdirSync(path.dirname(inst), { recursive: true });
-    fs.writeFileSync(inst, JSON.stringify({ port: PORT, host: HOST, pid: process.pid, started: Date.now() }));
-    const cleanup = () => { try { fs.unlinkSync(inst); } catch (e) {} };
+    // This file is the ONLY thing that says where the engine holding your shells
+    // lives. If a second engine ever starts for this identity — a misjudged health
+    // check, a double launch — it must not erase that. Overwriting it strands every
+    // shell, agent and unsaved scrollback on an engine nothing can find or kill.
+    // So: only claim the file if nobody living owns it.
+    const owner = () => {
+      try {
+        const j = JSON.parse(fs.readFileSync(inst, 'utf8'));
+        if (!j || !j.pid || j.pid === process.pid) return null;
+        try { process.kill(j.pid, 0); } catch (e) { if (e.code !== 'EPERM') return null; }
+        return j;                                        // someone else, and alive
+      } catch (e) { return null; }                       // absent or unreadable — free
+    };
+    const held = owner();
+    if (held) {
+      console.error('winmux: not claiming ' + inst + ' — pid ' + held.pid
+        + ' still holds it on port ' + held.port + '. This engine is running on ' + PORT
+        + ' but will stay undiscovered rather than strand that one.');
+    } else {
+      fs.writeFileSync(inst, JSON.stringify({ port: PORT, host: HOST, pid: process.pid, started: Date.now() }));
+    }
+    // Same rule leaving: only remove the file if it is still MINE. Deleting on the
+    // way out used to be unconditional, so a second engine quitting took the first
+    // engine's pointer with it.
+    const cleanup = () => {
+      try {
+        const j = JSON.parse(fs.readFileSync(inst, 'utf8'));
+        if (j && j.pid === process.pid) fs.unlinkSync(inst);
+      } catch (e) {}
+    };
     process.on('exit', cleanup);
     process.on('SIGINT', () => { cleanup(); process.exit(0); });
   } catch (e) { /* discovery is best-effort */ }

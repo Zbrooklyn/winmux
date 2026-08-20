@@ -136,6 +136,7 @@ const PORT_KEYBACK = 9996;     // AUDIT-9: a dialog that took the keyboard gives
 const PORT_CFGSAFE = 9998;     // AUDIT-10: a damaged settings file is kept and reported, never quietly replaced
 const PORT_BUSYBAR = 9995;     // the busy underline actually paints, and grows, while a shell works
 const PORT_ORPHAN = 9974;      // AUDIT-8: closing a tab whose socket is down still ends its shell
+const PORT_NOSTRAND = 9972;    // AUDIT-4: a slow answer never strands a live engine and its shells
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -4217,6 +4218,103 @@ check('detach', PORT_SURVIVE2, async ({ t }) => {
     // Belt-and-braces: never leave the spawned server running if an assert threw.
     if (boundPort) { try { await shutdownServer(boundPort); } catch (e) {} }
     try { fs.unlinkSync(instanceFile); } catch (e) {}
+  }
+});
+
+// --- nostrand: a slow answer never strands a live engine (AUDIT-4) ----------
+// The engine holding your shells is found through one file. Discovery used to
+// call it dead on a SINGLE 1200ms ping — so one antivirus scan, Dropbox sync or
+// cold start and a second engine launched, took the next port, and overwrote the
+// file naming the real one. Every shell, agent and unsaved scrollback on the old
+// engine became unreachable and unkillable.
+//
+// Reproduced honestly: a server that IS healthy but answers in 1800ms, named by
+// a file with a genuinely live pid. That is the exact ambiguous state, and the
+// only correct reading is "busy", not "dead".
+check('nostrand', PORT_NOSTRAND, async ({ t }) => {
+  const { resolveServer } = require('./dist-electron/server-host.js');
+  const scratch = path.join(OUT, 'nostrand');
+  fs.rmSync(scratch, { recursive: true, force: true });
+  fs.mkdirSync(scratch, { recursive: true });
+  const instanceFile = path.join(scratch, 'instance.json');
+
+  // A stand-in engine: healthy, answering /api/info, just slower than one ping.
+  const slow = http.createServer((req, res) => {
+    setTimeout(() => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ sessions: 3, port: slow.address().port }));
+    }, 1800);
+  });
+  await new Promise((r) => slow.listen(0, '127.0.0.1', r));
+  const slowPort = slow.address().port;
+
+  // Something genuinely alive to own the file. Its pid is the whole point: a
+  // running process is the evidence discovery is supposed to weigh.
+  const holder = spawn(process.execPath, ['-e', 'setTimeout(function(){}, 120000)'], { stdio: 'ignore' });
+  await new Promise((r) => setTimeout(r, 300));
+
+  const stamp = { port: slowPort, host: '127.0.0.1', pid: holder.pid, started: Date.now() };
+  fs.writeFileSync(instanceFile, JSON.stringify(stamp));
+
+  let spawned = 0;
+  try {
+    const opts = {
+      instanceFile, trustFile: path.join(scratch, 'devices.json'),
+      execPath: process.execPath, serverPath: path.join(ROOT, 'server.cjs'), timeoutMs: 15000,
+    };
+    const began = Date.now();
+    const got = await resolveServer(opts);
+    const took = Date.now() - began;
+    if (!got.attached) spawned = got.port;
+
+    t('a healthy engine that answers slowly is kept, not replaced',
+      got.attached === true && got.port === slowPort, { got, slowPort, tookMs: took });
+    // Both halves, together. Time alone proves nothing — without the fix this
+    // check ALSO burned 2.5s, spawning a rival engine. What matters is that the
+    // time was spent asking the same engine again and it was still there.
+    t('and it was kept by asking again, not by luck on the first ping',
+      got.attached === true && took >= 1200, { attached: got.attached, tookMs: took });
+    const after = JSON.parse(fs.readFileSync(instanceFile, 'utf8'));
+    t('the file still points at the engine holding the shells',
+      after.pid === holder.pid && after.port === slowPort, after);
+
+    // The other half of the same promise: even if discovery ever DOES misjudge,
+    // a second engine must not erase the pointer to the first — and must not
+    // take it with it on the way out.
+    // The rival must be the engine actually under test — otherwise WINMUX_CORE=rust
+    // would prove the Node rule twice and the Rust rule never.
+    const rival = RUST_CORE
+      ? spawn(RUST_CORE, [], {
+          cwd: ROOT, stdio: 'ignore',
+          env: Object.assign({}, process.env, {
+            WINMUX_PORT: '0', WINMUX_INSTANCE_FILE: instanceFile,
+            WINMUX_TRUST_FILE: path.join(scratch, 'devices.json'),
+            WINMUX_PUBLIC: path.join(ROOT, 'public'),
+          }),
+        })
+      : spawn(process.execPath, [path.join(ROOT, 'server.cjs')], {
+          cwd: ROOT, stdio: 'ignore',
+          env: Object.assign({}, process.env, {
+            PORT: '0', WINMUX_INSTANCE_FILE: instanceFile,
+            WINMUX_TRUST_FILE: path.join(scratch, 'devices.json'),
+          }),
+        });
+    await new Promise((r) => setTimeout(r, 4000));
+    const during = JSON.parse(fs.readFileSync(instanceFile, 'utf8'));
+    t('a second engine refuses to claim a file a live engine owns',
+      during.pid === holder.pid && during.port === slowPort, during);
+
+    rival.kill();
+    await new Promise((r) => setTimeout(r, 1500));
+    const stillThere = fs.existsSync(instanceFile)
+      && JSON.parse(fs.readFileSync(instanceFile, 'utf8')).pid === holder.pid;
+    t('and quitting does not take the first engine’s pointer with it', stillThere,
+      { exists: fs.existsSync(instanceFile) });
+  } finally {
+    try { holder.kill(); } catch (e) {}
+    try { slow.close(); } catch (e) {}
+    if (spawned) { try { await require('./dist-electron/server-host.js').shutdownServer(spawned); } catch (e) {} }
+    fs.rmSync(scratch, { recursive: true, force: true });
   }
 });
 

@@ -357,16 +357,76 @@ fn resolve_public_dir() -> PathBuf {
     PathBuf::from("../../apps/electron/public")
 }
 
-fn write_instance(port: u16) {
-    let file = std::env::var("WINMUX_INSTANCE_FILE").map(PathBuf::from).unwrap_or_else(|_| {
+fn instance_path() -> PathBuf {
+    std::env::var("WINMUX_INSTANCE_FILE").map(PathBuf::from).unwrap_or_else(|_| {
         let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
         PathBuf::from(home).join(".winmux").join("instance.json")
-    });
+    })
+}
+
+// Windows has no kill(pid, 0). OpenProcess with QUERY_LIMITED_INFORMATION is the
+// equivalent question: does a process with this id exist right now?
+#[cfg(windows)]
+fn pid_alive(pid: u32) -> bool {
+    use std::os::windows::raw::HANDLE;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> HANDLE;
+        fn CloseHandle(h: HANDLE) -> i32;
+    }
+    const QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    unsafe {
+        let h = OpenProcess(QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() { false } else { CloseHandle(h); true }
+    }
+}
+#[cfg(not(windows))]
+fn pid_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+// Who currently owns the instance file — Some(pid, port) if it names a DIFFERENT
+// process that is still running.
+fn instance_owner(file: &PathBuf) -> Option<(u32, u64)> {
+    let txt = std::fs::read_to_string(file).ok()?;
+    let j: serde_json::Value = serde_json::from_str(&txt).ok()?;
+    let pid = j.get("pid")?.as_u64()? as u32;
+    if pid == 0 || pid == std::process::id() { return None; }
+    if !pid_alive(pid) { return None; }
+    Some((pid, j.get("port").and_then(|p| p.as_u64()).unwrap_or(0)))
+}
+
+// This file is the ONLY thing that says where the engine holding your shells
+// lives. A second engine for the same identity — a misjudged health check, a
+// double launch — must not erase it: doing so strands every shell, agent and
+// unsaved scrollback on an engine nothing can find or kill. So only claim the
+// file when nobody living owns it.
+fn write_instance(port: u16) {
+    let file = instance_path();
     if let Some(dir) = file.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
+    if let Some((pid, held)) = instance_owner(&file) {
+        eprintln!("winmux-core: not claiming {} — pid {pid} still holds it on port {held}. \
+                   This engine is on {port} but will stay undiscovered rather than strand that one.",
+                  file.display());
+        return;
+    }
     let body = json!({"port": port, "host": "127.0.0.1", "pid": std::process::id(), "started": now_ms() as u64});
     let _ = std::fs::write(&file, body.to_string());
+}
+
+// Same rule leaving: only remove the file if it is still MINE, so a second
+// engine quitting cannot take the first engine's pointer with it.
+fn release_instance() {
+    let file = instance_path();
+    if let Ok(txt) = std::fs::read_to_string(&file) {
+        if let Ok(j) = serde_json::from_str::<serde_json::Value>(&txt) {
+            if j.get("pid").and_then(|p| p.as_u64()) == Some(std::process::id() as u64) {
+                let _ = std::fs::remove_file(&file);
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -456,6 +516,7 @@ async fn main() {
         for (_, s) in shutdown_state.sessions.lock().unwrap().drain() {
             let _ = s.child.lock().unwrap().kill();
         }
+        release_instance();
         std::process::exit(0);
     });
 

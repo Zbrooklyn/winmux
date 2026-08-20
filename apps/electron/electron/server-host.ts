@@ -30,9 +30,9 @@ function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (e: any) { return !!(e && e.code === 'EPERM'); }
 }
 
-function ping(port: number, host: string): Promise<boolean> {
+function ping(port: number, host: string, timeout = 1200): Promise<boolean> {
   return new Promise((resolve) => {
-    const req = http.get({ host, port, path: '/api/info', timeout: 1200 }, (res) => {
+    const req = http.get({ host, port, path: '/api/info', timeout }, (res) => {
       res.resume();
       resolve(res.statusCode === 200);
     });
@@ -41,12 +41,42 @@ function ping(port: number, host: string): Promise<boolean> {
   });
 }
 
-async function liveInstance(file: string): Promise<Instance | null> {
+// How long to keep asking a server that is DEFINITELY still running (its pid is
+// alive) but hasn't answered yet. Zero on the first look of a cold launch would
+// be wrong: getting this call wrong costs the user every shell, agent and
+// unsaved scrollback on the old engine, because the newcomer takes the next
+// port and overwrites the file that says where the real one lives. Nothing is
+// on the other side of the trade except a few seconds on a launch that is
+// already unusual.
+const PATIENCE_MS = 8000;
+
+// A server is "live" if its file names a running pid AND it answers. The second
+// half used to be a single 1200ms ping — one missed answer during an antivirus
+// scan, a Dropbox sync or a cold start and a healthy engine was declared dead.
+// So the deadline now depends on what we actually know:
+//   pid gone      → dead, immediately. That is the real crash case and it should
+//                   not cost a cold launch a single millisecond.
+//   pid alive     → keep asking. A running process that is briefly too busy to
+//                   answer is overwhelmingly the likelier reading, and it is the
+//                   one where being wrong destroys work.
+async function liveInstance(file: string, patienceMs = PATIENCE_MS): Promise<Instance | null> {
   const inst = readInstance(file);
   if (!inst || !inst.port) return null;
   if (inst.pid && !pidAlive(inst.pid)) return null;   // stale file — the server crashed
-  const ok = await ping(inst.port, inst.host || '127.0.0.1');
-  return ok ? inst : null;
+  const host = inst.host || '127.0.0.1';
+  if (await ping(inst.port, host)) return inst;
+  // No pid to vouch for it, or no patience budget (the post-spawn poll below
+  // wants a fast answer, not an 8-second one).
+  if (!inst.pid || patienceMs <= 0) return null;
+  const until = Date.now() + patienceMs;
+  while (Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 250));
+    // If it dies while we are waiting, THEN it is really gone — and we learn
+    // that from the pid, not from another timeout.
+    if (!pidAlive(inst.pid)) return null;
+    if (await ping(inst.port, host, 2000)) return inst;
+  }
+  return null;
 }
 
 export interface ResolveOpts {
@@ -81,7 +111,10 @@ export async function resolveServer(opts: ResolveOpts): Promise<Resolved> {
 
   const deadline = Date.now() + (opts.timeoutMs || 15000);
   while (Date.now() < deadline) {
-    const inst = await liveInstance(opts.instanceFile);
+    // patience 0: we are waiting on a server we just started, and the loop below
+    // already IS the waiting. Handing it 8s of extra patience per pass would turn
+    // a 15s budget into two attempts.
+    const inst = await liveInstance(opts.instanceFile, 0);
     if (inst) return { port: inst.port, host: inst.host || '127.0.0.1', attached: false };
     // 50ms, not 200: the check is a local file read + loopback ping, so polling
     // fast is free — and every wasted step here is dead time on the cold path
