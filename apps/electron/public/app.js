@@ -1632,7 +1632,22 @@
   // the machine for the length of the grace window.
   function killShell(t) {
     t.closing = true;
-    try { if (t.ws && t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ t: 'x' })); } catch (e) {}
+    // Stop the reconnect machinery FIRST. A tab closed mid-reconnect still had a
+    // retry queued, and connect() had no idea the tab was gone — so the timer
+    // fired, reattached by sid, and left a live shell with no tab, no sidebar row
+    // and no way to reach it. Ten tidied-up tabs meant ten invisible PowerShells.
+    if (t.stopRetry) { try { t.stopRetry(); } catch (e) {} }
+    if (t.offlineTimer) { clearTimeout(t.offlineTimer); t.offlineTimer = null; }
+    var sent = false;
+    try {
+      if (t.ws && t.ws.readyState === WebSocket.OPEN) { t.ws.send(JSON.stringify({ t: 'x' })); sent = true; }
+    } catch (e) {}
+    // The socket is the fast path, not the only one. Mid-reconnect it is not open,
+    // and the kill used to be silently dropped — leaving the shell alive on the
+    // engine. Say it over HTTP instead, which does not care about socket state.
+    if (!sent && t.sid) {
+      try { fetch('/api/session?sid=' + encodeURIComponent(t.sid), { method: 'DELETE' }); } catch (e) {}
+    }
     try { if (t.ws) t.ws.close(); } catch (e) {}
   }
   function fitActive(p) { var t = activeTermOf(p); if (t && t.fit) { try { t.fit.fit(); } catch (e) {} sendResize(t); resyncRenderer(t.term); } }
@@ -2352,8 +2367,15 @@
     // instead of printing an obituary. `[session ended]` is kept for the one
     // case that earns it: the shell itself exited.
     var retries = 0, retryTimer = null, told = false;
+    // killShell needs to reach this timer: a tab closed mid-reconnect left a retry
+    // queued, and the tab is gone long before it fires.
+    t.stopRetry = function () { clearTimeout(retryTimer); retryTimer = null; };
     function connect() {
       clearTimeout(retryTimer);
+      // A closed tab must never open a socket. Without this the queued retry ran
+      // after the tab was gone, reattached by sid — or spawned a fresh shell —
+      // and left it running with nothing on screen pointing at it.
+      if (t.closing || t.ended) return;
       // The id we're asking the server to hand back. If the server rebooted it's
       // gone there, but its scrollback may still be on disk under this id — so we
       // hold it before the meta reply overwrites t.sid with the fresh shell's id.

@@ -16,7 +16,7 @@ use axum::{
     http::{header, HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -404,6 +404,8 @@ async fn main() {
         .route("/api/projects", get(api_projects_list))
         .route("/api/project", get(api_project_get).post(api_project_post).delete(api_project_delete))
         .route("/api/update", get(api_update))
+        // Ending a shell must not require a live socket to it — see api_session_delete.
+        .route("/api/session", delete(api_session_delete))
         // Desk door only — deliberately absent from phone_router: a phone must
         // never be able to kill the engine under the desktop, reach into this
         // machine's git working tree, or change what it launches at logon.
@@ -1939,6 +1941,30 @@ async fn api_project_post(Json(incoming): Json<Value>) -> impl IntoResponse {
     (StatusCode::OK, Json(json!({ "path": ps })))
 }
 // DELETE /api/project?path=&trash=1 — drop from recents; unlink only with trash.
+// DELETE /api/session?sid= — end a shell without needing a live socket to it.
+//
+// Closing a tab is the one close that should take the shell with it, and the only
+// way to say so used to be a message over that tab's own socket. If the socket was
+// down — engine restarted, laptop asleep, network blip — the message could not be
+// sent and the shell outlived the tab with nothing on screen pointing at it. Ten
+// tidied-up tabs meant ten invisible PowerShells.
+//
+// Desk door only (absent from phone_router, like /api/git and /api/autostart): a
+// phone attaches to shells, it does not reach across the network and kill them.
+async fn api_session_delete(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let sid = q.get("sid").cloned().unwrap_or_default();
+    let found = state.sessions.lock().unwrap().remove(&sid);
+    if let Some(s) = &found {
+        let _ = s.child.lock().unwrap().kill();
+    }
+    // `ended:false` is not a failure — the shell was already gone, which is the
+    // outcome the caller wanted. Reported so a check can tell the two apart.
+    Json(json!({ "ok": true, "ended": found.is_some() }))
+}
+
 async fn api_project_delete(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
     match q.get("path").and_then(|s| safe_project_path(s)) {
         None => (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad path" }))),

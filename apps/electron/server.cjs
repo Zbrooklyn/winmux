@@ -997,6 +997,31 @@ function handle(req, res, viaPhone) {
     return;
   }
 
+  // DELETE /api/session?sid= — end a shell without needing a live socket to it.
+  //
+  // Closing a tab is the one close that should take the shell with it, and until
+  // now the only way to say so was a message over that tab's own socket. If the
+  // socket was down — engine restarted, laptop asleep, network blip — the message
+  // could not be sent, and the shell outlived the tab with nothing on screen
+  // pointing at it. Ten tidied-up tabs meant ten invisible PowerShells.
+  //
+  // Desk-door only, same as the other host-affecting routes: a phone attaches to
+  // shells, it does not get to reach across the network and kill them.
+  if (urlPath === '/api/session' && req.method === 'DELETE') {
+    if (viaPhone) {
+      res.writeHead(403, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ error: 'ending a session is available only at the PC' }));
+    }
+    let sid = '';
+    try { sid = String(new URL(req.url, 'http://x').searchParams.get('sid') || ''); } catch (e) {}
+    const s = sid && SESSIONS.get(sid);
+    if (s) endSession(s, 'closed by you');
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    // `ended:false` is not a failure — the shell was already gone, which is the
+    // outcome the caller wanted. It is reported so a check can tell the two apart.
+    return res.end(JSON.stringify({ ok: true, ended: !!s }));
+  }
+
   // Projects — save / list / read / forget a workspace file. Reads and writes host
   // disk, so it is desk-door only: a phone attaches to an already-open workspace and
   // has no business writing .json files onto the PC. Same guard as /api/md.

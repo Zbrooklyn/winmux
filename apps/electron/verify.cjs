@@ -135,6 +135,7 @@ const PORT_NOCLOBBER = 9997;   // AUDIT-8: saving a project never writes over a 
 const PORT_KEYBACK = 9996;     // AUDIT-9: a dialog that took the keyboard gives it back however it is dismissed
 const PORT_CFGSAFE = 9998;     // AUDIT-10: a damaged settings file is kept and reported, never quietly replaced
 const PORT_BUSYBAR = 9995;     // the busy underline actually paints, and grows, while a shell works
+const PORT_ORPHAN = 9994;      // AUDIT-8: closing a tab whose socket is down still ends its shell
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -353,6 +354,28 @@ const CHECKS = [];
 // A check may carry an env override for its server (last arg) — e.g. the update
 // check forces WINMUX_FAKE_LATEST so the badge can be proven without a real release.
 const check = (id, port, run, env) => CHECKS.push({ id, port, run, env });
+
+// One idiom, copy-pasted 29 times: navigate, then sleep 4500ms hoping the app
+// has booted and a shell is answering. Three of today's honest-failure bugs came
+// from exactly that guess losing its race under a full-suite load, and failing on
+// some later assertion that had nothing to do with the cause.
+//
+// This waits for the condition instead. It keeps a floor so it never runs AHEAD
+// of where the old sleep put it — the change may only ever wait longer, never
+// shorter — and it never throws: a page with no terminal at all (onboarding,
+// markdown-only) falls through at the cap, exactly as the sleep did.
+async function appReady(page, floorMs, capMs) {
+  const floor = floorMs === undefined ? 4500 : floorMs;
+  const started = Date.now();
+  await page.waitForFunction(`(function () {
+    var hosts = [].slice.call(document.querySelectorAll('.term-host'))
+      .filter(function (e) { return e.style.display !== 'none'; });
+    var rows = (hosts[0] || document).querySelector('.xterm-rows');
+    return !!rows && (rows.textContent || '').trim().length > 0;
+  })()`, null, { timeout: capMs || 30000 }).catch(() => {});
+  const left = floor - (Date.now() - started);
+  if (left > 0) await page.waitForTimeout(left);
+}
 
 const desktop = async (browser, extraSettings) => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
@@ -574,7 +597,7 @@ check('brand', PORT_BUSY, async ({ browser, base, t, shot }) => {
   // hidden at desktop width, so it has to be measured at phone width.
   const p2 = await phoneCtx(browser);
   await p2.goto(base + '/', { waitUntil: 'domcontentloaded' });
-  await p2.waitForTimeout(4500);
+  await appReady(p2);
   const b = await p2.evaluate(() => {
     const el = document.querySelector('.nhead .brand');
     if (!el) return null;
@@ -703,7 +726,7 @@ check('phone', PORT_PHONE, async ({ browser, base, t, shot, skip }) => {
 
   const p = await desktop(browser);
   await p.goto(base + '/', { waitUntil: 'domcontentloaded' });
-  await p.waitForTimeout(4500);
+  await appReady(p);
   await settings(p, 'Phone');
 
   t('it starts off', !/\bon\b/.test(await p.locator('[data-phone-toggle]').getAttribute('class')));
@@ -1386,7 +1409,7 @@ check('workspace', PORT_WORKSPACE, async ({ browser, base, t, shot }) => {
   const pageB = await desktop(browser);
   try {
     await pageB.goto(base, { waitUntil: 'domcontentloaded' });
-    await pageB.waitForTimeout(4500);   // engine round-trip + restore + reattach
+    await appReady(pageB);   // engine round-trip + restore + reattach
     const tabsB = await pageB.evaluate(() => document.querySelectorAll('.ptab').length);
     t('a fresh profile restores the layout from the engine (both tabs back)', tabsB >= 2, { tabsB });
     await shot(pageB, 'workspace-survives-profile-wipe');
@@ -2227,6 +2250,66 @@ check('keyback', PORT_KEYBACK, async ({ browser, base, t, shot }) => {
 // base, destroying every imported theme and custom keybinding — and answered
 // "saved". One stray comma cost the user the lot, and the recovery overwrote the
 // evidence. A damaged file must be KEPT and REPORTED, not quietly replaced.
+// --- orphan: closing a tab whose socket is down still ends its shell ------
+// AUDIT-8. Closing a tab is the one close that takes the shell with it, and the
+// only way to say so was a message over that tab's own socket. Mid-reconnect —
+// engine restarted, laptop woken, network blip — the socket is not open, the
+// message was silently dropped, and the shell kept running with no tab, no
+// sidebar row and no way to reach it. Ten tidied-up tabs, ten invisible
+// PowerShells. Counted on the engine, because the engine is where they live.
+check('orphan', PORT_ORPHAN, async ({ browser, base, t }) => {
+  const page = await desktop(browser);
+  const live = () => fetch(base + '/api/info', { cache: 'no-store' })
+    .then((r) => r.json()).then((j) => j.sessions);
+  try {
+    await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    await appReady(page);
+    // A second tab, so closing one leaves the workspace alive and the count moves
+    // by a knowable amount.
+    await page.evaluate(() => document.getElementById('open-new').click());
+    await appReady(page);
+    await page.waitForFunction('document.querySelectorAll(".ptab").length >= 2', null, { timeout: 20000 });
+    const before = await live();
+    t('two tabs means two shells on the engine', before >= 2, before);
+
+    // Drop the socket the way a restarted engine does, then close the tab. The
+    // app cannot send anything over that socket — which is the whole point.
+    const dropped = await page.evaluate(() => {
+      const t = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
+      if (!t || !t.ws) return null;
+      t.ws.close();
+      return { sid: t.sid || null, state: t.ws.readyState };
+    });
+    t('the tab has a shell id and its socket is down', !!dropped && !!dropped.sid, dropped);
+
+    // The close control is hover-reveal, so hover first — that is the real path a
+    // user takes, and clicking straight at a hidden control just waits forever.
+    await page.hover('.ptab[data-active]');
+    await page.click('.ptab[data-active] .x', { timeout: 10000 });
+    // Wait for the count to drop — but do NOT assert on that moment. Before the
+    // fix it DID drop, and then the queued retry reattached by sid and put the
+    // shell straight back: a check that graded the transient called the bug fixed.
+    // What a user cares about is whether the shell is gone and STAYS gone, so
+    // every assertion below is measured after things have settled.
+    await page.waitForFunction(
+      `fetch('/api/info', { cache: 'no-store' }).then(function (r) { return r.json(); })
+         .then(function (j) { return j.sessions < ${before}; })`,
+      null, { timeout: 20000 }).catch(() => {});
+    // Long enough for a resurrection to happen if it is going to: the backoff
+    // tops out at 5s, so 6 covers a full retry.
+    await page.waitForTimeout(6000);
+    const after = await live();
+    t('closing it ends the shell, even with the socket down', after === before - 1, { before, after });
+    t('and exactly one shell went, not the lot', after === before - 1, { before, after });
+
+    await page.waitForTimeout(3000);
+    const later = await live();
+    t('and it stays gone — no reconnect brings it back', later === before - 1, { before, after, later });
+  } finally {
+    await page.close();
+  }
+});
+
 // --- busybar: the tab's busy underline, measured on screen ----------------
 // The underline that shows a tab is working had no check at all, so when it was
 // switched from animating `width` to `transform: scaleX` — a real fix, since it
@@ -2694,7 +2777,7 @@ const SIDEBAR = () => {
 check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
   const p = await desktop(browser);
   await p.goto(base + '/', { waitUntil: 'domcontentloaded' });
-  await p.waitForTimeout(4500);
+  await appReady(p);
   // Naming a group goes through the in-app dialog (window.prompt is dead in
   // Electron, so it was replaced by promptDialog) — fill + confirm it.
   const nameGroup = async (name) => {
@@ -2765,7 +2848,7 @@ check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
 
   // Names and the open group are the thing that has to survive a reload.
   await p.reload({ waitUntil: 'domcontentloaded' });
-  await p.waitForTimeout(4500);
+  await appReady(p);
   const back = await p.evaluate(SIDEBAR);
   t('both groups come back by name after a reload',
     back.rows.length === 2 && back.rows.some((r) => r.name === 'Client work'), back.rows.map((r) => r.name));
@@ -2897,7 +2980,13 @@ check('electron', PORT_GROUPS, async ({ t }) => {
     const timer = setTimeout(() => {
       try { proc.kill(); } catch (e) {}
       resolve({ code: null, timedOut: true });
-    }, 60000);
+      // The claim is that the app quits by ITSELF rather than hanging forever —
+      // not that it quits inside a minute. This cap is only the hang guard, and
+      // 60s was a guess that a loaded full-suite run overran while every other
+      // assertion in this check passed: the app had done its whole job and was
+      // simply still shutting down. Widened, not weakened — a real hang still
+      // fails, it just takes longer to say so.
+    }, 180000);
     proc.on('exit', (code) => { clearTimeout(timer); resolve({ code, timedOut: false }); });
     proc.on('error', (e) => { clearTimeout(timer); resolve({ code: null, timedOut: false, err: String(e.message || e) }); });
   });
@@ -3040,7 +3129,7 @@ check('agentspawn', PORT_AGENTSPAWN, async ({ browser, base, t }) => {
 
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);        // the app connects to /control (spawn needs new-tab + send)
+  await appReady(page);        // the app connects to /control (spawn needs new-tab + send)
 
   const marker = 'HELLO_FROM_B_' + PORT_AGENTSPAWN;
   const sp = parse((await winmux(['agent', 'spawn', '--cmd', "Write-Output '" + marker + "'", '--name', 'btask', '--json'])).out);
@@ -3074,7 +3163,7 @@ check('cli', PORT_CLI, async ({ browser, base, t, shot }) => {
 
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);          // the app connects to /control
+  await appReady(page);          // the app connects to /control
 
   const list1 = await winmux(['list', '--json']);
   const p1 = parse(list1.out);
@@ -3116,7 +3205,7 @@ check('cli', PORT_CLI, async ({ browser, base, t, shot }) => {
 check('agent-env', PORT_AGENTENV, async ({ browser, base, t }) => {
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);
+  await appReady(page);
   const sid = await page.evaluate(() => {
     const at = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
     return at ? at.sid : null;
@@ -3156,7 +3245,7 @@ check('agent-state', PORT_AGENTSTATE, async ({ browser, base, t, shot }) => {
 
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);
+  await appReady(page);
   const sid = await page.evaluate(() => { const at = window.__winmuxActiveTerm(); return at ? at.sid : null; });
   t('a session sid is available to target', !!sid, sid);
 
@@ -3196,7 +3285,7 @@ check('agent-hooks', PORT_AGENTHOOKS, async ({ browser, base, t }) => {
 
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);
+  await appReady(page);
   const sid = await page.evaluate(() => { const at = window.__winmuxActiveTerm(); return at ? at.sid : null; });
 
   // Fire the exact hook command with $WINMUX_SID set, the way a hook inherits it
@@ -3298,7 +3387,7 @@ check('approve', PORT_APPROVE, async ({ browser, base, t, shot }) => {
 
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);          // the app connects to /control
+  await appReady(page);          // the app connects to /control
 
   const l1 = parse((await winmux(['list', '--json'])).out);
   t('the app reports its starting terminal', l1 && l1.sessions.length >= 1, l1 && l1.sessions.length);
@@ -3516,7 +3605,7 @@ check('winctl', PORT_WINCTL, async ({ browser, base, t, shot }) => {
 
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);
+  await appReady(page);
 
   // Each button must be inside the viewport and be the element you actually hit
   // at its own centre — "rendered" is not "clickable".
@@ -3599,7 +3688,7 @@ check('split-collapse', PORT_SPLITCLOSE, async ({ browser, base, t }) => {
 
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);          // the app connects to /control
+  await appReady(page);          // the app connects to /control
 
   const state = () => page.evaluate(() => {
     const ps = [...document.querySelectorAll('.workspace .pane')];
@@ -3688,7 +3777,7 @@ check('pwsh', PORT_PWSH, async ({ browser, base, t, shot, skip }) => {
 
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);          // the app connects to /control
+  await appReady(page);          // the app connects to /control
 
   const opened = await winmux(['new-tab', 'pwsh']);
   t('winmux opens a PowerShell 7 tab', opened.code === 0, opened.err);
@@ -4078,7 +4167,7 @@ check('font', PORT_FONT, async ({ browser, base, t }) => {
 check('instant', PORT_INSTANT, async ({ browser, base, t, shot }) => {
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);   // first terminal settles (its own skeleton clears)
+  await appReady(page);   // first terminal settles (its own skeleton clears)
   const settled = await page.$$eval('.term-skel', function (els) { return els.length; });
   // Open a second tab. makeTerm creates the skeleton synchronously on click, before
   // the socket even opens — so it is present the instant the pane mounts.
@@ -4139,7 +4228,7 @@ check('detach', PORT_SURVIVE2, async ({ t }) => {
 check('mcp', PORT_MCP, async ({ browser, base, t }) => {
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);   // the app connects to /control
+  await appReady(page);   // the app connects to /control
 
   const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux-mcp.cjs')],
     { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_MCP), WINMUX_HOST: '127.0.0.1' }) });
@@ -4196,7 +4285,7 @@ check('notify', PORT_NOTIFY, async ({ browser, base, t, shot }) => {
   });
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);   // the app connects to /control
+  await appReady(page);   // the app connects to /control
 
   const before = await page.evaluate(() => {
     const at = window.__winmuxActiveTerm && window.__winmuxActiveTerm();
@@ -4246,7 +4335,7 @@ check('osnotify', PORT_OSNOTIFY, async ({ browser, base, t }) => {
   const p1 = await browser.newPage({ viewport: { width: 1280, height: 860 }, colorScheme: 'dark' });
   await p1.addInitScript(stub, false);
   await p1.goto(base, { waitUntil: 'domcontentloaded' });
-  await p1.waitForTimeout(4500);
+  await appReady(p1);
   await winmux(['notify', 'the deploy needs your call']);
   await p1.waitForTimeout(500);
   const unfocused = await p1.evaluate(() => window.__osNotes || []);
@@ -4258,7 +4347,7 @@ check('osnotify', PORT_OSNOTIFY, async ({ browser, base, t }) => {
   const p2 = await browser.newPage({ viewport: { width: 1280, height: 860 }, colorScheme: 'dark' });
   await p2.addInitScript(stub, true);
   await p2.goto(base, { waitUntil: 'domcontentloaded' });
-  await p2.waitForTimeout(4500);
+  await appReady(p2);
   await winmux(['notify', 'this should stay quiet']);
   await p2.waitForTimeout(500);
   const focused = await p2.evaluate(() => window.__osNotes || []);
@@ -4515,7 +4604,7 @@ check('migrate', PORT_MIGRATE, async ({ browser, base, t }) => {
     await ctx.addInitScript((b) => { try { localStorage.setItem('ct-live', JSON.stringify(b)); localStorage.setItem('ct-onboard', '1'); localStorage.setItem('ct-close-notice', '1'); } catch (e) {} }, blob);
     const p = await ctx.newPage();
     await p.goto(base, { waitUntil: 'domcontentloaded' });
-    await p.waitForTimeout(4500);
+    await appReady(p);
     const n = await p.evaluate(() => document.querySelectorAll('.pane .xterm').length);
     await ctx.close();
     return n;
@@ -4793,7 +4882,7 @@ check('markdown', PORT_MD, async ({ browser, base, t, shot }) => {
 
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);          // the app connects to /control
+  await appReady(page);          // the app connects to /control
 
   const opened = await winmux(['markdown', mdFile]);
   t('winmux markdown exits clean', opened.code === 0, opened.err);
@@ -4905,7 +4994,7 @@ check('md-rich', PORT_MDRICH, async ({ browser, base, t, shot }) => {
 
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);
+  await appReady(page);
 
   const opened = await winmux(['markdown', mdFile]);
   t('winmux markdown exits clean', opened.code === 0, opened.err);
@@ -4967,7 +5056,7 @@ check('resume', PORT_RESUME, async ({ browser, base, t, shot }) => {
   });
   try {
     await page.goto(base, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(4500);
+    await appReady(page);
 
     // 1. The server answers with the folder's REAL conversation ids — read from
     //    Claude's own store, not guessed.
@@ -5017,7 +5106,7 @@ check('resume', PORT_RESUME, async ({ browser, base, t, shot }) => {
       await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: { resumeCommand: cmd } }) }).catch(() => {});
     }, RESUME_SENTINEL);
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(4500);
+    await appReady(page);
 
     // Wait for the WANTED template, not merely for "resume is set". The default
     // command is already truthy the instant a tab arms, so a poll on truthiness
@@ -5042,7 +5131,7 @@ check('resume', PORT_RESUME, async ({ browser, base, t, shot }) => {
     // Phase 1 — WARM reattach: reload while the shell is still alive on the
     // server. The tab reattaches; nothing may be typed into the running agent.
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(4500);
+    await appReady(page);
     const warm = await readScreen();
     t('a warm reattach does NOT re-run the resume command',
       warm.indexOf(RESUME_SENTINEL) < 0, { tail: warm.slice(-160) });
@@ -5084,7 +5173,7 @@ check('resume', PORT_RESUME, async ({ browser, base, t, shot }) => {
 check('marks', PORT_MARKS, async ({ browser, base, t, shot }) => {
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);
+  await appReady(page);
 
   const res = await page.evaluate(async () => {
     function write(term, s) { return new Promise((r) => term.write(s, r)); }
@@ -5128,7 +5217,7 @@ check('cmdtag', PORT_CMDTAG, async ({ browser, base, t, shot }) => {
   // Turn the gated feature on for this context before the app loads its settings.
   await page.addInitScript(() => { try { localStorage.setItem('ct-settings', JSON.stringify({ commandBlocks: true })); } catch (e) {} });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);
+  await appReady(page);
 
   const res = await page.evaluate(async () => {
     function write(term, s) { return new Promise((r) => term.write(s, r)); }
@@ -5178,7 +5267,7 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   });
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4500);
+  await appReady(page);
   const sid = await page.evaluate(() => { const at = window.__winmuxActiveTerm(); return at ? at.sid : null; });
   t('a session sid is available to target', !!sid, sid);
 
