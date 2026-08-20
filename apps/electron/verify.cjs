@@ -4310,6 +4310,31 @@ check('nostrand', PORT_NOSTRAND, async ({ t }) => {
       && JSON.parse(fs.readFileSync(instanceFile, 'utf8')).pid === holder.pid;
     t('and quitting does not take the first engine’s pointer with it', stillThere,
       { exists: fs.existsSync(instanceFile) });
+
+    // The other side of that rule, and the one I broke getting here: a RESTART
+    // must still be able to claim the file. Its predecessor may not be reaped
+    // yet, but it cannot still be serving — the successor holds the port. Read
+    // as a rival, the restarted engine becomes undiscoverable, which is how this
+    // fix first showed up as two unrelated Rust failures in the full run.
+    const succFile = path.join(scratch, 'succession.json');
+    const succPort = 9971;
+    fs.writeFileSync(succFile, JSON.stringify({
+      port: succPort, host: '127.0.0.1', pid: holder.pid, started: Date.now() - 60000,
+    }));
+    const heir = RUST_CORE
+      ? spawn(RUST_CORE, [], { cwd: ROOT, stdio: 'ignore', env: Object.assign({}, process.env, {
+          WINMUX_PORT: String(succPort), WINMUX_INSTANCE_FILE: succFile,
+          WINMUX_TRUST_FILE: path.join(scratch, 'devices.json'),
+          WINMUX_PUBLIC: path.join(ROOT, 'public') }) })
+      : spawn(process.execPath, [path.join(ROOT, 'server.cjs')], {
+          cwd: ROOT, stdio: 'ignore', env: Object.assign({}, process.env, {
+            PORT: String(succPort), WINMUX_INSTANCE_FILE: succFile,
+            WINMUX_TRUST_FILE: path.join(scratch, 'devices.json') }) });
+    await new Promise((r) => setTimeout(r, 4000));
+    const claimed = JSON.parse(fs.readFileSync(succFile, 'utf8'));
+    t('but a restart on the same port DOES claim the file — succession, not rivalry',
+      claimed.pid === heir.pid, { claimed, heir: heir.pid });
+    heir.kill();
   } finally {
     try { holder.kill(); } catch (e) {}
     try { slow.close(); } catch (e) {}

@@ -386,14 +386,22 @@ fn pid_alive(pid: u32) -> bool {
 }
 
 // Who currently owns the instance file — Some(pid, port) if it names a DIFFERENT
-// process that is still running.
-fn instance_owner(file: &PathBuf) -> Option<(u32, u64)> {
+// process, on a DIFFERENT port, that is still running.
+//
+// The port half matters as much as the pid. If the file names the port I just
+// bound, that process cannot still be serving it — I hold the socket. That is
+// succession (a restart whose predecessor has not been reaped yet), not a rival,
+// and treating it as a rival leaves the new server undiscoverable. The danger in
+// item 04 is a newcomer on a DIFFERENT port erasing the pointer.
+fn instance_owner(file: &PathBuf, my_port: u16) -> Option<(u32, u64)> {
     let txt = std::fs::read_to_string(file).ok()?;
     let j: serde_json::Value = serde_json::from_str(&txt).ok()?;
     let pid = j.get("pid")?.as_u64()? as u32;
     if pid == 0 || pid == std::process::id() { return None; }
+    let port = j.get("port").and_then(|p| p.as_u64()).unwrap_or(0);
+    if port == my_port as u64 { return None; }
     if !pid_alive(pid) { return None; }
-    Some((pid, j.get("port").and_then(|p| p.as_u64()).unwrap_or(0)))
+    Some((pid, port))
 }
 
 // This file is the ONLY thing that says where the engine holding your shells
@@ -406,7 +414,7 @@ fn write_instance(port: u16) {
     if let Some(dir) = file.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if let Some((pid, held)) = instance_owner(&file) {
+    if let Some((pid, held)) = instance_owner(&file, port) {
         eprintln!("winmux-core: not claiming {} — pid {pid} still holds it on port {held}. \
                    This engine is on {port} but will stay undiscovered rather than strand that one.",
                   file.display());

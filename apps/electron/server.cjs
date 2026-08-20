@@ -2084,8 +2084,15 @@ async function start() {
       try {
         const j = JSON.parse(fs.readFileSync(inst, 'utf8'));
         if (!j || !j.pid || j.pid === process.pid) return null;
+        // If the file names the port I just bound, that process cannot still be
+        // serving it — I hold the socket, exclusively. This is succession (a
+        // restart whose predecessor has not been reaped yet), not a rival, and
+        // treating it as a rival leaves the new server undiscoverable. The
+        // danger in item 04 is a newcomer on a DIFFERENT port erasing the
+        // pointer; same-port handover is the normal, safe case.
+        if (Number(j.port) === Number(PORT)) return null;
         try { process.kill(j.pid, 0); } catch (e) { if (e.code !== 'EPERM') return null; }
-        return j;                                        // someone else, and alive
+        return j;                                        // someone else, elsewhere, alive
       } catch (e) { return null; }                       // absent or unreadable — free
     };
     const held = owner();
