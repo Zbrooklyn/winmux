@@ -135,7 +135,7 @@ const PORT_NOCLOBBER = 9997;   // AUDIT-8: saving a project never writes over a 
 const PORT_KEYBACK = 9996;     // AUDIT-9: a dialog that took the keyboard gives it back however it is dismissed
 const PORT_CFGSAFE = 9998;     // AUDIT-10: a damaged settings file is kept and reported, never quietly replaced
 const PORT_BUSYBAR = 9995;     // the busy underline actually paints, and grows, while a shell works
-const PORT_ORPHAN = 9994;      // AUDIT-8: closing a tab whose socket is down still ends its shell
+const PORT_ORPHAN = 9974;      // AUDIT-8: closing a tab whose socket is down still ends its shell
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -5309,6 +5309,28 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   if (!run.length) {
     console.log('no such check. known: ' + CHECKS.map((c) => c.id).join(', '));
     process.exit(2);
+  }
+
+  // Several checks deliberately SHARE one pool server (brand/fresh/busyport all
+  // sit on PORT_BUSY) — that is supported and cheap. What is never legal is a
+  // check port that collides with a port some check binds for itself on
+  // 127.0.0.1, outside the pool. That kind of typo hides: a single-check run
+  // never collides, so it surfaces as an EADDRINUSE crash twenty minutes into a
+  // full run, blaming whichever check happened to be second. Say it in one
+  // second. (Cost me exactly that: PORT_ORPHAN was written 9994, which
+  // PORT_UPDFEED already binds as its stand-in release feed.)
+  {
+    const SELF_BOUND = { PORT_UPDFEED: PORT_UPDFEED };  // add any new self-bound listener here
+    const clashes = [];
+    for (const [name, port] of Object.entries(SELF_BOUND)) {
+      const ids = CHECKS.filter((c) => c.port === port).map((c) => c.id);
+      if (ids.length) clashes.push(name + ' (' + port + ') is also the check port for: ' + ids.join(', '));
+    }
+    if (clashes.length) {
+      console.log('port clash — a check is sitting on a port another check binds itself:');
+      for (const line of clashes) console.log('  ' + line);
+      process.exit(2);
+    }
   }
 
   // Resolve the tailscale-tunnelled ports ONCE and hand them to every server via
