@@ -387,6 +387,7 @@ async fn main() {
     }
     let listener = listener.unwrap_or_else(|| { eprintln!("winmux-core: no free port in {want}..{}", want + 10); std::process::exit(1); });
 
+    mark_started();
     let state = Arc::new(AppState::new(port));
     let shutdown_state = state.clone();
     let serve = ServeDir::new(&public).append_index_html_on_directories(true);
@@ -404,8 +405,11 @@ async fn main() {
         .route("/api/project", get(api_project_get).post(api_project_post).delete(api_project_delete))
         .route("/api/update", get(api_update))
         // Desk door only — deliberately absent from phone_router: a phone must
-        // never be able to kill the engine under the desktop.
+        // never be able to kill the engine under the desktop, reach into this
+        // machine's git working tree, or change what it launches at logon.
         .route("/api/shutdown", post(api_shutdown))
+        .route("/api/git", get(api_git))
+        .route("/api/autostart", get(api_autostart_get).post(api_autostart_post))
         .route("/shells", get(api_shells))
         .route("/api/claude-sessions", get(api_claude_sessions))
         .route("/api/backlog", get(api_backlog).delete(api_backlog_delete))
@@ -878,16 +882,55 @@ fn cmp_semver(a: &str, b: &str) -> i32 {
     0
 }
 
+// The badge cannot light on a value nobody fetches. Node asks GitHub; this engine
+// used to hard-code "no update", so on the build we actually ship the update
+// notice could never appear. curl.exe has been in Windows since 1803 and is the
+// smallest way to make the same request without pulling an HTTP stack into a
+// terminal engine. Cached six hours, exactly like Node, and every failure —
+// offline, rate-limited, no curl — falls back to the same honest "no update".
+static UPD_CACHE: std::sync::OnceLock<Mutex<Option<(Instant, Value)>>> = std::sync::OnceLock::new();
+
+// WINMUX_UPDATE_API points the same request somewhere else. That is how the
+// harness proves this path for real — curl, the JSON parse and the version
+// compare all run — instead of short-circuiting on WINMUX_FAKE_LATEST and
+// proving only that the short-circuit works.
+const UPDATE_API: &str = "https://api.github.com/repos/Zbrooklyn/winmux/releases/latest";
+
+fn fetch_latest_tag() -> Option<String> {
+    let api = std::env::var("WINMUX_UPDATE_API").unwrap_or_else(|_| UPDATE_API.to_string());
+    let out = std::process::Command::new("curl.exe")
+        .args(["-s", "--max-time", "4", "-H", "User-Agent: WinMux",
+               "-H", "Accept: application/vnd.github+json", &api])
+        .output().ok()?;
+    if !out.status.success() { return None; }
+    let v: Value = serde_json::from_slice(&out.stdout).ok()?;
+    v.get("tag_name")?.as_str().map(|s| s.trim_start_matches('v').to_string())
+}
+
 async fn api_update() -> impl IntoResponse {
     let version = env!("CARGO_PKG_VERSION");
-    // ponytail: live GitHub-release fetch deferred; Node falls back to this same
-    // no-update default on any network failure, so it's a safe production default.
+    // Test hook: prove the badge lights without publishing a real release.
     if let Ok(fl) = std::env::var("WINMUX_FAKE_LATEST") {
         let fl = fl.trim_start_matches('v').to_string();
         return Json(json!({ "current": version, "latest": fl,
             "updateAvailable": cmp_semver(&fl, version) > 0, "url": UPDATE_URL }));
     }
-    Json(json!({ "current": version, "latest": Value::Null, "updateAvailable": false, "url": UPDATE_URL }))
+    let cell = UPD_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(g) = cell.lock() {
+        if let Some((at, v)) = g.as_ref() {
+            if at.elapsed() < Duration::from_secs(6 * 3600) { return Json(v.clone()); }
+        }
+    }
+    // Off the async runtime's worker: this is a blocking subprocess.
+    let latest = tokio::task::spawn_blocking(fetch_latest_tag).await.ok().flatten();
+    let out = match latest {
+        Some(l) => json!({ "current": version, "latest": l.clone(),
+            "updateAvailable": cmp_semver(&l, version) > 0, "url": UPDATE_URL }),
+        None => json!({ "current": version, "latest": Value::Null,
+            "updateAvailable": false, "url": UPDATE_URL }),
+    };
+    if let Ok(mut g) = cell.lock() { *g = Some((Instant::now(), out.clone())); }
+    Json(out)
 }
 
 // The deliberate "quit completely" path (server-host shutdownServer POSTs here,
@@ -939,7 +982,215 @@ async fn api_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "phone": "off",
         "shells": ["powershell", "pwsh", "cmd", "bash", "wsl"],
         "core": "rust",
+        // The seven Diagnostics fields this engine used to leave empty. `runtime`
+        // is the honest answer to the row Node fills with its own version — there
+        // is no Node under this engine, and printing nothing was the bug.
+        "runtime": concat!("Rust core ", env!("CARGO_PKG_VERSION")),
+        "node": concat!("Rust core ", env!("CARGO_PKG_VERSION")),
+        "platform": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "uptime": uptime_secs(),
+        "home": std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default(),
+        "cpus": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
+        "mem": total_mem_gb(),
     }))
+}
+
+// ---- machine facts (Diagnostics) ----------------------------------------
+// The Diagnostics screen reads eighteen values off /api/info. Seven of them —
+// runtime, platform, arch, uptime, home, cpus, mem — were simply absent from
+// this engine, so the screen users get sent to when something is wrong printed
+// "undefined · undefined" and "NaNm NaNs". These fill them in.
+static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+fn mark_started() { let _ = STARTED.set(Instant::now()); }
+fn uptime_secs() -> u64 { STARTED.get().map(|t| t.elapsed().as_secs()).unwrap_or(0) }
+
+// Total installed RAM, straight from kernel32 — no crate, no shelling out to a
+// PowerShell CIM query on the path that renders a diagnostics screen.
+#[cfg(windows)]
+fn total_mem_gb() -> String {
+    extern "system" {
+        fn GetPhysicallyInstalledSystemMemory(out_kb: *mut u64) -> i32;
+    }
+    let mut kb: u64 = 0;
+    if unsafe { GetPhysicallyInstalledSystemMemory(&mut kb) } != 0 && kb > 0 {
+        format!("{} GB", (kb as f64 / 1048576.0).round() as u64)
+    } else {
+        "—".into()
+    }
+}
+#[cfg(not(windows))]
+fn total_mem_gb() -> String { "—".into() }
+
+// ---- /api/autostart -----------------------------------------------------
+// "Start when I log in" is a .vbs in the user's Startup folder. GET reports
+// whether it is there; POST {on} writes or removes it. Desk door only — this
+// changes what THIS machine launches at logon, which is nothing a networked
+// phone should reach in and touch.
+fn startup_dir() -> PathBuf {
+    if let Ok(d) = std::env::var("WINMUX_STARTUP_DIR") { return PathBuf::from(d); }
+    let appdata = std::env::var("APPDATA").unwrap_or_default();
+    PathBuf::from(appdata).join("Microsoft").join("Windows")
+        .join("Start Menu").join("Programs").join("Startup")
+}
+fn autostart_file() -> PathBuf { startup_dir().join("WinMux.vbs") }
+
+fn autostart_vbs() -> String {
+    // The core is a sidecar: its own exe is winmux-core.exe, which would start a
+    // headless server and no window. The Electron shell hands us the app exe.
+    let run = std::env::var("WINMUX_APP_EXE").ok()
+        .or_else(|| std::env::current_exe().ok().map(|p| p.to_string_lossy().to_string()))
+        .unwrap_or_default();
+    let quoted = format!("\"{}\"", run).replace('"', "\"\"");   // VBS escapes " as ""
+    // The pause lets Tailscale finish coming up before WinMux binds its phone door.
+    format!("Dim shell : Set shell = CreateObject(\"WScript.Shell\")\r\n\
+             WScript.Sleep 20000\r\n\
+             shell.Run \"{}\", 0, False\r\n", quoted)
+}
+
+fn autostart_on() -> bool { autostart_file().exists() }
+
+async fn api_autostart_get() -> impl IntoResponse {
+    Json(json!({ "on": autostart_on() }))
+}
+
+async fn api_autostart_post(body: String) -> impl IntoResponse {
+    let want = serde_json::from_str::<Value>(&body).ok()
+        .and_then(|v| v.get("on").and_then(|b| b.as_bool())).unwrap_or(false);
+    // Report the write honestly. A Startup folder this account cannot write to
+    // is exactly the case that used to leave the switch refusing to move with
+    // nothing said (item 05 + B17).
+    let ok = if want {
+        std::fs::create_dir_all(startup_dir()).is_ok()
+            && std::fs::write(autostart_file(), autostart_vbs()).is_ok()
+    } else {
+        match std::fs::remove_file(autostart_file()) {
+            Ok(_) => true,
+            Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+        }
+    };
+    let code = if ok { StatusCode::OK } else { StatusCode::INTERNAL_SERVER_ERROR };
+    (code, Json(json!({ "ok": ok, "on": autostart_on() })))
+}
+
+// ---- /api/git -----------------------------------------------------------
+// The Changes tab. Same shape the Node engine returns, built from the same four
+// git invocations, so the same renderer draws it: {ok, root, branch, files[]}
+// where each file carries hunks of ["a"|"d"|"c", text] lines.
+fn git_out(args: &[&str], cwd: &str) -> Option<String> {
+    let out = std::process::Command::new("git").args(args).current_dir(cwd).output().ok()?;
+    if !out.status.success() { return None; }
+    Some(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+fn parse_patch(patch: &str) -> Vec<Value> {
+    let mut files: Vec<Value> = Vec::new();
+    // Index of the hunk currently being filled, inside the last file.
+    let mut hunks: Vec<Vec<Value>> = Vec::new();   // parallel: hunks[i] = file i's hunk list
+    let mut open = false;                          // is a hunk currently open?
+    for ln in patch.split('\n') {
+        let ln = ln.strip_suffix('\r').unwrap_or(ln);
+        if let Some(rest) = ln.strip_prefix("diff --git ") {
+            let path = rest.rfind(" b/").map(|i| rest[i + 3..].to_string())
+                .unwrap_or_else(|| rest.to_string());
+            files.push(json!({ "path": path, "st": "M", "add": 0, "del": 0, "hunks": [] }));
+            hunks.push(Vec::new());
+            open = false;
+            continue;
+        }
+        let Some(f) = files.last_mut() else { continue };
+        if ln.starts_with("new file mode") { f["st"] = json!("A"); continue; }
+        if ln.starts_with("deleted file mode") { f["st"] = json!("D"); continue; }
+        if ln.starts_with("rename to ") { f["st"] = json!("R"); continue; }
+        if ln.starts_with("Binary files") { f["binary"] = json!(true); continue; }
+        if ln.starts_with("@@") {
+            // @@ -<ls>[,n] +<rs>[,n] @@<tail>
+            let mut it = ln.splitn(4, ' ');
+            let (_, minus, plus) = (it.next(), it.next().unwrap_or(""), it.next().unwrap_or(""));
+            let num = |s: &str| s.trim_start_matches(['-', '+'])
+                .split(',').next().unwrap_or("0").parse::<i64>().unwrap_or(0);
+            if !minus.starts_with('-') || !plus.starts_with('+') { continue; }
+            let (ls, rs) = (num(minus), num(plus));
+            let tail = ln.find("@@").and_then(|i| ln[i + 2..].find("@@").map(|j| &ln[i + 2 + j + 2..]))
+                .unwrap_or("");
+            let h = json!({ "h": format!("@@ -{} +{} @@{}", ls, rs, tail), "ls": ls, "rs": rs, "lines": [] });
+            hunks.last_mut().unwrap().push(h);
+            open = true;
+            continue;
+        }
+        if !open || ln.starts_with("index ") || ln.starts_with("--- ") || ln.starts_with("+++ ") { continue; }
+        let hs = hunks.last_mut().unwrap();
+        let Some(h) = hs.last_mut() else { continue };
+        let mut push = |kind: &str, text: &str| {
+            h["lines"].as_array_mut().unwrap().push(json!([kind, text]));
+        };
+        match ln.chars().next() {
+            Some('+') => { push("a", &ln[1..]); let n = f["add"].as_i64().unwrap_or(0); f["add"] = json!(n + 1); }
+            Some('-') => { push("d", &ln[1..]); let n = f["del"].as_i64().unwrap_or(0); f["del"] = json!(n + 1); }
+            Some(' ') => push("c", &ln[1..]),
+            _ => {}
+        }
+    }
+    // Keep the payload sane on very large diffs — same 600-line budget per file
+    // the Node engine applies, so the panel never has to render a 40MB response.
+    for (i, f) in files.iter_mut().enumerate() {
+        let mut budget: i64 = 600;
+        let kept: Vec<Value> = hunks[i].drain(..).take_while(|h| {
+            if budget <= 0 { return false; }
+            budget -= h["lines"].as_array().map(|a| a.len()).unwrap_or(0) as i64;
+            true
+        }).collect();
+        f["hunks"] = Value::Array(kept);
+    }
+    files
+}
+
+async fn api_git(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    // No folder given → the engine's launch directory (the repo WinMux was
+    // started from), never $HOME, which is never a repo.
+    let cwd = q.get("cwd").filter(|c| !c.is_empty() && std::path::Path::new(c).exists())
+        .cloned()
+        .unwrap_or_else(|| std::env::current_dir().map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".into()));
+    let Some(root) = git_out(&["rev-parse", "--show-toplevel"], &cwd) else {
+        return Json(json!({ "cwd": cwd, "ok": false, "error": "Not a git repository" }));
+    };
+    let root = root.trim().to_string();
+    let branch = git_out(&["rev-parse", "--abbrev-ref", "HEAD"], &cwd)
+        .unwrap_or_default().trim().to_string();
+    let mut files = git_out(&["diff", "HEAD", "-U3"], &cwd)
+        .map(|p| parse_patch(&p)).unwrap_or_default();
+
+    // Untracked files never appear in `git diff`, but they are the change the
+    // user is most likely looking for. Show each as an all-added file.
+    if let Some(status) = git_out(&["status", "--porcelain"], &cwd) {
+        for l in status.split('\n') {
+            if !l.starts_with("??") { continue; }
+            let rel = l[2..].trim().trim_matches('"').to_string();
+            if rel.is_empty() || rel.ends_with('/') {
+                if !rel.is_empty() {
+                    files.push(json!({ "path": rel, "st": "A", "add": 0, "del": 0, "untracked": true, "hunks": [] }));
+                }
+                continue;
+            }
+            let abs = std::path::Path::new(&root).join(&rel);
+            let mut body: Vec<Value> = Vec::new();
+            if let Ok(md) = std::fs::metadata(&abs) {
+                if md.len() < 200 * 1024 {
+                    if let Ok(txt) = std::fs::read_to_string(&abs) {
+                        if !txt.contains('\u{0}') {
+                            body = txt.split('\n').take(400).map(|t| json!(["a", t])).collect();
+                        }
+                    }
+                }
+            }
+            let hunks = if body.is_empty() { json!([]) }
+                else { json!([{ "h": "@@ new file @@", "ls": 1, "rs": 1, "lines": body }]) };
+            files.push(json!({ "path": rel, "st": "A", "add": hunks[0]["lines"].as_array().map(|a| a.len()).unwrap_or(0),
+                "del": 0, "untracked": true, "hunks": hunks }));
+        }
+    }
+    Json(json!({ "cwd": cwd, "ok": true, "root": root, "branch": branch, "files": files }))
 }
 
 // ---- /api/md ------------------------------------------------------------
@@ -1188,6 +1439,8 @@ fn phone_router(state: Arc<AppState>) -> Router {
         .route("/api/claude-sessions", get(phone_denied))
         .route("/api/projects", get(phone_denied))
         .route("/api/project", get(phone_denied))
+        .route("/api/git", get(phone_denied))
+        .route("/api/autostart", get(phone_denied).post(phone_denied))
         .fallback_service(serve)
         .layer(axum::middleware::from_fn(no_store_html))
         .layer(axum::middleware::from_fn_with_state(state.clone(), phone_gate))

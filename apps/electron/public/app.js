@@ -4720,7 +4720,8 @@
       var rows = [
         ['WinMux', 'v' + (d.version || '?')],
         ['Server', 'http://' + d.host + ':' + d.port],
-        ['Process id', d.pid], ['Node', d.node], ['Platform', d.platform + ' · ' + d.arch],
+        ['Process id', d.pid], ['Engine', d.runtime || d.node || '—'],
+        ['Platform', (d.platform || '?') + ' · ' + (d.arch || '?')],
         ['Uptime', Math.floor(d.uptime / 60) + 'm ' + (d.uptime % 60) + 's'],
         ['Live shells', d.sessions + ' connected'],
         ['Shells found', (d.shells || []).join(', ')],

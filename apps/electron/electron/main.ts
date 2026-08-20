@@ -97,6 +97,10 @@ async function createWindow(): Promise<void> {
         WINMUX_PUBLIC: app.isPackaged
           ? path.join(process.resourcesPath, 'app.asar.unpacked', 'public')
           : path.join(__dirname, '..', 'public'),
+        // "Start when I log in" writes a Startup launcher that has to reopen THIS
+        // app — but the core is a sidecar, so its own exe path is winmux-core.exe,
+        // which would start a headless server and no window. Hand it the real one.
+        WINMUX_APP_EXE: process.execPath,
       };
     }
     portPromise = resolveServer({

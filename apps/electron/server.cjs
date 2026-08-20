@@ -54,7 +54,12 @@ async function checkUpdate() {
   try {
     const ctl = new AbortController();
     const to = setTimeout(function () { ctl.abort(); }, 4000);
-    const r = await fetch('https://api.github.com/repos/' + UPDATE_REPO + '/releases/latest', {
+    // WINMUX_UPDATE_API points the same request somewhere else, so the harness
+    // can prove this whole path — request, parse, version compare — instead of
+    // short-circuiting on WINMUX_FAKE_LATEST and proving only the short-circuit.
+    const api = process.env.WINMUX_UPDATE_API
+      || 'https://api.github.com/repos/' + UPDATE_REPO + '/releases/latest';
+    const r = await fetch(api, {
       headers: { 'User-Agent': 'WinMux', 'Accept': 'application/vnd.github+json' }, signal: ctl.signal,
     });
     clearTimeout(to);
@@ -1122,7 +1127,10 @@ function handle(req, res, viaPhone) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       version: VERSION,
-      pid: process.pid, node: process.version, platform: process.platform,
+      // `runtime` is the row Diagnostics shows: which engine is actually serving
+      // you. `node` stays for anything still reading it.
+      pid: process.pid, node: process.version, runtime: 'Node ' + process.version,
+      platform: process.platform,
       arch: process.arch, uptime: Math.round(process.uptime()), host: HOST, port: PORT,
       home: os.homedir(), cpus: os.cpus().length,
       mem: Math.round(os.totalmem() / 1073741824) + ' GB',

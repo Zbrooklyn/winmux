@@ -129,6 +129,8 @@ const PORT_KEYMAPGUARD = 9989; // AUDIT-3: a hand-edited keymap is checked, so n
 const PORT_CHORDTRUTH = 9990;  // AUDIT-4: every surface that advertises a shortcut shows the key actually bound
 const PORT_WRITELOUD = 9991;   // AUDIT-5: an engine write that failed says so — once per outage, and again on recovery
 const PORT_SLASHFAST = 9992;   // AUDIT-6: `winmux slash` refuses a non-Claude tab fast instead of hanging 90s
+const PORT_SHIPPED05 = 9993;   // AUDIT-7: the four features that were broken only in the engine we ship
+const PORT_UPDFEED = 9994;     // AUDIT-7's own stand-in release feed, so the update path is proven for real
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -1908,6 +1910,86 @@ check('slashfast', PORT_SLASHFAST, async ({ browser, base, t }) => {
     await page.close();
   }
 }, { WINMUX_CONFIG_FILE: path.join(OUT, 'slashfast-cfg', 'config.json') });
+
+// AUDIT-7 (register item 05). Four features were broken ONLY in the engine we
+// actually ship, and none of them reproduced from a source checkout because
+// running from source uses the other engine. This check asks the engine under
+// test — whichever it is — the same four questions, so the shipping build can
+// never again be the only one that fails them. It writes its Startup launcher
+// into a scratch folder, never the user's real one.
+check('shipped05', PORT_SHIPPED05, async ({ base, t }) => {
+  const startup = path.join(OUT, 'shipped05-startup');
+  const vbs = path.join(startup, 'WinMux.vbs');
+  const api = async (method, url, body) => {
+    const r = await fetch(base + url, {
+      method, headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return { status: r.status, json: await r.json().catch(() => null) };
+  };
+
+  // 1. Diagnostics — the screen we send confused users to. Seven of its rows
+  //    rendered "undefined" and "NaNm NaNs" on the shipping engine.
+  const info = (await api('GET', '/api/info')).json || {};
+  const DIAG = ['runtime', 'platform', 'arch', 'uptime', 'home', 'cpus', 'mem'];
+  const empty = DIAG.filter((k) => info[k] === undefined || info[k] === null || info[k] === '');
+  t('Diagnostics gets every field it prints — nothing renders as "undefined"', empty.length === 0,
+    { missing: empty, got: DIAG.reduce((o, k) => (o[k] = info[k], o), {}) });
+  t('and the numbers are numbers, so the uptime row cannot read "NaNm NaNs"',
+    typeof info.uptime === 'number' && info.uptime >= 0 && typeof info.cpus === 'number' && info.cpus > 0,
+    { uptime: info.uptime, cpus: info.cpus });
+  t('it names which engine is actually serving you', /rust core|node/i.test(String(info.runtime)), info.runtime);
+
+  // 2. The Changes tab — "Could not read changes" on the shipping engine,
+  //    because the route it calls did not exist there at all.
+  const git = await api('GET', '/api/git?cwd=' + encodeURIComponent(ROOT));
+  t('the Changes tab has a route to call at all', git.status === 200, git.status);
+  t('and it answers with this repo, not an error', git.json && git.json.ok === true && !!git.json.root,
+    { ok: git.json && git.json.ok, root: git.json && git.json.root, branch: git.json && git.json.branch });
+  const files = (git.json && git.json.files) || [];
+  t('changed files come back in the shape the diff panel renders',
+    Array.isArray(files) && files.every((f) => typeof f.path === 'string' && Array.isArray(f.hunks)),
+    { count: files.length, sample: files[0] && { path: files[0].path, st: files[0].st, hunks: files[0].hunks.length } });
+
+  // 3. Start-at-login — a switch that could not move, silently.
+  fs.rmSync(startup, { recursive: true, force: true });
+  const off0 = await api('GET', '/api/autostart');
+  t('the switch reports itself off before anything is written', off0.json && off0.json.on === false, off0.json);
+  const on = await api('POST', '/api/autostart', { on: true });
+  t('turning it on succeeds and says so', on.status === 200 && on.json.ok === true && on.json.on === true, on.json);
+  t('and it really wrote the Startup launcher', fs.existsSync(vbs), vbs);
+  const body = fs.existsSync(vbs) ? fs.readFileSync(vbs, 'utf8') : '';
+  t('the launcher starts the app, not a headless engine with no window',
+    /shell\.Run/.test(body) && !/winmux-core\.exe/i.test(body), body.split('\n')[2] || body.slice(0, 120));
+  const off = await api('POST', '/api/autostart', { on: false });
+  t('turning it off removes it and reports the new state',
+    off.status === 200 && off.json.on === false && !fs.existsSync(vbs), off.json);
+
+  // 4. The update badge — hard-coded to "no update" on the shipping engine, so
+  //    it could never light no matter what was published. Proven against a real
+  //    HTTP release feed this check serves itself, NOT the WINMUX_FAKE_LATEST
+  //    short-circuit: the request, the JSON parse and the version compare all
+  //    have to work, which is what was actually missing.
+  const feed = http.createServer((rq, rs) => {
+    rs.writeHead(200, { 'Content-Type': 'application/json' });
+    rs.end(JSON.stringify({ tag_name: 'v99.9.9', html_url: 'https://example.invalid/rel/99.9.9' }));
+  });
+  await new Promise((r) => feed.listen(PORT_UPDFEED, '127.0.0.1', r));
+  try {
+    const upd = (await api('GET', '/api/update')).json || {};
+    t('the update check reports the version actually running', typeof upd.current === 'string' && upd.current.length > 0, upd.current);
+    t('it really asks a release feed and reads the answer back',
+      upd.latest === '99.9.9', { latest: upd.latest });
+    t('and the badge can light — it is not hard-wired to "no update"',
+      upd.updateAvailable === true, { latest: upd.latest, current: upd.current, updateAvailable: upd.updateAvailable });
+  } finally {
+    await new Promise((r) => feed.close(r));
+  }
+}, {
+  WINMUX_STARTUP_DIR: path.join(OUT, 'shipped05-startup'),
+  WINMUX_UPDATE_API: 'http://127.0.0.1:' + PORT_UPDFEED + '/releases/latest',
+  WINMUX_APP_EXE: 'C:\\Program Files\\WinMux\\WinMux.exe',
+});
 
 // ST6: non-terminal leaves survive a page reload. Both a diff leaf AND a markdown
 // leaf, opened as pane tabs, must be persisted in the live snapshot and rebuilt on
@@ -4573,15 +4655,25 @@ check('resume', PORT_RESUME, async ({ browser, base, t, shot }) => {
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(4500);
 
-    const rearmed = await page.evaluate(async (dir) => {
+    // Wait for the WANTED template, not merely for "resume is set". The default
+    // command is already truthy the instant a tab arms, so a poll on truthiness
+    // exits early on the wrong value the moment the disk config lands a beat late
+    // — which is what happens under three engines at once, and it took the whole
+    // rest of this check down with it (the real `claude` then launches and stops
+    // on its trust prompt). Re-arm each pass so a late config is picked up.
+    const rearmWant = 'echo ' + RESUME_SENTINEL + ' ' + RESUME_ID;
+    const rearmed = await page.evaluate(async (a) => {
       const at = window.__winmuxActiveTerm();
-      at.cwd = dir;
-      window.__winmuxArm(at, true);
-      for (let i = 0; i < 40 && !at.resume; i++) await new Promise((r) => setTimeout(r, 100));
+      at.cwd = a.dir;
+      for (let i = 0; i < 60; i++) {
+        window.__winmuxArm(at, true);
+        for (let j = 0; j < 10 && at.resume !== a.want; j++) await new Promise((r) => setTimeout(r, 50));
+        if (at.resume === a.want) break;
+      }
       return { resume: at.resume, resumeId: at.resumeId };
-    }, RESUME_CWD);
+    }, { dir: RESUME_CWD, want: rearmWant });
     t('the resume command is a template — {id} is replaced with the pinned conversation',
-      rearmed.resume === 'echo ' + RESUME_SENTINEL + ' ' + RESUME_ID, rearmed);
+      rearmed.resume === rearmWant, rearmed);
 
     // Phase 1 — WARM reattach: reload while the shell is still alive on the
     // server. The tab reattaches; nothing may be typed into the running agent.
