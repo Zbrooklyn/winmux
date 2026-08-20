@@ -126,6 +126,8 @@ const PORT_SPLITCLOSE = 9984; // FB: closing a split's last visible tab collapse
 const PORT_WINCTL = 9987;     // AUDIT-1: the window's close button survives every pane layout at every size
 const PORT_DELHONEST = 9988;  // AUDIT-2: a delete that didn't happen never reports "file removed"
 const PORT_KEYMAPGUARD = 9989; // AUDIT-3: a hand-edited keymap is checked, so nothing shows as bound and stays dead
+const PORT_CHORDTRUTH = 9990;  // AUDIT-4: every surface that advertises a shortcut shows the key actually bound
+const PORT_WRITELOUD = 9991;   // AUDIT-5: an engine write that failed says so — once per outage, and again on recovery
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -1754,6 +1756,124 @@ check('keymapguard', PORT_KEYMAPGUARD, async ({ browser, base, t }) => {
     await page.close();
   }
 }, { WINMUX_CONFIG_FILE: path.join(OUT, 'keymapguard-cfg', 'config.json') });
+
+// AUDIT-4: six surfaces advertise keyboard shortcuts and only Settings → Shortcuts
+// used to read what is actually bound. The F1 sheet, the command palette, the
+// right-click menus, the pane-control tooltips and the new-tab menu all printed
+// hardcoded strings — so the moment anyone used the app's own rebind feature,
+// every one of them went on teaching a key that no longer did anything. Rebind
+// Split right and demand that each surface tells the truth.
+check('chordtruth', PORT_CHORDTRUTH, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  try {
+    await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => !!window.__winmuxSetKeymap, null, { timeout: 15000 });
+    await page.evaluate(() => window.__winmuxSetKeymap('split-right', 'Ctrl+Alt+9'));
+    await page.waitForTimeout(300);
+
+    // 1. The F1 cheat sheet — the place a stranger looks first.
+    await page.keyboard.press('F1');
+    await page.waitForTimeout(500);
+    const cheat = await page.evaluate(() => {
+      const row = Array.from(document.querySelectorAll('#cheat-body .crow'))
+        .find((r) => r.querySelector('.ca') && r.querySelector('.ca').textContent.trim() === 'Split right');
+      return row && row.querySelector('.kbd') ? row.querySelector('.kbd').textContent.trim() : null;
+    });
+    t('the F1 sheet shows the key that is actually bound', cheat === 'Ctrl+Alt+9', cheat);
+    await shot(page, 'chordtruth-cheat');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+
+    // 2. The command palette.
+    await page.keyboard.press('Control+Shift+P');
+    await page.waitForTimeout(400);
+    await page.fill('#pl-input', 'Split right');
+    await page.waitForTimeout(400);
+    const pal = await page.evaluate(() => {
+      const row = Array.from(document.querySelectorAll('#pl-list .pl-item'))
+        .find((r) => /Split right/.test(r.textContent));
+      return row && row.querySelector('.kbd') ? row.querySelector('.kbd').textContent.trim() : null;
+    });
+    t('the command palette shows it too', pal === 'Ctrl+Alt+9', pal);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+
+    // 3. The split button's own tooltip — the one surviving hint about how to split.
+    const tip = await page.evaluate(() => {
+      const b = document.querySelector('.pc-split');
+      return b ? b.getAttribute('title') : null;
+    });
+    t('the split button tooltip names the real key', /Ctrl\+Alt\+9/.test(tip || ''), tip);
+
+    // 4. The tab's right-click menu.
+    await page.click('.ptab', { button: 'right' });
+    await page.waitForTimeout(500);
+    const menu = await page.evaluate(() => {
+      const row = Array.from(document.querySelectorAll('.ofmi'))
+        .find((r) => /Split right|Split tab/.test(r.textContent));
+      return row ? row.textContent.replace(/\s+/g, ' ').trim() : null;
+    });
+    t('the right-click menu names the real key', /Ctrl\+Alt\+9/.test(menu || ''), menu);
+    await page.keyboard.press('Escape');
+
+    // And nothing anywhere still advertises the abandoned default.
+    const stale = await page.evaluate(() => {
+      const hits = [];
+      document.querySelectorAll('[title]').forEach((el) => {
+        if (/Split right \(Ctrl\+D\)/.test(el.getAttribute('title'))) hits.push(el.getAttribute('title'));
+      });
+      return hits;
+    });
+    t('no tooltip still advertises the key that was replaced', stale.length === 0, stale);
+  } finally {
+    await page.close();
+  }
+}, { WINMUX_CONFIG_FILE: path.join(OUT, 'chordtruth-cfg', 'config.json') });
+
+// AUDIT-5: three engine writes happen with no visible control of their own — the
+// workspace auto-save, the settings/keymap file, and the start-at-login switch —
+// and each used to swallow its failure whole. The disk file wins on next launch,
+// so a settings write that never landed meant the change silently reverted, with
+// nothing on screen. Cut the write off at the network and demand the app say so:
+// once per outage (the workspace save retries every two seconds and must not
+// become a wall of notifications), and once more when it starts working again.
+check('writeloud', PORT_WRITELOUD, async ({ browser, base, t }) => {
+  const page = await desktop(browser);
+  try {
+    await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => !!window.__winmuxWriteState && !!window.__winmuxSetKeymap, null, { timeout: 15000 });
+    const notifCount = () => page.evaluate(() => (window.__winmuxWriteState ? 0 : 0) ||
+      document.querySelectorAll('#npanel .nrow, #npanel .notif, #npanel [data-nid]').length);
+    const down = () => page.evaluate(() => !!window.__winmuxWriteState().config);
+
+    t('nothing is reported while the write is working', (await down()) === false, await down());
+
+    // Cut the settings write off at the network — the engine is fine, the write isn't.
+    await page.route('**/api/config', (route) => route.abort());
+    await page.evaluate(() => window.__winmuxSetKeymap('help', 'Ctrl+Alt+8'));
+    await page.waitForTimeout(700);
+    t('a failed settings write is noticed', (await down()) === true, await down());
+    const first = await page.evaluate(() => document.getElementById('notif-badge').textContent.trim());
+    t('and it reaches the notification badge', first !== '' && first !== '0', first);
+
+    // Two more failures must NOT stack up two more notifications.
+    await page.evaluate(() => { window.__winmuxSetKeymap('help', 'Ctrl+Alt+7'); window.__winmuxSetKeymap('help', 'Ctrl+Alt+6'); });
+    await page.waitForTimeout(700);
+    const second = await page.evaluate(() => document.getElementById('notif-badge').textContent.trim());
+    t('repeated failures are reported once, not once per attempt', second === first, { first, second });
+
+    // Let the write through again: recovery is worth saying, because silence after
+    // a warning reads as "still broken".
+    await page.unroute('**/api/config');
+    await page.evaluate(() => window.__winmuxSetKeymap('help', null));
+    await page.waitForTimeout(700);
+    t('the app stops considering the write broken', (await down()) === false, await down());
+    const third = await page.evaluate(() => document.getElementById('notif-badge').textContent.trim());
+    t('and says it is working again', third !== second, { second, third });
+  } finally {
+    await page.close();
+  }
+}, { WINMUX_CONFIG_FILE: path.join(OUT, 'writeloud-cfg', 'config.json') });
 
 // ST6: non-terminal leaves survive a page reload. Both a diff leaf AND a markdown
 // leaf, opened as pane tabs, must be persisted in the live snapshot and rebuilt on

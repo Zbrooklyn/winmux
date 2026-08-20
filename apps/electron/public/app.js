@@ -121,7 +121,12 @@
     try { localStorage.setItem('ct-settings', JSON.stringify(S)); } catch (e) {}
     if (localOnly || !configReady) return;
     try {
-      fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: S }) }).catch(function () {});
+      fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: S }) })
+        .then(function (r) { if (!r.ok) throw new Error(r.status); writeOk('config', 'Settings are saving again', ''); })
+        .catch(function () {
+          writeFailed('config', 'That setting did not save',
+            'WinMux could not write its settings file, so this change will be gone the next time you open it.');
+        });
     } catch (e) {}
   }
   // On boot, pull the on-disk config and let it win over the built-in defaults —
@@ -473,8 +478,8 @@
   }
   function showSplitMenu(p, anchor) {
     var m = newMenu();
-    addMenuItem(m, 'Split right', 'Ctrl+D', function () { splitRight(p, startShell()); });
-    addMenuItem(m, 'Split down', 'Ctrl+Shift+D', function () { splitDown(p, startShell()); });
+    addMenuItem(m, 'Split right', chordFor('split-right'), function () { splitRight(p, startShell()); });
+    addMenuItem(m, 'Split down', chordFor('split-down'), function () { splitDown(p, startShell()); });
     var r = anchor.getBoundingClientRect();
     placeMenu(m, r.left, r.bottom + 4);
   }
@@ -495,7 +500,7 @@
   // renders. Icons are drawn in WinMux's own stroke style (viewBox 0 0 24 24), so
   // the menu reads as part of the app, not a generic dropdown.
   var TYPE_ITEMS = [
-    { type: 'terminal', label: 'Terminal', desc: 'A PowerShell session', kbd: 'Alt+T',
+    { type: 'terminal', label: 'Terminal', desc: 'A PowerShell session', kbd: 'Alt+T', act: 'new-tab',
       svg: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>',
       run: function (p) { newTerm(p, startShell()); } },
     { type: 'browser', label: 'Browser', desc: 'Open a web page', electron: true,
@@ -526,7 +531,7 @@
         '<span class="ic">' + it.svg + '</span>' +
         '<span class="txt"><span class="lab">' + esc(it.label) + '</span>' +
         '<span class="desc">' + esc(it.desc) + '</span></span>' +
-        (it.kbd ? '<span class="kbd sm">' + esc(it.kbd) + '</span>' : '');
+        (it.kbd ? '<span class="kbd sm">' + esc(chordFor(it.act, it.kbd)) + '</span>' : '');
       row.addEventListener('click', function (e) { e.stopPropagation(); closeMenu(); it.run(p); });
       m.appendChild(row);
     });
@@ -676,9 +681,9 @@
     addMenuItem(m, 'Select all', '', function () { try { t.term.selectAll(); } catch (e) {} });
     addMenuItem(m, 'Clear', '', function () { try { t.term.clear(); t.term.focus(); } catch (e) {} });
     addMenuItem(m, 'Reset terminal', effectiveChord(actionById('reset-terminal')), function () { resetTerm(t); });
-    addMenuItem(m, 'Find…', 'Ctrl+F', function () { openFind(p); });
-    addMenuItem(m, 'Split right', 'Ctrl+D', function () { splitRight(p, startShell()); });
-    addMenuItem(m, 'Close tab', 'Alt+W', function () { askCloseTerm(p, t.id); });
+    addMenuItem(m, 'Find…', chordFor('find'), function () { openFind(p); });
+    addMenuItem(m, 'Split right', chordFor('split-right'), function () { splitRight(p, startShell()); });
+    addMenuItem(m, 'Close tab', chordFor('close-tab'), function () { askCloseTerm(p, t.id); });
     placeMenu(m, x, y);
   }
   // Right-click a sidebar terminal row.
@@ -689,7 +694,7 @@
     addMenuItem(m, 'Rename…', '', function () { focusTerm(t.id); startRename(t); });
     addMenuItem(m, 'Duplicate', '', function () { if (p) { newTerm(p, t.shell, t.cwd); focusPane(p.id); } });
     addMenuItem(m, 'Open in new pane', '', function () { if (p) splitRight(p, t.shell, t.cwd); });
-    addMenuItem(m, 'Close', 'Alt+W', function () { if (p) askCloseTerm(p, t.id); });
+    addMenuItem(m, 'Close', chordFor('close-tab'), function () { if (p) askCloseTerm(p, t.id); });
     placeMenu(m, x, y);
   }
 
@@ -862,12 +867,12 @@
     addMenuItem(m, (t.resume ? '✓ Auto-resume this conversation' : 'Auto-resume this conversation'), '', function () { armResume(t, !t.resume); });
     addMenuItem(m, 'Auto-resume: choose conversation…', '', function () { pickResumeConversation(t, x, y); });
     addMenuItem(m, 'Duplicate', '', function () { if (p) { newTerm(p, t.shell, t.cwd); focusPane(p.id); } });
-    addMenuItem(m, 'Split tab', 'Ctrl+D', function () { if (p) splitRight(p, t.shell, t.cwd); });
+    addMenuItem(m, 'Split tab', chordFor('split-right'), function () { if (p) splitRight(p, t.shell, t.cwd); });
     addMenuItem(m, 'Move to group…', '', function () { showMoveToGroupMenu(t, x, y); });
     addMenuItem(m, 'Export text…', '', function () { exportTermText(t); });
-    addMenuItem(m, 'Find…', 'Ctrl+F', function () { focusTerm(t.id); if (p) openFind(p); });
+    addMenuItem(m, 'Find…', chordFor('find'), function () { focusTerm(t.id); if (p) openFind(p); });
     var sep = document.createElement('div'); sep.className = 'ofsep'; m.appendChild(sep);
-    addMenuItem(m, 'Close', 'Alt+W', function () { if (p) askCloseTerm(p, t.id); });
+    addMenuItem(m, 'Close', chordFor('close-tab'), function () { if (p) askCloseTerm(p, t.id); });
     var ordered = groupTabsInOrder(t.groupId);
     var idx = ordered.indexOf(t);
     var toRight = idx >= 0 ? ordered.slice(idx + 1) : [];
@@ -890,6 +895,29 @@
     if (npanel.hasAttribute('data-open')) renderNotif();
     maybeOsNotify(title, sub, termId);
   }
+  // A write that didn't happen must never look like one that did. Three engine
+  // writes happen with no visible control of their own — the workspace auto-save,
+  // the settings/keymap file, and the start-at-login switch — and each used to
+  // swallow its failure whole. So a layout could quietly stop being saved, or a
+  // setting could revert on next launch because the disk file (which wins) never
+  // got the change, with nothing on screen either time.
+  //
+  // Reported once per outage, not once per attempt: the workspace save retries
+  // every two seconds and must never become a wall of notifications. When the
+  // same write succeeds again, that is worth saying too — silence after a warning
+  // reads as "still broken".
+  var writeDown = {};
+  function writeFailed(key, title, sub) {
+    if (writeDown[key]) return;
+    writeDown[key] = true;
+    notify(title, sub);
+  }
+  function writeOk(key, title, sub) {
+    if (!writeDown[key]) return;
+    writeDown[key] = false;
+    if (title) notify(title, sub);
+  }
+  window.__winmuxWriteState = function () { return writeDown; };
   // Reach Edward when WinMux isn't the window he's looking at. In-app badges are
   // invisible then; an OS notification is the whole point of an attention bus.
   // Only fires when the window is unfocused, the setting is on, and permission is
@@ -1453,7 +1481,7 @@
     head.className = 'ctxlabel'; head.textContent = g.name;
     m.appendChild(head);
     addMenuItem(m, 'Open group', '', function () { switchGroup(g.id); });
-    addMenuItem(m, 'New terminal here', 'Alt+T', function () {
+    addMenuItem(m, 'New terminal here', chordFor('new-tab'), function () {
       switchGroup(g.id);
       var p = paneById(activePaneId) || panes[0];
       if (p) { newTerm(p, startShell()); focusPane(p.id); }
@@ -2174,7 +2202,7 @@
       // Own element, not a ::after on .tt — the title truncates, and a marker inside
       // it disappears the moment the tab shows a real (long) shell path.
       '<span class="tres" aria-hidden="true">↻</span>' +
-      '<span class="x" title="Close tab (Alt+W)">×</span>' +
+      '<span class="x" title="Close tab (' + chordFor('close-tab') + ')">×</span>' +
       '<i class="tprog" style="width:0"></i>';
     p.tabscroll.appendChild(tabEl);
     var ttEl = tabEl.querySelector('.tt');
@@ -2596,7 +2624,7 @@
     tabEl.innerHTML =
       '<span class="tfav"><span class="fav fav-b">◆</span><span class="fdot" style="display:none"></span></span>' +
       '<span class="tt">Browser</span>' +
-      '<span class="x" title="Close tab (Alt+W)">×</span>';
+      '<span class="x" title="Close tab (' + chordFor('close-tab') + ')">×</span>';
     p.tabscroll.appendChild(tabEl);
     t.tabEl = tabEl; t.dotEl = tabEl.querySelector('.fdot');
 
@@ -2675,7 +2703,7 @@
     tabEl.innerHTML =
       '<span class="tfav"><span class="fav fav-m">¶</span><span class="fdot" style="display:none"></span></span>' +
       '<span class="tt">Markdown</span>' +
-      '<span class="x" title="Close tab (Alt+W)">×</span>';
+      '<span class="x" title="Close tab (' + chordFor('close-tab') + ')">×</span>';
     p.tabscroll.appendChild(tabEl);
     t.tabEl = tabEl; t.dotEl = tabEl.querySelector('.fdot');
 
@@ -2836,19 +2864,19 @@
       '<div class="nbar"><span class="back">' + BACK_SVG + '<span>Sessions</span></span><span class="nm"></span></div>' +
       '<div class="ptabs">' +
         '<span class="pc ptab-back" title="Back to sessions" role="button" aria-label="Back to sessions">' + BACK_SVG + '</span>' +
-        '<div class="pctrls"><span class="pc pc-rail" title="Toggle left sidebar (Ctrl+B)" role="button">' + RAIL_SVG + '</span></div>' +
+        '<div class="pctrls"><span class="pc pc-rail" title="Toggle left sidebar (' + chordFor('toggle-sidebar') + ')" role="button">' + RAIL_SVG + '</span></div>' +
         '<div class="tabscroll"></div>' +
         '<div class="tab-of" title="Tabs that don\'t fit" role="button" style="display:none"><span class="ofc">0</span>' + CARET_SVG + '<span class="ofdot" style="display:none"></span></div>' +
         '<div class="connpill" role="status" aria-live="polite" data-state="idle"><span class="dot"></span><span class="conntext">connecting…</span></div>' +
         '<div class="pctrls">' +
-          '<span class="pgroup"><span class="pc pc-new" title="New tab (Alt+T)" role="button">' + NEW_SVG + '</span>' +
+          '<span class="pgroup"><span class="pc pc-new" title="New tab (' + chordFor('new-tab') + ')" role="button">' + NEW_SVG + '</span>' +
           '<span class="pc pcaret pc-newmenu" title="New tab type…" role="button">' + CARET_SVG + '</span></span>' +
-          '<span class="pc pc-find" title="Find (Ctrl+F)" role="button">' + FIND_SVG + '</span>' +
-          '<span class="pgroup"><span class="pc pc-split" title="Split right (Ctrl+D)" role="button">' + SPLIT_SVG + '</span>' +
+          '<span class="pc pc-find" title="Find (' + chordFor('find') + ')" role="button">' + FIND_SVG + '</span>' +
+          '<span class="pgroup"><span class="pc pc-split" title="Split right (' + chordFor('split-right') + ')" role="button">' + SPLIT_SVG + '</span>' +
           '<span class="pc pcaret pc-splitmenu" title="Split…" role="button">' + CARET_SVG + '</span></span>' +
           '<span class="pc pc-pin" title="Pin pane (Alt+P)" role="button">' + PIN_SVG + '</span>' +
           '<span class="pc pc-zoom" title="Zoom pane (Ctrl+Shift+Enter)" role="button" style="display:none">' + ZOOM_SVG + '</span>' +
-          '<span class="pc pc-close" title="Close pane (Alt+Shift+W)" role="button" style="display:none">' + CLOSE_SVG + '</span>' +
+          '<span class="pc pc-close" title="Close pane (' + chordFor('close-pane') + ')" role="button" style="display:none">' + CLOSE_SVG + '</span>' +
           '<span class="pc pc-dock" title="Toggle changes panel" role="button">' + DOCK_SVG + '</span>' +
         '</div>' +
       '</div>' +
@@ -3401,7 +3429,7 @@
     tabEl.innerHTML =
       '<span class="tfav"><span class="fav fav-d">±</span><span class="fdot" style="display:none"></span></span>' +
       '<span class="tt">Changes</span>' +
-      '<span class="x" title="Close tab (Alt+W)">×</span>';
+      '<span class="x" title="Close tab (' + chordFor('close-tab') + ')">×</span>';
     p.tabscroll.appendChild(tabEl);
     t.tabEl = tabEl; t.dotEl = tabEl.querySelector('.fdot');
 
@@ -3629,7 +3657,15 @@
     wsPushLast = Date.now();
     try {
       fetch('/api/workspace', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        keepalive: !!keepalive, body: JSON.stringify({ workspace: snapshot() }) }).catch(function () {});
+        keepalive: !!keepalive, body: JSON.stringify({ workspace: snapshot() }) })
+        .then(function (r) {
+          if (!r.ok) throw new Error(r.status);
+          writeOk('workspace', 'Your layout is being saved again', 'WinMux can reach its engine.');
+        })
+        .catch(function () {
+          writeFailed('workspace', 'Your layout is not being saved',
+            'WinMux cannot reach its engine, so tabs and splits you change now will not come back.');
+        });
     } catch (e) {}
   }
   function pushWorkspace() {
@@ -4399,8 +4435,11 @@
     var want = !autostartS.on;
     fetch('/api/autostart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: want }) })
       .then(function (r) { return r.json(); })
-      .then(function (j) { autostartS = j; })
-      .catch(function () {})
+      .then(function (j) { autostartS = j; writeOk('autostart', '', ''); })
+      .catch(function () {
+        writeFailed('autostart', 'Start-at-login did not change',
+          'WinMux could not update the Windows Startup entry, so the switch is still where it was.');
+      })
       .then(function () { autostartBusy = false; if (curSet === 'Behaviour') renderSettings(); });
   }
   // Saved terminal history is server state too (the engine writes the files), so
@@ -4577,17 +4616,38 @@
   document.getElementById('settings-pane').addEventListener('keydown', function (e) { e.stopPropagation(); });
 
   // ------------------------------------------------------------ cheat sheet
+  // Third column is the action a row belongs to, when it has one. The sheet used
+  // to print the middle column verbatim, so the moment anyone rebound a key —
+  // in Settings or in the config file, both of which the app invites — this went
+  // on teaching the old one forever. The chord is now read from what is actually
+  // bound; the literal is only the fallback for rows with no rebindable action
+  // behind them (tab digits, Ctrl+Tab, font size).
   var KEYS = [
-    ['New tab', 'Alt+T'], ['Close tab', 'Alt+W'], ['Select tab 1–9', 'Alt+1…9'],
+    ['New tab', 'Alt+T', 'new-tab'], ['Close tab', 'Alt+W', 'close-tab'], ['Select tab 1–9', 'Alt+1…9'],
     ['Switch tabs (recent first)', 'Ctrl+Tab'], ['Reopen closed tab', 'Ctrl+Shift+T'],
-    ['Split right', 'Ctrl+D'], ['Split down', 'Ctrl+Shift+D'], ['Zoom pane', 'Ctrl+Shift+Enter'],
-    ['Pin pane', 'Alt+P'], ['Close pane', 'Alt+Shift+W'], ['Broadcast input', 'Ctrl+Alt+B'],
-    ['Find in terminal', 'Ctrl+F'], ['Copy mode (select with keys)', 'Ctrl+Shift+M'],
-    ['Copy / Paste', 'Ctrl+Shift+C / V'], ['Font size', 'Ctrl+= / − / 0'],
-    ['Toggle sidebar', 'Ctrl+B'], ['Changes panel', 'Ctrl+Alt+D'], ['Notifications', 'Ctrl+Alt+N'],
-    ['Command palette', 'Ctrl+Shift+P'], ['Settings', 'Ctrl+,'],
-    ['Save layout', 'Ctrl+Alt+S'], ['Load layout', 'Ctrl+Alt+O'], ['Keyboard shortcuts', 'F1'],
+    ['Split right', 'Ctrl+D', 'split-right'], ['Split down', 'Ctrl+Shift+D', 'split-down'],
+    ['Zoom pane', 'Ctrl+Shift+Enter', 'zoom'],
+    ['Pin pane', 'Alt+P'], ['Close pane', 'Alt+Shift+W', 'close-pane'],
+    ['Broadcast input', 'Ctrl+Alt+B', 'broadcast'],
+    ['Find in terminal', 'Ctrl+F', 'find'], ['Copy mode (select with keys)', 'Ctrl+Shift+M'],
+    ['Copy / Paste', 'Ctrl+Shift+C / V', 'copy+paste'], ['Font size', 'Ctrl+= / − / 0'],
+    ['Toggle sidebar', 'Ctrl+B', 'toggle-sidebar'], ['Changes panel', 'Ctrl+Alt+D', 'toggle-dock'],
+    ['Notifications', 'Ctrl+Alt+N', 'notifications'],
+    ['Command palette', 'Ctrl+Shift+P', 'palette'], ['Settings', 'Ctrl+,', 'settings'],
+    ['Save layout', 'Ctrl+Alt+S', 'save-layout'], ['Load layout', 'Ctrl+Alt+O', 'load-layout'],
+    ['Keyboard shortcuts', 'F1', 'help'],
   ];
+  // What is bound to an action right now — defaults, then the user's keymap on
+  // top. Every surface that advertises a shortcut asks this, so they cannot drift
+  // apart. "a+b" means one row shows two actions ("Copy / Paste").
+  function chordFor(id, fallback) {
+    if (!id) return fallback;
+    var out = String(id).split('+').map(function (one) {
+      var a = actionById(one);
+      return a ? effectiveChord(a) : null;
+    });
+    return out.indexOf(null) >= 0 ? fallback : out.join(' / ');
+  }
   var CHEAT = {
     Tabs: KEYS.slice(0, 5), Panes: KEYS.slice(5, 11), Terminal: KEYS.slice(11, 15), View: KEYS.slice(15),
   };
@@ -4615,7 +4675,7 @@
     document.getElementById('cheat-body').innerHTML = '<h2>Keyboard shortcuts</h2>' +
       Object.keys(CHEAT).map(function (sec) {
         return '<div class="csec">' + sec + '</div>' + CHEAT[sec].map(function (r) {
-          return '<div class="crow"><span class="ca">' + r[0] + '</span><span class="kbd">' + r[1] + '</span></div>';
+          return '<div class="crow"><span class="ca">' + r[0] + '</span><span class="kbd">' + esc(chordFor(r[2], r[1])) + '</span></div>';
         }).join('');
       }).join('') +
       '<div class="csec">Words WinMux uses</div>' + VOCAB.map(function (r) {
@@ -4701,33 +4761,33 @@
   var plSel = 0;
   function commands() {
     var list = [
-      { cat: 'Terminal', name: 'New tab', kbd: 'Alt+T', run: function () { var p = paneById(activePaneId); if (p) newTerm(p, startShell()); } },
-      { cat: 'Terminal', name: 'Close tab', kbd: 'Alt+W', run: function () { var p = paneById(activePaneId); if (p && p.activeTermId) askCloseTerm(p, p.activeTermId); } },
+      { cat: 'Terminal', name: 'New tab', act: 'new-tab', run: function () { var p = paneById(activePaneId); if (p) newTerm(p, startShell()); } },
+      { cat: 'Terminal', name: 'Close tab', act: 'close-tab', run: function () { var p = paneById(activePaneId); if (p && p.activeTermId) askCloseTerm(p, p.activeTermId); } },
       { cat: 'Terminal', name: 'Clear terminal', run: function () { var t = activeTerm(); if (t && t.term) { t.term.clear(); t.term.focus(); } } },
-      { cat: 'Terminal', name: 'Copy selection', kbd: 'Ctrl+Shift+C', run: function () { var t = activeTerm(); if (t && t.term) copySel(t); } },
-      { cat: 'Terminal', name: 'Paste', kbd: 'Ctrl+Shift+V', run: function () { var t = activeTerm(); if (t) pasteInto(t); } },
+      { cat: 'Terminal', name: 'Copy selection', act: 'copy', run: function () { var t = activeTerm(); if (t && t.term) copySel(t); } },
+      { cat: 'Terminal', name: 'Paste', act: 'paste', run: function () { var t = activeTerm(); if (t) pasteInto(t); } },
       { cat: 'Terminal', name: 'Paste from other device (clipboard sync)', run: function () { var t = activeTerm(); if (t) pasteFromOtherDevice(t); } },
       { cat: 'Terminal', name: 'Rename tab', run: function () { var t = activeTerm(); if (t) startRename(t); } },
-      { cat: 'Terminal', name: 'Find in terminal', kbd: 'Ctrl+F', run: function () { var p = paneById(activePaneId); if (p) openFind(p); } },
+      { cat: 'Terminal', name: 'Find in terminal', act: 'find', run: function () { var p = paneById(activePaneId); if (p) openFind(p); } },
       { cat: 'Terminal', name: 'Copy mode — select scrollback with the keyboard', kbd: 'Ctrl+Shift+M', run: enterCopyMode },
       { cat: 'Terminal', name: 'Reopen closed tab', kbd: 'Ctrl+Shift+T', run: reopenClosed },
-      { cat: 'Pane', name: 'Split right', kbd: 'Ctrl+D', run: function () { var p = paneById(activePaneId); if (p) splitRight(p, startShell()); } },
-      { cat: 'Pane', name: 'Split down', kbd: 'Ctrl+Shift+D', run: function () { var p = paneById(activePaneId); if (p) splitDown(p, startShell()); } },
-      { cat: 'Pane', name: 'Zoom pane', kbd: 'Ctrl+Shift+Enter', run: function () { var p = paneById(activePaneId); if (p) toggleZoom(p); } },
+      { cat: 'Pane', name: 'Split right', act: 'split-right', run: function () { var p = paneById(activePaneId); if (p) splitRight(p, startShell()); } },
+      { cat: 'Pane', name: 'Split down', act: 'split-down', run: function () { var p = paneById(activePaneId); if (p) splitDown(p, startShell()); } },
+      { cat: 'Pane', name: 'Zoom pane', act: 'zoom', run: function () { var p = paneById(activePaneId); if (p) toggleZoom(p); } },
       { cat: 'Pane', name: (function () { var p = paneById(activePaneId); return p && p.pinned ? 'Unpin pane' : 'Pin pane (protect it from closing)'; })(), kbd: 'Alt+P', run: function () { var p = paneById(activePaneId); if (p) togglePin(p); } },
-      { cat: 'Pane', name: 'Close pane', kbd: 'Alt+Shift+W', run: function () { var p = paneById(activePaneId); if (p) askClosePane(p); } },
-      { cat: 'Pane', name: broadcastOn ? 'Stop broadcasting input' : 'Broadcast input to all terminals', kbd: 'Ctrl+Alt+B', run: function () { setBroadcast(!broadcastOn); } },
-      { cat: 'View', name: 'Toggle sidebar', kbd: 'Ctrl+B', run: toggleSidebar },
-      { cat: 'View', name: 'Toggle changes panel', kbd: 'Ctrl+Alt+D', run: toggleDock },
-      { cat: 'View', name: 'Notifications', kbd: 'Ctrl+Alt+N', run: function () { toggleNotif(document.getElementById('open-notif')); } },
+      { cat: 'Pane', name: 'Close pane', act: 'close-pane', run: function () { var p = paneById(activePaneId); if (p) askClosePane(p); } },
+      { cat: 'Pane', name: broadcastOn ? 'Stop broadcasting input' : 'Broadcast input to all terminals', act: 'broadcast', run: function () { setBroadcast(!broadcastOn); } },
+      { cat: 'View', name: 'Toggle sidebar', act: 'toggle-sidebar', run: toggleSidebar },
+      { cat: 'View', name: 'Toggle changes panel', act: 'toggle-dock', run: toggleDock },
+      { cat: 'View', name: 'Notifications', act: 'notifications', run: function () { toggleNotif(document.getElementById('open-notif')); } },
       { cat: 'View', name: 'Theme: match system', run: function () { applyTheme('system'); } },
       { cat: 'View', name: 'Theme: dark', run: function () { applyTheme('dark'); } },
       { cat: 'View', name: 'Theme: light', run: function () { applyTheme('light'); } },
-      { cat: 'Project', name: 'Save project', kbd: 'Ctrl+Alt+S', run: saveLayoutDialog },
-      { cat: 'Project', name: 'Open project', kbd: 'Ctrl+Alt+O', run: loadLayoutDialog },
+      { cat: 'Project', name: 'Save project', act: 'save-layout', run: saveLayoutDialog },
+      { cat: 'Project', name: 'Open project', act: 'load-layout', run: loadLayoutDialog },
       { cat: 'Project', name: 'Close project', run: closeProject },
-      { cat: 'App', name: 'Settings', kbd: 'Ctrl+,', run: function () { openSettings(); } },
-      { cat: 'App', name: 'Keyboard shortcuts', kbd: 'F1', run: openCheat },
+      { cat: 'App', name: 'Settings', act: 'settings', run: function () { openSettings(); } },
+      { cat: 'App', name: 'Keyboard shortcuts', act: 'help', run: openCheat },
       { cat: 'App', name: 'Agents guide', run: function () { openAgentsGuide(); } },
       { cat: 'App', name: 'Diagnostics', run: openDiag },
     ];
@@ -4761,7 +4821,7 @@
     plList.innerHTML = plItems.length
       ? plItems.map(function (c, i) {
           return '<div class="pl-item"' + (i === 0 ? ' data-sel' : '') + ' data-i="' + i + '"><span class="pl-ic">›</span>' +
-            '<span>' + esc(c.name) + '</span>' + (c.kbd ? '<span class="kbd sm">' + c.kbd + '</span>' : '<span class="cat">' + c.cat + '</span>') + '</div>';
+            '<span>' + esc(c.name) + '</span>' + ((c.act || c.kbd) ? '<span class="kbd sm">' + esc(chordFor(c.act, c.kbd)) + '</span>' : '<span class="cat">' + c.cat + '</span>') + '</div>';
         }).join('')
       : '<div style="padding:14px;color:var(--faint);font-size:12.5px">No matching command</div>';
   }
@@ -4944,7 +5004,14 @@
   function saveKeymap() {
     try { localStorage.setItem('ct-keymap', JSON.stringify(KEYMAP)); } catch (e) {}
     if (!configReady) return;
-    try { fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keymap: KEYMAP }) }).catch(function () {}); } catch (e) {}
+    try {
+      fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keymap: KEYMAP }) })
+        .then(function (r) { if (!r.ok) throw new Error(r.status); writeOk('config', 'Settings are saving again', ''); })
+        .catch(function () {
+          writeFailed('config', 'That shortcut did not save',
+            'WinMux could not write its settings file, so this keybinding will be gone the next time you open it.');
+        });
+    } catch (e) {}
   }
   var rebindCapture = false;   // true while the Shortcuts UI is waiting to catch a chord
   // Observability hooks (mirror __winmuxActiveTerm) so the harness can drive rebinds.
