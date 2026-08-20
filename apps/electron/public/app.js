@@ -1527,14 +1527,23 @@
     placeWinctl();
     renderSidebar();
   }
-  // The window frame's min/max/close sit at the extreme top-right of the title row —
-  // the last pane's control cluster (the #127 inline-on-rightmost-pane pattern).
+  // The window frame's min/max/close belong to the WINDOW, not to a pane. They
+  // used to be appended into the rightmost pane's control cluster, which put
+  // the only close button a frameless window has inside a flex row that cannot
+  // wrap, inside a .pane that clips its overflow: at a small window size one
+  // split pushed close/max/min past the right edge with no way to close the app
+  // (measured at the 720px minimum: close landed 121px off-screen). They now
+  // live at the top-right of the cockpit itself, where no pane geometry can
+  // reach them; the rightmost pane reserves the width so tabs never slide
+  // underneath (see --wcw in index.html).
   function placeWinctl() {
     var wc = document.getElementById('winctl');
-    if (!wc || !panes.length) return;
-    var last = panes[panes.length - 1];
-    var host = last.dockBtn ? last.dockBtn.parentNode : null;
-    if (host && wc.parentNode !== host) host.appendChild(wc);
+    if (!wc) return;
+    var shell = document.querySelector('.cockpit');
+    if (shell && wc.parentNode !== shell) shell.appendChild(wc);
+    panes.forEach(function (p, i) {
+      if (p.el) p.el.classList.toggle('wc-host', i === panes.length - 1);
+    });
   }
   function clearZoom() {
     wsrow.classList.remove('zoomed');

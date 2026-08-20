@@ -123,6 +123,7 @@ const PORT_SOT = 9981;        // PT-6: the engine's config.json is the settings 
 const PORT_LOCALECHO = 9982;  // SP-1: predictive local echo — instant paint, honest reconcile, no secret leak
 const PORT_SIDEBAR = 9983;    // SB: Obsidian-style sidebar tabs — switch, persist, notif-in-rail, drag-resize
 const PORT_SPLITCLOSE = 9984; // FB: closing a split's last visible tab collapses the split, even across groups
+const PORT_WINCTL = 9987;     // AUDIT-1: the window's close button survives every pane layout at every size
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -2780,6 +2781,92 @@ check('sidebar-tabs', PORT_SIDEBAR, async ({ browser, base, t, shot }) => {
   s = await state();
   t('returning to desktop restores the strip arrangement', s.bellIn === 'sx-tabs' && s.npIn === 'sxp-notif' && s.tab === 'projects', s);
   await shot(page, 'sidebar-tabs-restored');
+
+  await page.close();
+});
+
+// --- winctl: the window's close button is unlosable ---------------------------
+// Edward, twice: "when I minimized it to a certain size, the x and the minimize
+// and maximize button started to disappear." The window is FRAMELESS — .wc is
+// the only close button that exists — and it used to be appended into the
+// rightmost pane's tab row, a non-wrapping flex line inside a .pane that clips.
+// One split at a small window pushed all three off the right edge (measured:
+// close at 841px inside a 720px window). Nothing in 471 checks looked, because
+// no check ever combined "small window" with "split". This one does: it walks
+// the sizes a user can actually drag to, splits repeatedly at each, and asserts
+// the three buttons stay inside the viewport AND hit-testable at every step.
+check('winctl', PORT_WINCTL, async ({ browser, base, t, shot }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_WINCTL), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => o += d);
+    proc.stderr.on('data', (d) => e += d);
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4500);
+
+  // Each button must be inside the viewport and be the element you actually hit
+  // at its own centre — "rendered" is not "clickable".
+  const controls = () => page.evaluate(() => ['wc-min', 'wc-max', 'wc-close'].map((id) => {
+    const el = document.getElementById(id);
+    if (!el) return { id, ok: false, why: 'MISSING' };
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return { id, ok: false, why: 'zero-size' };
+    if (r.right > innerWidth + 0.5 || r.left < -0.5) {
+      return { id, ok: false, why: 'clipped: right=' + Math.round(r.right) + ' vs window ' + innerWidth };
+    }
+    const top = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    if (!(top && (top === el || el.contains(top) || top.contains(el)))) return { id, ok: false, why: 'covered' };
+    return { id, ok: true, why: 'usable' };
+  }));
+  const allUsable = async (label) => {
+    const c = await controls();
+    const bad = c.filter((x) => !x.ok);
+    t('window controls stay usable ' + label, bad.length === 0, bad.length ? bad : 'min/max/close all usable');
+    return bad.length === 0;
+  };
+
+  // 720x480 is the enforced floor (electron/main.ts minWidth/minHeight), i.e. the
+  // smallest window a user can drag to — the worst case, tested first.
+  for (const [w, h] of [[720, 480], [900, 620], [1440, 900]]) {
+    await page.setViewportSize({ width: w, height: h });
+    await page.waitForTimeout(700);
+    await allUsable('at ' + w + 'x' + h + ' with one pane');
+  }
+
+  await page.setViewportSize({ width: 720, height: 480 });
+  await page.waitForTimeout(700);
+  for (let i = 1; i <= 3; i++) {
+    await winmux(['split', 'right']);
+    await page.waitForTimeout(2200);
+    const panes = await page.evaluate(() => document.querySelectorAll('.workspace .pane').length);
+    t('split ' + i + ' produced ' + (i + 1) + ' panes at the minimum window size', panes === i + 1, String(panes));
+    await allUsable('after ' + i + ' split' + (i > 1 ? 's' : '') + ' at 720x480');
+  }
+  await shot(page, 'winctl-splits-720');
+
+  // The reserved corner must be real: the rightmost pane's tab row has to stop
+  // before the controls, or its own buttons sit underneath them.
+  const reserved = await page.evaluate(() => {
+    const host = document.querySelector('.pane.wc-host .ptabs');
+    const wc = document.getElementById('winctl');
+    if (!host || !wc) return { ok: false, why: 'no wc-host pane' };
+    const pad = parseInt(getComputedStyle(host).paddingRight, 10) || 0;
+    return { ok: pad >= Math.round(wc.getBoundingClientRect().width), pad, wcw: Math.round(wc.getBoundingClientRect().width) };
+  });
+  t('the rightmost pane reserves the window-control corner', reserved.ok, reserved);
+
+  // And the controls belong to the window, not to a pane that can be closed.
+  const parent = await page.evaluate(() => (document.getElementById('winctl').parentElement || {}).className || '');
+  t('the controls live on the shell, not inside a pane', /cockpit/.test(parent) && !/pane/.test(parent), parent);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForTimeout(600);
+  await allUsable('back at 1440x900 with 4 panes');
 
   await page.close();
 });

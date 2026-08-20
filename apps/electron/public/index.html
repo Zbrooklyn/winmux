@@ -266,8 +266,22 @@
      fill, so the folder path reads as a calm line instead of the one bordered box
      in an otherwise flat panel. Shared with the in-app browser (consistent). */
   .burl { border-color: transparent; background: var(--bg1); }
-  /* Desktop window-frame controls (min / max / close). Native-Windows titlebar styling;
-     app.js relocates them into the rightmost tab bar. Hidden on phone (that's the PWA). */
+  /* Desktop window-frame controls (min / max / close). Native-Windows titlebar styling.
+     These are ANCHORED TO THE WINDOW, not to a pane: the window is frameless, so this
+     is the only close button that exists, and it used to be appended into the rightmost
+     pane's tab row — a non-wrapping flex line inside a .pane that clips. One split at a
+     small window size pushed all three past the right edge (measured: close 121px
+     off-screen at the 720px minimum), leaving Alt+F4 as the only way out. Pinning them
+     to the cockpit's top-right corner makes that geometrically impossible; the rightmost
+     pane reserves --wcw so its tabs and controls never slide underneath. Hidden on the
+     phone (that's the PWA, which has real browser chrome). */
+  :root { --wcw: 132px; }                    /* 3 x 44px — the reserved corner */
+  .cockpit { position: relative; }
+  .wc { position: absolute; top: 0; right: 0; height: 40px; z-index: 40;
+    background: var(--bg1); border-left: 1px solid var(--border);
+    border-bottom: 1px solid var(--border); box-sizing: border-box; }
+  /* +1px: the corner's own left border is part of the width it occupies. */
+  .cockpit:not([data-mode="narrow"]) .pane.wc-host .ptabs { padding-right: calc(var(--wcw) + 1px); }
   .wc .wcbtn { width: 44px; height: 100%; display: flex; align-items: center; justify-content: center;
     color: var(--muted); cursor: pointer; }
   .wc .wcbtn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; }
