@@ -298,6 +298,27 @@ function renameSettled(tmp, dest) {
   }
 }
 
+// A delete loses the same race for the same reason, and it was never given the
+// same patience: unlink comes back EPERM/EBUSY for a few milliseconds while a
+// sync client holds the file it just saw change. One attempt meant a user in a
+// Dropbox folder could press Delete on a project and be told, correctly but
+// uselessly, that it could not be deleted — and pressing it again worked.
+// Same ladder as renameSettled, and a genuine failure still throws so the
+// caller reports it instead of claiming a delete that did not happen.
+function unlinkSettled(target) {
+  const waits = [0, 15, 40, 90, 180, 350];
+  const pause = (ms) => { if (ms) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+  for (let i = 0; i < waits.length; i++) {
+    pause(waits[i]);
+    try { fs.unlinkSync(target); return; }
+    catch (e) {
+      if (e.code === 'ENOENT') return;                 // already gone counts as deleted
+      const racy = e.code === 'EPERM' || e.code === 'EBUSY' || e.code === 'EACCES';
+      if (!racy || i === waits.length - 1) throw e;
+    }
+  }
+}
+
 function saveTrust() {
   // Write to a temp file then rename — an atomic swap, so a crash mid-write can
   // never leave a half-written (corrupt, unparseable) guest list that bricks the
@@ -1101,8 +1122,8 @@ function handle(req, res, viaPhone) {
       // reported, not swallowed.
       const wantTrash = q.trash === '1' || q.trash === 'true';
       if (wantTrash) {
-        try { fs.unlinkSync(p); }
-        catch (e) { if (e.code !== 'ENOENT') return sendJson(409, { ok: false, error: 'could not delete the file (' + (e.code || e.message) + ')' }); }
+        try { unlinkSettled(p); }
+        catch (e) { return sendJson(409, { ok: false, error: 'could not delete the file (' + (e.code || e.message) + ')' }); }
       }
       writeRecents(readRecents().filter((r) => r.path !== p));
       return sendJson(200, { ok: true, deleted: wantTrash });

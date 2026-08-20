@@ -1932,6 +1932,32 @@ async fn api_project_get(Query(q): Query<HashMap<String, String>>) -> impl IntoR
 // problem: the identical write succeeds moments later. Retry briefly, and let a
 // genuine failure still surface so the caller reports it rather than claiming a
 // save that did not happen.
+// A delete loses the same race for the same reason, and was never given the same
+// patience: remove_file comes back with a sharing violation for a few
+// milliseconds while a sync client holds the file it just saw change. One
+// attempt meant a user in a Dropbox folder could press Delete on a project and
+// be told, correctly but uselessly, that it could not be deleted — and pressing
+// it again worked. Same ladder as rename_settled; a genuine failure still
+// returns Err so the caller reports it rather than claiming a delete that did
+// not happen.
+fn unlink_settled(target: &std::path::Path) -> std::io::Result<()> {
+    const WAITS: [u64; 6] = [0, 15, 40, 90, 180, 350];
+    for (i, ms) in WAITS.iter().enumerate() {
+        if *ms > 0 { std::thread::sleep(Duration::from_millis(*ms)); }
+        match std::fs::remove_file(target) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound { return Ok(()); }
+                let racy = matches!(e.kind(), std::io::ErrorKind::PermissionDenied)
+                    || e.raw_os_error() == Some(32)   // ERROR_SHARING_VIOLATION
+                    || e.raw_os_error() == Some(5);   // ERROR_ACCESS_DENIED
+                if !racy || i == WAITS.len() - 1 { return Err(e); }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn rename_settled(tmp: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
     const WAITS: [u64; 6] = [0, 15, 40, 90, 180, 350];
     let mut last = None;
@@ -2047,11 +2073,9 @@ async fn api_project_delete(Query(q): Query<HashMap<String, String>>) -> impl In
             // nothing left pointing at where it lives. Already-missing counts as
             // deleted; anything else is reported, not swallowed.
             if trash {
-                if let Err(e) = std::fs::remove_file(&path) {
-                    if e.kind() != std::io::ErrorKind::NotFound {
-                        return (StatusCode::CONFLICT,
-                            Json(json!({ "ok": false, "error": format!("could not delete the file ({})", e) })));
-                    }
+                if let Err(e) = unlink_settled(&path) {
+                    return (StatusCode::CONFLICT,
+                        Json(json!({ "ok": false, "error": format!("could not delete the file ({})", e) })));
                 }
             }
             let kept: Vec<Value> = read_recents().into_iter()

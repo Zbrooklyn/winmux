@@ -1802,11 +1802,42 @@ check('delhonest', PORT_DELHONEST, async ({ base, t }) => {
   try { holder.kill(); } catch (e) {}
   const freeBy = Date.now() + 15000;
   while (locked() && Date.now() < freeBy) await new Promise((r) => setTimeout(r, 50));
+  // Say out loud whether the precondition actually held. Without this the check
+  // sails past a lock that never released and reports the resulting refusal as a
+  // product failure — which is how this check spent today looking like a flake
+  // while the thing it was pointing at was real.
+  t('the lock really did release before we ask for a delete', !locked(), locked());
 
   const gone = await api('DELETE', '/api/project?path=' + encodeURIComponent(file) + '&trash=1');
   t('with nothing holding it, the delete succeeds', gone && gone.ok === true, gone);
   t('and the file really is gone', !fs.existsSync(file), fs.existsSync(file));
   t('and it leaves the list', !(await listed(file)), await listed(file));
+
+  // A TRANSIENT hold is the common case, not the 20-second one: Dropbox and
+  // OneDrive grab a handle on a file the instant they see it change, and a
+  // project folder is very often inside one. Deleting used to be a single
+  // attempt, so that quarter-second was enough to refuse a delete the user then
+  // had to repeat. It must now ride the race out — the same patience every
+  // durable write already had.
+  const brief = path.join(dir, 'Briefly Held.winmux.json');
+  await api('POST', '/api/project', { name: 'Briefly Held', path: brief, layout: { cols: [] } });
+  const flicker = spawn('powershell', ['-NoProfile', '-Command',
+    `$f=$null; $d=(Get-Date).AddSeconds(10)
+     while (-not $f -and (Get-Date) -lt $d) {
+       try { $f=[System.IO.File]::Open('${brief}','Open','Read','None') }
+       catch { Start-Sleep -Milliseconds 20 }
+     }
+     if ($f) { Start-Sleep -Milliseconds 250; $f.Close() }`,
+  ], { stdio: 'ignore' });
+  const heldNow = () => { try { fs.closeSync(fs.openSync(brief, 'r')); return false; } catch (e) { return true; } };
+  const by = Date.now() + 10000;
+  while (!heldNow() && Date.now() < by) await new Promise((r) => setTimeout(r, 10));
+  t('a brief hold is really in place for this one', heldNow(), heldNow());
+  const rode = await api('DELETE', '/api/project?path=' + encodeURIComponent(brief) + '&trash=1');
+  t('a delete rides out a hold that lasts a moment, instead of refusing',
+    rode && rode.ok === true, rode);
+  t('and that file is actually gone', !fs.existsSync(brief), fs.existsSync(brief));
+  try { flicker.kill(); } catch (e) {}
 
   const keep = path.join(dir, 'Keep Me.winmux.json');
   await api('POST', '/api/project', { name: 'Keep Me', path: keep, layout: { cols: [] } });
