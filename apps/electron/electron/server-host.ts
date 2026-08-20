@@ -107,10 +107,28 @@ export async function resolveServer(opts: ResolveOpts): Promise<Resolved> {
     opts.extraEnv || {},
   );
   const child = spawn(cmd, args, { detached: true, stdio: 'ignore', env });
+  // AUDIT-B2: a spawn that fails — binary quarantined by antivirus, missing,
+  // not executable — reports it by emitting 'error' on the child. With no
+  // listener Node turns that into an uncaught exception, which goes straight
+  // past the try/catch around this call and past the friendly dialog it exists
+  // to show. An immediate exit (the 0xC0000142 class of launch failure) is the
+  // same story told differently, so watch for that too, and say which binary.
+  let launchFailure: string | null = null;
+  child.on('error', (e: NodeJS.ErrnoException) => {
+    launchFailure = 'could not start ' + cmd + ' (' + (e.code || e.message) + ')';
+  });
+  child.on('exit', (code, signal) => {
+    if (code === 0 || (code == null && !signal)) return;   // a clean hand-off is not a failure
+    launchFailure = cmd + ' exited immediately'
+      + (code != null ? ' with code ' + code : '') + (signal ? ' on ' + signal : '');
+  });
   child.unref();
 
   const deadline = Date.now() + (opts.timeoutMs || 15000);
   while (Date.now() < deadline) {
+    // Fail the moment we know, rather than spending the whole budget waiting for
+    // a server that was never going to answer.
+    if (launchFailure) throw new Error(launchFailure);
     // patience 0: we are waiting on a server we just started, and the loop below
     // already IS the waiting. Handing it 8s of extra patience per pass would turn
     // a 15s budget into two attempts.
@@ -121,6 +139,7 @@ export async function resolveServer(opts: ResolveOpts): Promise<Resolved> {
     // between "window painted" and "prompt usable" (SP-3).
     await new Promise((r) => setTimeout(r, 50));
   }
+  if (launchFailure) throw new Error(launchFailure);
   throw new Error('detached server did not come up within ' + (opts.timeoutMs || 15000) + 'ms');
 }
 

@@ -6,10 +6,19 @@ import { resolveProfile, parseCoreFlag } from './profile';
 import { resolveServer } from './server-host';
 
 // server.cjs is CommonJS at the repo root (one level up from dist-electron/).
+//
+// AUDIT-B1: loaded on demand, not at the top of the file. server.cjs pulls in the
+// native terminal library as it loads, and when that fails — no prebuilt binary
+// for this Node ABI, an antivirus quarantine, a half-finished install — a
+// top-level require throws while main.js is still being evaluated. That is
+// before app.whenReady, so the "WinMux could not start its engine" dialog below
+// cannot possibly run and the user gets a bare stack trace instead. Worse, it
+// killed Rust builds too, which never touch that library at all.
+//
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { start } = require('../server.cjs') as {
+const loadNodeEngine = () => (require('../server.cjs') as {
   start: () => Promise<{ port: number; host: string }>;
-};
+}).start;
 
 // Establish this copy's identity BEFORE anything reads userData or starts the
 // server. app.isPackaged is true only inside the built .exe, so the installed
@@ -70,7 +79,7 @@ async function createWindow(): Promise<void> {
   // concurrently and the page loads the moment the port is known.
   let portPromise: Promise<number>;
   if (SMOKE) {
-    portPromise = start().then((r) => r.port);
+    portPromise = loadNodeEngine()().then((r) => r.port);
   } else {
     // WINMUX_CORE=rust boots the native Rust core as the sidecar instead of the
     // Node server. Discovery is identical (it writes the same instance.json and

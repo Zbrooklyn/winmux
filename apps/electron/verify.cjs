@@ -4273,6 +4273,59 @@ check('detach', PORT_SURVIVE2, async ({ t }) => {
   }
 });
 
+// --- launchfail: a launch that fails reaches the dialog, not a stack trace ---
+// Two ways the app used to die before it could say anything useful, both on the
+// path a stranger hits when their machine is not the machine we built on.
+//
+// B1: server.cjs was required at the TOP of main.js, and it pulls in the native
+// terminal library as it loads. A missing prebuild, an antivirus quarantine, a
+// half-finished install — any of them threw while main.js was still being
+// evaluated, which is before the app is ready, so the "could not start its
+// engine" dialog could not run. It killed Rust builds too, which never use that
+// library. This asserts on the BUILT file, because the build is what ships.
+//
+// B2: the engine spawn had no error listener, so a blocked binary became an
+// uncaught exception that went straight past the try/catch written to catch it.
+// Proven in a child process — if the fix regressed, the crash would take the
+// whole suite with it instead of failing one assertion.
+check('launchfail', PORT_BUSY, async ({ t }) => {
+  const mainJs = path.join(ROOT, 'dist-electron', 'main.js');
+  const src = fs.readFileSync(mainJs, 'utf8');
+  const lines = src.split(/\r?\n/);
+  const reqLines = lines.filter((l) => /require\(["']\.\.\/server\.cjs["']\)/.test(l));
+  t('the built main.js does load server.cjs somewhere', reqLines.length >= 1, reqLines.length);
+  t('but never at the top of the file, where no dialog can catch it',
+    reqLines.every((l) => /loadNodeEngine/.test(l)), reqLines.map((l) => l.trim().slice(0, 120)));
+
+  // B2, in its own process so a regression cannot kill this run.
+  const hostJs = path.join(ROOT, 'dist-electron', 'server-host.js').replace(/\\/g, '\\\\');
+  const missing = path.join(OUT, 'no-such-engine-' + Date.now() + '.exe').replace(/\\/g, '\\\\');
+  const instFile = path.join(OUT, 'launchfail-inst.json').replace(/\\/g, '\\\\');
+  const script = 'const h = require("' + hostJs + '");'
+    + 'h.resolveServer({ rustCorePath: "' + missing + '", execPath: process.execPath,'
+    + ' serverPath: "' + missing + '", instanceFile: "' + instFile + '",'
+    + ' trustFile: "' + instFile + '", timeoutMs: 6000 })'
+    + '.then(function (r) { console.log("RESOLVED " + JSON.stringify(r)); },'
+    + ' function (e) { console.log("REJECTED " + e.message); });';
+  const out = await new Promise((resolve) => {
+    const child = spawn(process.execPath, ['-e', script], { cwd: ROOT, env: process.env });
+    let buf = '';
+    child.stdout.on('data', (d) => { buf += d; });
+    child.stderr.on('data', (d) => { buf += d; });
+    child.on('close', (code) => resolve({ code, buf: buf.trim() }));
+  });
+  // Every one of these insists on the REJECTED line. Without that, a crash
+  // satisfies them by accident: the uncaught ENOENT stack trace also contains
+  // the binary's path and also arrives immediately, so "names the binary" and
+  // "gives up quickly" both passed against the very failure they exist to catch.
+  const rejected = out.code === 0 && /^REJECTED /m.test(out.buf);
+  t('a missing or blocked engine is reported, not thrown past the error handling', rejected, out);
+  t('and the message names the binary, so the person knows what to unblock',
+    rejected && /REJECTED [^\n]*no-such-engine-/.test(out.buf), out.buf.slice(0, 200));
+  t('and it gives up as soon as it knows, instead of waiting out the timeout',
+    rejected && !/did not come up within/.test(out.buf), out.buf.slice(0, 200));
+});
+
 // --- exittruth: a shell that ends says so (AUDIT-1) -------------------------
 // The audit's worst-ranked defect, and it only existed on the engine we ship.
 // Type `exit` and the shell dies — but nothing told anyone. The tab stayed, the
