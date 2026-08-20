@@ -134,6 +134,7 @@ const PORT_UPDFEED = 9994;     // AUDIT-7's own stand-in release feed, so the up
 const PORT_NOCLOBBER = 9997;   // AUDIT-8: saving a project never writes over a different project
 const PORT_KEYBACK = 9996;     // AUDIT-9: a dialog that took the keyboard gives it back however it is dismissed
 const PORT_CFGSAFE = 9998;     // AUDIT-10: a damaged settings file is kept and reported, never quietly replaced
+const PORT_BUSYBAR = 9995;     // the busy underline actually paints, and grows, while a shell works
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -647,6 +648,12 @@ check('busyport', PORT_BUSY, async ({ browser, base, t, shot, skip }) => {
 
   await p.keyboard.press('Escape');
   await p.locator('.ovl[data-open]').first().waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+  // Name the difference between "the terminal is broken" and "Settings is still
+  // covering it and eating the keystrokes". Without this the next assertion
+  // reports a dead terminal either way, and the evidence points at the product.
+  const stillOpen = await p.evaluate(() =>
+    [].slice.call(document.querySelectorAll('.ovl[data-open]')).map((o) => o.id).join(','));
+  t('Settings actually closed, so the keys reach the terminal', !stillOpen, stillOpen);
   t('the same terminal still runs commands', await say('"after " + $env:COMPUTERNAME', 'after'));
   await shot(p, 'busyport');
 });
@@ -1518,14 +1525,25 @@ check('localecho', PORT_LOCALECHO, async ({ browser, base, t }) => {
     }
     look();
   }), ch);
+  // Wait for a shell that is actually echoing, not for a guessed interval. Every
+  // assertion here is about what the predictor does around real echo, so a shell
+  // that has not printed its prompt yet makes the whole check meaningless — and
+  // it fails on a later assertion, blaming the predictor.
+  const livePrompt = () => page.waitForFunction(`(function () {
+    var h = [].slice.call(document.querySelectorAll('.term-host'))
+      .filter(function (e) { return e.style.display !== 'none'; })[0];
+    if (!h) return false;
+    var rows = h.querySelector('.xterm-rows');
+    return !!rows && /[>$#]\\s*$|PS .*>/.test(rows.textContent || '');
+  })()`, null, { timeout: 30000 });
   try {
     await page.goto(base, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(4500);
+    await livePrompt();
     // A restored session (the engine may rehydrate a workspace this port used in
     // an earlier run) carries scrollback that legitimately trips the predictor's
     // screen guards — the contract under test needs a FRESH shell, so open one.
     await page.evaluate(() => document.getElementById('open-new').click());
-    await page.waitForTimeout(2500);
+    await livePrompt();
     // Focus the VISIBLE terminal's textarea — a hidden restored tab also matches
     // '.xterm', and clicking that one times out.
     const focusTerm = () => page.evaluate(() => {
@@ -1598,11 +1616,18 @@ check('localecho', PORT_LOCALECHO, async ({ browser, base, t }) => {
     });
     await page.evaluate(() => fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: { localEcho: false } }) }));
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(4000);
+    await livePrompt();
+    // The setting is read from disk asynchronously after load. Typing before it
+    // lands proves nothing about the switch — so wait for the app to actually be
+    // holding localEcho:false, then type.
+    await page.waitForFunction(`(function () {
+      try { return JSON.parse(localStorage.getItem('ct-settings') || '{}').localEcho === false; }
+      catch (e) { return false; }
+    })()`, null, { timeout: 20000 });
     // Fresh shell again, so "no prediction" is proven by the OFF switch alone,
     // not by a restored screen tripping the guards.
     await page.evaluate(() => document.getElementById('open-new').click());
-    await page.waitForTimeout(2500);
+    await livePrompt();
     await focusTerm();
     for (const c of ['p', 'q']) { await page.keyboard.press(c); await page.waitForTimeout(300); }
     await page.keyboard.press('r');
@@ -2202,6 +2227,61 @@ check('keyback', PORT_KEYBACK, async ({ browser, base, t, shot }) => {
 // base, destroying every imported theme and custom keybinding — and answered
 // "saved". One stray comma cost the user the lot, and the recovery overwrote the
 // evidence. A damaged file must be KEPT and REPORTED, not quietly replaced.
+// --- busybar: the tab's busy underline, measured on screen ----------------
+// The underline that shows a tab is working had no check at all, so when it was
+// switched from animating `width` to `transform: scaleX` — a real fix, since it
+// re-animates every 220ms for every working tab — nothing would have reported it
+// if the bar had simply stopped appearing. Painted width is what a user sees, so
+// painted width is what this measures; it is renderer-independent and would have
+// caught either implementation breaking.
+check('busybar', PORT_BUSYBAR, async ({ browser, base, t }) => {
+  const p = await desktop(browser);
+  try {
+    await p.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    await p.locator('.ptab .tprog').first().waitFor({ timeout: 20000 });
+    const painted = () => p.evaluate(() => {
+      const b = document.querySelector('.ptab .tprog');
+      return b ? b.getBoundingClientRect().width : -1;
+    });
+    // Give the shell something slow enough to still be working when we look.
+    await p.locator('.xterm-helper-textarea').first().focus();
+    await p.keyboard.type('1..40 | % { $_; Start-Sleep -Milliseconds 90 }');
+    await p.keyboard.press('Enter');
+
+    await p.waitForFunction(`(function () {
+      var b = document.querySelector('.ptab .tprog');
+      return !!b && b.getBoundingClientRect().width > 2;
+    })()`, null, { timeout: 20000 });
+    const mid = await painted();
+    t('while the shell is working the bar is visible on screen', mid > 2, mid);
+
+    const tab = await p.evaluate(() => {
+      const e = document.querySelector('.ptab');
+      return e ? e.getBoundingClientRect().width : 0;
+    });
+    t('and it is a progress bar, not a full-width block', mid < tab, { bar: mid, tab });
+
+    // It must grow: a bar stuck at its opening 8% would satisfy everything above.
+    const grew = await p.waitForFunction(`(function () {
+      var b = document.querySelector('.ptab .tprog');
+      return !!b && b.getBoundingClientRect().width > ${mid + 1};
+    })()`, null, { timeout: 20000 }).then(() => true).catch(() => false);
+    t('and it grows as the work continues', grew, { from: mid });
+
+    // And it clears when the shell falls quiet — otherwise every tab you have
+    // ever used keeps a permanent "still working" underline. (Asserting this at
+    // page load instead would be wrong: the shell's own first prompt is output,
+    // so the bar is legitimately running the moment the app opens.)
+    const cleared = await p.waitForFunction(`(function () {
+      var b = document.querySelector('.ptab .tprog');
+      return !!b && b.getBoundingClientRect().width < 1;
+    })()`, null, { timeout: 30000 }).then(() => true).catch(() => false);
+    t('and it clears once the shell falls quiet', cleared, await painted());
+  } finally {
+    await p.close();
+  }
+});
+
 const CFGSAFE_FILE = path.join(os.tmpdir(), 'winmux-verify-cfgsafe', 'config.json');
 check('cfgsafe', PORT_CFGSAFE, async ({ browser, base, t }) => {
   const dir = path.dirname(CFGSAFE_FILE);

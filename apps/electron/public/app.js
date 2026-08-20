@@ -1788,21 +1788,24 @@
   // The busy underline: a progress line that creeps toward full while output keeps arriving,
   // completes to 100% when the shell falls quiet, then clears.
   function stopProg(t) { clearInterval(t.progTimer); t.progTimer = null; }
+  // scaleX, not width — see .tprog in cockpit.css. The element is full-width and
+  // squashed from the left, so the fraction is the progress.
+  function setProg(t, pct) { if (t.progEl) t.progEl.style.transform = 'scaleX(' + (pct / 100) + ')'; }
   function markWorking(t) {
     if (t.progEl && !t.progTimer) {
       t.prog = 8;
-      t.progEl.style.width = '8%';
+      setProg(t, 8);
       t.progTimer = setInterval(function () {
         t.prog += (92 - t.prog) * 0.12;
-        t.progEl.style.width = t.prog.toFixed(1) + '%';
+        setProg(t, t.prog);
       }, 220);
     }
     if (t.status !== 'needsyou') setStatus(t, 'working');
     clearTimeout(t.busyTimer);
     t.busyTimer = setTimeout(function () {
       stopProg(t);
-      if (t.progEl) t.progEl.style.width = '100%';
-      setTimeout(function () { if (!t.progTimer && t.progEl) t.progEl.style.width = '0'; }, 320);
+      setProg(t, 100);
+      setTimeout(function () { if (!t.progTimer) setProg(t, 0); }, 320);
       if (t.status === 'working') setStatus(t, 'idle');
     }, 1200);
   }
@@ -2225,7 +2228,7 @@
       // it disappears the moment the tab shows a real (long) shell path.
       '<span class="tres" aria-hidden="true">↻</span>' +
       '<span class="x" title="Close tab (' + chordFor('close-tab') + ')">×</span>' +
-      '<i class="tprog" style="width:0"></i>';
+      '<i class="tprog"></i>';
     p.tabscroll.appendChild(tabEl);
     var ttEl = tabEl.querySelector('.tt');
 

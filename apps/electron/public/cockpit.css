@@ -110,7 +110,10 @@
   .ptabs .tabscroll{display:flex;overflow-x:auto;min-width:0;flex:1}
   .ptab{position:relative;display:flex;align-items:center;gap:7px;padding:0 11px;border-right:1px solid color-mix(in srgb,var(--border) 45%,transparent);font-size:12px;color:var(--muted);cursor:pointer;white-space:nowrap;flex:0 1 166px;min-width:82px;max-width:190px}
   .ptab:hover:not([data-active]){background:color-mix(in srgb,var(--text) 4%,transparent)}
-  .ptab .tprog{position:absolute;left:0;bottom:0;height:2px;background:var(--work);border-radius:2px 2px 0 0;transition:width .3s var(--ease,ease)}
+  /* Driven by transform, not width: this bar re-animates every 220ms for every
+     working tab, and at 50 busy tabs a width transition is 50 layouts a tick.
+     scaleX stays on the compositor. */
+  .ptab .tprog{position:absolute;left:0;bottom:0;height:2px;width:100%;background:var(--work);border-radius:2px 2px 0 0;transform:scaleX(0);transform-origin:left center;transition:transform .3s var(--ease,ease)}
   .ptab .tt-in{background:var(--bg0);border:1px solid var(--accent);border-radius:4px;padding:0 4px;font:inherit;color:var(--text);outline:none;width:110px}
   .ofmi-sub .nm{padding-left:22px;color:var(--muted);font-size:12px}
   .ofmi .pbadge{margin-left:auto;font-size:9.5px;font-weight:600;padding:1px 6px;border-radius:5px;background:var(--accent-soft);color:var(--accent)}
