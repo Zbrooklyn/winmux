@@ -635,6 +635,12 @@ check('busyport', PORT_BUSY, async ({ browser, base, t, shot, skip }) => {
   if (!busyHold) return skip('Tailscale is not running, so there is no tailnet side to collide with');
   const p = await desktop(browser);
   await p.goto(base + '/', { waitUntil: 'domcontentloaded' });
+  // Wait for the app to actually have a shell answering before typing at it.
+  // This check went straight from domcontentloaded to keystrokes and leaned on
+  // the retry below to paper over the gap — which works until the suite is
+  // loaded enough that twelve retries run out, and then the failure lands on
+  // "a shell is alive", blaming the product for the harness being early.
+  await appReady(p);
   const rows = () => p.evaluate(() =>
     [].map.call(document.querySelectorAll('.xterm-rows > div'), (d) => d.textContent).join('|'));
   // Wait for the shell to answer, not for a stopwatch. Under a full-suite load a

@@ -210,19 +210,35 @@ async function runSmoke(w: BrowserWindow, port: number): Promise<void> {
     // run a command through the real terminal (a live node-pty shell) over the same
     // /control chain the CLI uses, and read the marker back off the screen.
     try {
-      const token = 'WINMUX_PTY_' + 'OK';
-      await rpc(port, 'send', { data: 'echo ' + token, enter: true });
-      let screen = '';
-      for (let i = 0; i < 20; i++) {
-        await new Promise((r) => setTimeout(r, 400));
+      const readScreen = async () => {
         const rs = await rpc(port, 'read-screen', { lines: 60 });
-        screen = String((rs && rs.result && rs.result.screen) || '');
-        // The echoed command line itself contains the token; a match on a line
-        // that is not the command proves the shell ran it and printed the result.
-        const hits = (screen.match(new RegExp(token, 'g')) || []).length;
-        if (hits >= 2) break;
+        return String((rs && rs.result && rs.result.screen) || '');
+      };
+      // Wait for a shell to be answering BEFORE typing at it. This used to send
+      // the command immediately and then spend its whole eight-second window
+      // waiting for output from a line the shell never received, which under a
+      // loaded suite reported "no pty" for a perfectly healthy one.
+      for (let i = 0; i < 40; i++) {
+        if ((await readScreen()).trim().length > 0) break;
+        await new Promise((r) => setTimeout(r, 250));
       }
-      result.ptyOk = (screen.match(new RegExp(token, 'g')) || []).length >= 2;
+      // A fresh token per attempt: the echoed command line itself contains the
+      // token, so re-sending the SAME one would push the count to two on its own
+      // and pass without a shell ever running anything.
+      for (let attempt = 0; attempt < 3 && !result.ptyOk; attempt++) {
+        const token = 'WINMUX_PTY_' + 'OK' + attempt;
+        const seen = () => new RegExp(token, 'g');
+        await rpc(port, 'send', { data: 'echo ' + token, enter: true });
+        let screen = '';
+        for (let i = 0; i < 20; i++) {
+          await new Promise((r) => setTimeout(r, 400));
+          screen = await readScreen();
+          // The command line is one hit; a second one is the shell's own output,
+          // which is what proves it actually ran.
+          if ((screen.match(seen()) || []).length >= 2) break;
+        }
+        result.ptyOk = (screen.match(seen()) || []).length >= 2;
+      }
     } catch (pe) {
       result.ptyError = String((pe as Error).message || pe);
     }
