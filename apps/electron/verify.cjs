@@ -652,6 +652,15 @@ check('busyport', PORT_BUSY, async ({ browser, base, t, shot, skip }) => {
   const say = async (text, mark) => {
     for (let i = 0; i < 12; i++) {
       await p.locator('.xterm-helper-textarea').first().focus();
+      // Clear whatever is sitting at the prompt before typing. A shell that was
+      // not ready for input keeps HALF the line, and the retry then types the
+      // whole thing on top of that half:
+      //   PS> "before " + $env:CO"before " + $env:COMPUTERNAME
+      //   ParserError: Unexpected token '"before "'
+      // The retry was added to survive a slow shell and instead corrupted its
+      // own input, so the check failed on a line it had mangled itself. Escape
+      // is PSReadLine's clear-the-line, and it is harmless on an empty prompt.
+      await p.keyboard.press('Escape');
       await p.keyboard.type(text);
       await p.keyboard.press('Enter');
       try {
