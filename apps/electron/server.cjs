@@ -277,6 +277,27 @@ function loadTrust() {
     trust.devices = Array.isArray(t.devices) ? t.devices.filter((d) => d && /^[a-f0-9]{32}$/.test(d.id)) : [];
   } catch (e) { /* no file yet, or unreadable — start closed, never open */ }
 }
+// Every durable write here is tmp-file-then-rename, which is what makes it
+// atomic. On Windows that rename can come back EPERM for a few milliseconds
+// while a sync client, a search indexer or a virus scanner still has the
+// destination open — and a user's project folder is very often a Dropbox or
+// OneDrive folder, so this is the normal case, not the exotic one. It is a
+// race, not a permissions problem: the identical write succeeds moments later.
+// Retry briefly before giving up, and let a genuine failure still throw so the
+// caller reports it rather than claiming a save that did not happen.
+function renameSettled(tmp, dest) {
+  const waits = [0, 15, 40, 90, 180, 350];
+  const pause = (ms) => { if (ms) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+  for (let i = 0; i < waits.length; i++) {
+    pause(waits[i]);
+    try { fs.renameSync(tmp, dest); return; }
+    catch (e) {
+      const racy = e.code === 'EPERM' || e.code === 'EBUSY' || e.code === 'EACCES';
+      if (!racy || i === waits.length - 1) throw e;
+    }
+  }
+}
+
 function saveTrust() {
   // Write to a temp file then rename — an atomic swap, so a crash mid-write can
   // never leave a half-written (corrupt, unparseable) guest list that bricks the
@@ -284,7 +305,7 @@ function saveTrust() {
   try {
     const tmp = TRUST_FILE + '.' + process.pid + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(trust, null, 2));
-    fs.renameSync(tmp, TRUST_FILE);
+    renameSettled(tmp, TRUST_FILE);
   } catch (e) {}
 }
 loadTrust();
@@ -311,7 +332,7 @@ function writeConfigAtomic(obj) {
     fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
     const tmp = CONFIG_FILE + '.' + process.pid + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
-    fs.renameSync(tmp, CONFIG_FILE);
+    renameSettled(tmp, CONFIG_FILE);
     return true;
   } catch (e) { return false; }
 }
@@ -352,7 +373,7 @@ function writeWorkspace(doc) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const tmp = file + '.' + process.pid + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(doc, null, 2));
-    fs.renameSync(tmp, file);
+    renameSettled(tmp, file);
     return true;
   } catch (e) { return false; }
 }
@@ -378,7 +399,7 @@ function writeRecents(list) {
     fs.mkdirSync(path.dirname(RECENTS_FILE), { recursive: true });
     const tmp = RECENTS_FILE + '.' + process.pid + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify({ recents: list.slice(0, 30) }, null, 2));
-    fs.renameSync(tmp, RECENTS_FILE);
+    renameSettled(tmp, RECENTS_FILE);
   } catch (e) {}
 }
 // Only ever touch a real .json file — reject anything without the extension so a
@@ -647,6 +668,16 @@ function parsePatch(patch) {
     x.hunks = x.hunks.filter((hh) => { if (budget <= 0) return false; budget -= hh.lines.length; return true; });
   });
   return files;
+}
+
+// Is this file somebody else's project? Free, or holding the same project under
+// the same name, means it is ours to write. Anything else — a different name, or
+// a file we cannot read well enough to be sure — is not, and we step aside
+// rather than overwrite work that is not ours.
+function occupiedByOther(p, name) {
+  let raw;
+  try { raw = fs.readFileSync(p, 'utf8'); } catch (e) { return false; }   // ENOENT → free
+  try { return String((JSON.parse(raw) || {}).name || '') !== name; } catch (e) { return true; }
 }
 
 function gitChanges(cwd, done) {
@@ -965,8 +996,16 @@ function handle(req, res, viaPhone) {
         const name = String(incoming.name || 'Untitled').trim() || 'Untitled';
         let p = safeProjectPath(incoming.path);
         if (!p) {
+          // Two different project names can slug to one filename — "Client A /
+          // Prod" and "Client A Prod" both become client-a-prod. Saving the
+          // second used to silently overwrite the first and still report
+          // "Project saved". An explicit path means the user picked the file
+          // and an overwrite is theirs to make; a name does not.
           const slug = name.replace(/[^\w.\- ]+/g, '').replace(/\s+/g, '-').toLowerCase() || 'project';
           p = path.join(projectsDir(), slug + '.winmux.json');
+          for (let n = 2; n < 200 && occupiedByOther(p, name); n++) {
+            p = path.join(projectsDir(), slug + '-' + n + '.winmux.json');
+          }
         }
         const now = Date.now();
         let created = now; try { created = JSON.parse(fs.readFileSync(p, 'utf8')).created || now; } catch (e) {}
@@ -975,7 +1014,7 @@ function handle(req, res, viaPhone) {
           fs.mkdirSync(path.dirname(p), { recursive: true });
           const tmp = p + '.' + process.pid + '.tmp';
           fs.writeFileSync(tmp, JSON.stringify(doc, null, 2));
-          fs.renameSync(tmp, p);
+          renameSettled(tmp, p);
         } catch (e) { return sendJson(500, { error: 'write failed: ' + e.message }); }
         const meta = projectMeta(incoming.layout || {});
         const rec = { path: p, name, tabs: tabCount(incoming.layout || {}), dir: meta.dir, shells: meta.shells, opened: now };
@@ -1656,7 +1695,7 @@ function saveBacklog(s) {
     fs.mkdirSync(BACKLOG_DIR, { recursive: true });
     const tmp = p + '.' + process.pid + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify({ id: s.id, dev: s.dev || '', shell: s.shell, cwd: s.cwd, buf: s.buf, savedAt: Date.now() }));
-    fs.renameSync(tmp, p);
+    renameSettled(tmp, p);
   } catch (e) {}
 }
 function scheduleBacklogSave(s) {

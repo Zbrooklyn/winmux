@@ -3483,11 +3483,27 @@
   }
 
   // ------------------------------------------------------- overlays / modals
+  // A dialog that took over the keyboard has to give it back no matter HOW it
+  // was dismissed. The rebind dialog used to release it on Esc, on the chord and
+  // on Cancel — but clicking the dimmed backdrop closed the box by stripping the
+  // attribute directly, so its capture listener stayed attached and swallowed
+  // every keystroke in the app, for good. Every close now runs through one door,
+  // and anything that grabbed something registers how to let go.
+  var ovlTeardown = {};
+  function onOvlClose(id, fn) { ovlTeardown[id] = fn; }
   function openOvl(id) { document.getElementById(id).setAttribute('data-open', ''); }
-  function closeOvl(id) { document.getElementById(id).removeAttribute('data-open'); }
+  function closeOvl(id) {
+    var el = document.getElementById(id); if (!el) return;
+    el.removeAttribute('data-open');
+    var fn = ovlTeardown[id];
+    if (fn) { delete ovlTeardown[id]; try { fn(); } catch (e) {} }
+  }
+  function closeAllOvl() {
+    [].forEach.call(document.querySelectorAll('.ovl[data-open]'), function (o) { closeOvl(o.id); });
+  }
   function anyOvlOpen() { return !!document.querySelector('.ovl[data-open]'); }
   [].forEach.call(document.querySelectorAll('.ovl'), function (o) {
-    o.addEventListener('mousedown', function (e) { if (e.target === o) o.removeAttribute('data-open'); });
+    o.addEventListener('mousedown', function (e) { if (e.target === o) closeOvl(o.id); });
   });
   [].forEach.call(document.querySelectorAll('[data-close-ovl]'), function (b) {
     b.addEventListener('click', function () { closeOvl(b.getAttribute('data-close-ovl')); });
@@ -3597,6 +3613,9 @@
     }
     body.querySelector('[data-cancel]').addEventListener('click', function () { cleanup(); closeOvl('dlg-ovl'); });
     document.addEventListener('keydown', onKey, true);
+    // Whatever closes this box — backdrop, Escape, anything added later — gives
+    // the keyboard back. cleanup() is safe to run twice.
+    onOvlClose('dlg-ovl', cleanup);
   }
 
   // ---------------------------------------------------------- save / load
@@ -4985,6 +5004,10 @@
   }
   // Observability hook so the harness can assert the filtering without a config file.
   window.__winmuxAdoptKeymap = function (disk) { return adoptDiskKeymap(disk); };
+  window.__winmuxRebind = function (id) { return rebindShortcut(id); };
+  // Whether the Rebind dialog currently owns the keyboard. The harness asserts
+  // this goes back to false however the dialog was dismissed (AUDIT-9).
+  window.__winmuxRebindCapturing = function () { return rebindCapture; };
   function effectiveChord(a) { return KEYMAP[a.id] || a.def; }
   // Normalise a keyboard event to a chord string like "Ctrl+Shift+P". Modifier
   // order is fixed (Ctrl, Alt, Shift) so it matches the default chords above.
@@ -5040,7 +5063,7 @@
       if (openMenu) { closeMenu(); e.preventDefault(); return; }
       if (plWrap.hasAttribute('data-open')) { closePalette(); e.preventDefault(); return; }
       if (npanel.hasAttribute('data-open')) { closeNotif(); e.preventDefault(); return; }
-      if (anyOvlOpen()) { [].forEach.call(document.querySelectorAll('.ovl[data-open]'), function (o) { o.removeAttribute('data-open'); }); e.preventDefault(); return; }
+      if (anyOvlOpen()) { closeAllOvl(); e.preventDefault(); return; }
       var pf = paneById(activePaneId);
       if (pf && pf.findbar.classList.contains('on')) { closeFind(pf); e.preventDefault(); return; }
       return;

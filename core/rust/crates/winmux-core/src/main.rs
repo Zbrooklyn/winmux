@@ -315,7 +315,7 @@ fn save_backlog(sid: &str, shell: &str, cwd: &str, buf: &str) {
     let _ = std::fs::create_dir_all(backlog_dir());
     let body = json!({"id": sid, "dev": "", "shell": shell, "cwd": cwd, "buf": buf, "savedAt": now_ms() as u64});
     let tmp = p.with_extension(format!("{}.tmp", std::process::id()));
-    if std::fs::write(&tmp, body.to_string()).is_ok() { let _ = std::fs::rename(&tmp, &p); }
+    if std::fs::write(&tmp, body.to_string()).is_ok() { let _ = rename_settled(&tmp, &p); }
 }
 
 // Drop backlog files older than a week so a long-lived install never grows
@@ -1608,7 +1608,7 @@ async fn api_config_post(Json(incoming): Json<Value>) -> impl IntoResponse {
     let file = config_file();
     if let Some(dir) = file.parent() { let _ = std::fs::create_dir_all(dir); }
     let tmp = file.with_extension(format!("{}.tmp", std::process::id()));
-    let ok = std::fs::write(&tmp, cur.to_string()).and_then(|_| std::fs::rename(&tmp, &file)).is_ok();
+    let ok = std::fs::write(&tmp, cur.to_string()).and_then(|_| rename_settled(&tmp, &file)).is_ok();
     Json(json!({"ok": ok}))
 }
 
@@ -1665,7 +1665,7 @@ async fn api_workspace_post(Json(incoming): Json<Value>) -> impl IntoResponse {
         Some(file) => {
             if let Some(dir) = file.parent() { let _ = std::fs::create_dir_all(dir); }
             let tmp = file.with_extension(format!("{}.tmp", std::process::id()));
-            std::fs::write(&tmp, doc.to_string()).and_then(|_| std::fs::rename(&tmp, &file)).is_ok()
+            std::fs::write(&tmp, doc.to_string()).and_then(|_| rename_settled(&tmp, &file)).is_ok()
         }
     };
     (if ok { StatusCode::OK } else { StatusCode::INTERNAL_SERVER_ERROR }, Json(json!({"ok": ok})))
@@ -1701,7 +1701,7 @@ fn write_recents(list: &[Value]) {
     let trimmed: Vec<Value> = list.iter().take(30).cloned().collect();
     let body = serde_json::to_string_pretty(&json!({ "recents": trimmed })).unwrap_or_default();
     let tmp = file.with_extension(format!("{}.tmp", std::process::id()));
-    let _ = std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, &file));
+    let _ = std::fs::write(&tmp, body).and_then(|_| rename_settled(&tmp, &file));
 }
 // Only ever touch a real .json file — reject anything without the extension so a bad
 // path can't be steered at an arbitrary host file. Resolves relative -> absolute
@@ -1788,14 +1788,71 @@ async fn api_project_get(Query(q): Query<HashMap<String, String>>) -> impl IntoR
     }
 }
 // POST /api/project { name, path?, layout } — write the file, upsert recents.
+// Every durable write here is tmp-file-then-rename, which is what makes it
+// atomic. On Windows that rename fails for a few milliseconds while a sync
+// client, a search indexer or a virus scanner still has the destination open —
+// and a user's project folder is very often a Dropbox or OneDrive folder, so
+// this is the normal case, not the exotic one. It is a race, not a permissions
+// problem: the identical write succeeds moments later. Retry briefly, and let a
+// genuine failure still surface so the caller reports it rather than claiming a
+// save that did not happen.
+fn rename_settled(tmp: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    const WAITS: [u64; 6] = [0, 15, 40, 90, 180, 350];
+    let mut last = None;
+    for (i, ms) in WAITS.iter().enumerate() {
+        if *ms > 0 { std::thread::sleep(Duration::from_millis(*ms)); }
+        match std::fs::rename(tmp, dest) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let racy = matches!(e.kind(), std::io::ErrorKind::PermissionDenied)
+                    || e.raw_os_error() == Some(32)   // ERROR_SHARING_VIOLATION
+                    || e.raw_os_error() == Some(5);   // ERROR_ACCESS_DENIED
+                if !racy || i == WAITS.len() - 1 { return Err(e); }
+                last = Some(e);
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("rename never settled")))
+}
+
+// Is this file somebody else's project? Free, or holding the same project under
+// the same name, means it is ours to write. Anything else — a different name, or
+// a file we cannot read well enough to be sure — is not, and we step aside
+// rather than overwrite work that is not ours.
+fn occupied_by_other(p: &std::path::Path, name: &str) -> bool {
+    match std::fs::read_to_string(p) {
+        Err(_) => false,                        // missing → free
+        Ok(raw) => match serde_json::from_str::<Value>(&raw) {
+            Err(_) => true,                     // unreadable → not ours to clobber
+            Ok(j) => j.get("name").and_then(|v| v.as_str()).unwrap_or("") != name,
+        },
+    }
+}
+
 async fn api_project_post(Json(incoming): Json<Value>) -> impl IntoResponse {
     let name = {
         let n = incoming.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled").trim().to_string();
         if n.is_empty() { "Untitled".to_string() } else { n }
     };
     let layout = incoming.get("layout").cloned().unwrap_or_else(|| json!({}));
-    let path = incoming.get("path").and_then(|v| v.as_str()).and_then(safe_project_path)
-        .unwrap_or_else(|| projects_dir().join(format!("{}.winmux.json", slugify(&name))));
+    // Two different project names can slug to one filename — "Client A / Prod"
+    // and "Client A Prod" both become client-a-prod. Saving the second used to
+    // silently overwrite the first and still report "Project saved". An explicit
+    // path means the user picked the file and an overwrite is theirs to make; a
+    // name does not.
+    let path = match incoming.get("path").and_then(|v| v.as_str()).and_then(safe_project_path) {
+        Some(p) => p,
+        None => {
+            let slug = slugify(&name);
+            let mut p = projects_dir().join(format!("{}.winmux.json", slug));
+            let mut n = 2;
+            while n < 200 && occupied_by_other(&p, &name) {
+                p = projects_dir().join(format!("{}-{}.winmux.json", slug, n));
+                n += 1;
+            }
+            p
+        }
+    };
     let now = now_ms() as u64;
     let created = std::fs::read_to_string(&path).ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
@@ -1805,7 +1862,7 @@ async fn api_project_post(Json(incoming): Json<Value>) -> impl IntoResponse {
     if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
     let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
     let body = serde_json::to_string_pretty(&doc).unwrap_or_default();
-    if std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, &path)).is_err() {
+    if std::fs::write(&tmp, body).and_then(|_| rename_settled(&tmp, &path)).is_err() {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "write failed" })));
     }
     let (dir, shells) = project_meta(&layout);

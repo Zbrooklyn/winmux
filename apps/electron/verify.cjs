@@ -12,7 +12,7 @@
 //
 // Exit code is 0 only when every check that could run, passed.
 
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const net = require('net');
 const http = require('http');
 const os = require('os');
@@ -131,6 +131,8 @@ const PORT_WRITELOUD = 9991;   // AUDIT-5: an engine write that failed says so �
 const PORT_SLASHFAST = 9992;   // AUDIT-6: `winmux slash` refuses a non-Claude tab fast instead of hanging 90s
 const PORT_SHIPPED05 = 9993;   // AUDIT-7: the four features that were broken only in the engine we ship
 const PORT_UPDFEED = 9994;     // AUDIT-7's own stand-in release feed, so the update path is proven for real
+const PORT_NOCLOBBER = 9997;   // AUDIT-8: saving a project never writes over a different project
+const PORT_KEYBACK = 9996;     // AUDIT-9: a dialog that took the keyboard gives it back however it is dismissed
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -268,8 +270,34 @@ const RUST_CORE = process.env.WINMUX_CORE === 'rust'
      path.join(ROOT, '..', '..', 'core', 'rust', 'target', 'debug', 'winmux-core.exe')].find((p) => fs.existsSync(p))
   : null;
 
+// Best-effort "who is on this port" so the refusal above is actionable rather
+// than just a complaint. Windows-only and allowed to come back empty.
+function whoHas(port) {
+  try {
+    const out = execSync(
+      'powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort ' + port
+      + ' -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1;'
+      + ' if ($c) { $p = Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue;'
+      + ' if ($p) { \\"$($p.ProcessName) (pid $($p.Id))\\" } }"',
+      { encoding: 'utf8', timeout: 6000, windowsHide: true }).trim();
+    return out ? 'It is held by ' + out + '.' : '';
+  } catch (e) { return ''; }
+}
+
 async function server(port, extraEnv) {
-  if (await inUse('127.0.0.1', port)) return { port, borrowed: true, stop() {} };
+  // Anything already on this port is NOT ours. Borrowing it used to be silent,
+  // which meant a stray process could become the system under test: the check's
+  // env — its scratch config, its projects folder, its Startup folder — is
+  // ignored, so the run both grades the wrong process AND can write somewhere
+  // real. Refuse, and name what is holding the port so it can be dealt with.
+  // WINMUX_VERIFY_BORROW=1 opts back in for driving a dev server by hand.
+  if (await inUse('127.0.0.1', port)) {
+    if (process.env.WINMUX_VERIFY_BORROW === '1') return { port, borrowed: true, stop() {} };
+    throw new Error(
+      'port ' + port + ' is already taken by another process, so this check would have graded '
+      + 'something that is not ours and ignored its own environment. ' + whoHas(port)
+      + ' Stop that process, or set WINMUX_VERIFY_BORROW=1 to deliberately test against it.');
+  }
   const proc = RUST_CORE
     ? spawn(RUST_CORE, [], {
         cwd: ROOT,
@@ -1991,6 +2019,148 @@ check('shipped05', PORT_SHIPPED05, async ({ base, t }) => {
   WINMUX_APP_EXE: 'C:\\Program Files\\WinMux\\WinMux.exe',
 });
 
+// AUDIT-8 (register item 06). Saving a project by NAME derives its filename from
+// a slug of that name, and two different names can slug to the same file. The
+// second save used to overwrite the first and still report "Project saved" — and
+// worst of all unattended, where an upgrade re-saves every legacy layout by name.
+// An explicit path is still the user's to overwrite; a name is not.
+check('noclobber', PORT_NOCLOBBER, async ({ base, t }) => {
+  // Deliberately OUTSIDE the repo: the repo lives in Dropbox, and a check about
+  // our own overwrite rules should not also be a live test of Dropbox's locking.
+  const dir = path.join(os.tmpdir(), 'winmux-verify-noclobber');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const raw = {};
+  const save = async (name, layout, p) => {
+    const r = await fetch(base + '/api/project', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(p ? { name, layout, path: p } : { name, layout }),
+    });
+    const text = await r.text();
+    raw[name + (p ? ' @path' : '')] = r.status + ' ' + text.slice(0, 200);
+    try { return JSON.parse(text).path; } catch (e) { return undefined; }
+  };
+  const read = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { return null; } };
+
+  // Two names, one slug: "Client A / Prod" and "Client A Prod" both reduce to
+  // client-a-prod. This is the collision, not a contrived one.
+  const first = await save('Client A / Prod', { cols: [{ id: 'first' }] });
+  t('the first project saves under its slug', !!first && fs.existsSync(first), first);
+  const second = await save('Client A Prod', { cols: [{ id: 'second' }] });
+  t('a different project with a colliding name gets its OWN file',
+    !!second && second !== first, { first: first && path.basename(first), second: second && path.basename(second) });
+  const a = read(first);
+  t('and the first project is still on disk, untouched',
+    a && a.name === 'Client A / Prod' && JSON.stringify(a.layout) === JSON.stringify({ cols: [{ id: 'first' }] }),
+    a && { name: a.name, layout: a.layout });
+  const b = read(second);
+  t('the second project holds its own content', b && b.name === 'Client A Prod', b && { name: b.name });
+
+  // Re-saving the SAME project must keep overwriting its own file, not sprawl.
+  const again = await save('Client A / Prod', { cols: [{ id: 'updated' }] });
+  t('re-saving the same project reuses its file rather than making a new one', again === first,
+    { again: again, first: first, raw: raw['Client A / Prod'] });
+  const a2 = read(first);
+  t('and the re-save actually landed', a2 && a2.layout.cols[0].id === 'updated', a2 && a2.layout);
+
+  // A third collision keeps counting up rather than picking a fight.
+  const third = await save('Client A - Prod', { cols: [{ id: 'third' }] });
+  t('a third colliding name gets a third file', third && third !== first && third !== second,
+    third && path.basename(third));
+
+  // An explicit path is the user choosing the file. That overwrite is theirs.
+  const chosen = await save('Renamed On Purpose', { cols: [{ id: 'chosen' }] }, first);
+  const a3 = read(first);
+  t('but an explicit path still overwrites — that choice is the user\'s',
+    chosen === first && a3 && a3.name === 'Renamed On Purpose', { chosen, name: a3 && a3.name });
+
+  // The overwrite that used to fail for real. A project folder is usually a
+  // Dropbox or OneDrive folder, and the sync client holds a file open for a
+  // moment right after it changes — long enough for the rename that makes the
+  // write atomic to come back EPERM. Hold the file open for 250ms and demand
+  // the save ride it out rather than telling the user it could not save.
+  const holder = spawn('powershell', ['-NoProfile', '-Command',
+    "$f=[System.IO.File]::Open('" + first.replace(/'/g, "''") + "','Open','Read','None');"
+    + 'Start-Sleep -Milliseconds 250; $f.Close()'], { windowsHide: true, stdio: 'ignore' });
+  await new Promise((r) => setTimeout(r, 120));   // let the lock actually take hold
+  const rode = await save('Renamed On Purpose', { cols: [{ id: 'rode-it-out' }] }, first);
+  try { holder.kill(); } catch (e) {}
+  const a4 = read(first);
+  t('a save waits out a sync client holding the file, instead of failing',
+    rode === first && a4 && a4.layout.cols[0].id === 'rode-it-out',
+    { rode: !!rode, landed: a4 && a4.layout.cols[0].id, raw: raw['Renamed On Purpose @path'] });
+}, { WINMUX_PROJECTS_DIR: path.join(os.tmpdir(), 'winmux-verify-noclobber') });
+
+// AUDIT-9 (register item 07). The Rebind dialog takes the whole keyboard while it
+// waits for a chord. It gave it back on Esc, on the chord and on Cancel — but
+// clicking the dimmed backdrop closed the box by stripping an attribute directly,
+// leaving the capture listener attached. Every keystroke in the app then vanished,
+// and stayed vanishing across reloads because the app never knew it had happened.
+check('keyback', PORT_KEYBACK, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  try {
+    await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(6000);
+    const openRebind = async () => {
+      await page.evaluate(() => {
+        window.__winmuxRebind ? window.__winmuxRebind('split-right')
+          : document.querySelector('[data-rebind="split-right"]').click();
+      });
+      await page.waitForTimeout(400);
+      return page.evaluate(() => ({
+        open: !!document.querySelector('#dlg-ovl[data-open]'),
+        captured: window.__winmuxRebindCapturing(),
+      }));
+    };
+    const dismissBackdrop = async () => {
+      await page.evaluate(() => {
+        const o = document.getElementById('dlg-ovl');
+        o.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      });
+      await page.waitForTimeout(300);
+      return page.evaluate(() => ({
+        open: !!document.querySelector('#dlg-ovl[data-open]'),
+        captured: window.__winmuxRebindCapturing(),
+      }));
+    };
+
+    const opened = await openRebind();
+    t('the rebind dialog opens and takes the keyboard', opened.open && opened.captured === true, opened);
+    const after = await dismissBackdrop();
+    t('clicking the dimmed backdrop closes it', after.open === false, after);
+    t('and it gives the keyboard back — it does not keep capturing', after.captured === false, after);
+
+    // The real symptom, driven rather than inferred: a real keypress on a real
+    // shortcut has to reach the app again. F1 (keyboard help), because it is not
+    // one of the three chords the terminal-focus guard swallows (item 02).
+    await page.keyboard.press('F1');
+    await page.waitForTimeout(500);
+    const helped = await page.evaluate(() => !!document.querySelector('#cheat-ovl[data-open]'));
+    t('a real keypress reaches the app again — the keyboard is not eaten', helped === true, { cheatOpen: helped });
+    await shot(page, 'keyback-after-dismiss');
+    await page.evaluate(() => {
+      const o = document.getElementById('cheat-ovl');
+      o.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    });
+    await page.waitForTimeout(300);
+
+    // Escape is the other route that used to strip the attribute directly.
+    const reopened = await openRebind();
+    t('reopening takes the keyboard again', reopened.captured === true, reopened);
+    await page.evaluate(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    await page.waitForTimeout(300);
+    const esc = await page.evaluate(() => ({
+      open: !!document.querySelector('#dlg-ovl[data-open]'),
+      captured: window.__winmuxRebindCapturing(),
+    }));
+    t('Escape closes it and releases the keyboard too', esc.open === false && esc.captured === false, esc);
+  } finally {
+    await page.close();
+  }
+}, { WINMUX_CONFIG_FILE: path.join(OUT, 'keyback-cfg', 'config.json') });
+
 // ST6: non-terminal leaves survive a page reload. Both a diff leaf AND a markdown
 // leaf, opened as pane tabs, must be persisted in the live snapshot and rebuilt on
 // reload — before ST6, snapshot() filtered leaves out, so they vanished. This proves
@@ -3093,9 +3263,14 @@ check('sidebar-tabs', PORT_SIDEBAR, async ({ browser, base, t, shot }) => {
   const clamps = await page.evaluate(() => [window.__winmuxSidebarWidth(999), window.__winmuxSidebarWidth(50)]);
   t('the width clamps to 200–420', clamps[0] === 420 && clamps[1] === 200, clamps.join('/'));
   await page.evaluate(() => window.__winmuxSidebarWidth(340));
-  // The width save rides the settings POST to the engine — give it time to land
-  // before tearing the page down, or the reload can race the clamp-test values.
-  await page.waitForTimeout(900);
+  // The width save rides the settings POST to the engine. Wait for the ENGINE to
+  // report 340, not for a stopwatch: a fixed sleep was here before and it lost
+  // under parallel load, letting the reload race the clamp-test's 200 and then
+  // fail an assertion about persistence that was never really about persistence.
+  await page.waitForFunction(async () => {
+    const r = await fetch('/api/config').then((x) => x.json()).catch(() => null);
+    return !!(r && r.settings && r.settings.sidebarWidth === 340);
+  }, null, { timeout: 20000 });
 
   // Persistence: the resting tab and the width both survive a reload.
   await page.reload({ waitUntil: 'domcontentloaded' });
