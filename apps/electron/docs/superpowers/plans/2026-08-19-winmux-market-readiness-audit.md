@@ -53,7 +53,7 @@ are the fallback were hidden by `index.html:192`. Measured: Ctrl+F no find bar,
 Ctrl+B no sidebar toggle, Ctrl+D no split; Alt+T works (method is sound).
 In a WSL/bash tab Ctrl+D reaches the shell as EOF and ends the session.
 
-### 3. Splitting a small window pushes the window controls off-screen — PROVEN
+### 3. Splitting a small window pushes the window controls off-screen — FIXED in v0.2.7
 Edward's bug. The window is frameless (`electron/main.ts:111-116`), so `.wc` is
 the only close button that exists. `.ptabs` has no wrap and no overflow, and
 `.pane` clips (`cockpit.css:94`). At the enforced 720px minimum, one split
@@ -63,6 +63,16 @@ splits: 909px. No close, no minimize, no maximize; Alt+F4 only.
 Note the narrow-mode rule `index.html:277` is NOT the cause here (720px min
 never reaches narrow) but is a live trap on touch-primary hardware, where
 `isPhone()` keys off *height* (`app.js:4962-4966`).
+
+**Fix (e059cfc, shipped v0.2.7).** `placeWinctl()` no longer appends `.wc` into
+the rightmost pane's control cluster; it appends to `.cockpit` itself, absolutely
+positioned top-right, out of reach of any pane geometry. The rightmost pane gets
+`.wc-host` and reserves `--wcw + 1px` of right padding on its `.ptabs` so tabs
+never slide underneath. Pass-after on the installed 0.2.7 at 720px with five
+panes: min/max/close all inside the viewport and each is the element hit at its
+own centre; close right edge = 720/720. New `winctl` harness check (12
+assertions) walks 720x480 / 900x620 / 1440x900 x 1..4 panes so this cannot
+regress silently.
 
 ### 4. A slow health check silently strands every running shell
 `electron/server-host.ts:35` gives `/api/info` 1200ms. Miss it (AV scan, Dropbox
