@@ -141,7 +141,12 @@
           if (DISK_CONFIG.keymap && typeof DISK_CONFIG.keymap === 'object') {
             // The engine file is the source of truth (PT-6): disk overrides the
             // local cache, so a binding changed in one app follows to the others.
-            for (var km in DISK_CONFIG.keymap) KEYMAP[km] = DISK_CONFIG.keymap[km];
+            // Checked on the way in, the same way settings are below: the file is
+            // advertised as hand-editable, and an entry the app can never match
+            // used to be adopted anyway — Settings then showed a shortcut as bound
+            // that did nothing. adoptDiskKeymap keeps what's real and drops the
+            // rest, so what you see bound is what actually fires.
+            adoptDiskKeymap(DISK_CONFIG.keymap);
           }
           var s = DISK_CONFIG.settings;
           if (s && typeof s === 'object') {
@@ -4868,6 +4873,57 @@
     { id: 'reset-terminal', label: 'Reset terminal', def: 'Ctrl+Shift+K', run: function () { var t = activeTerm(); if (t) resetTerm(t); } },
   ];
   function actionById(id) { for (var i = 0; i < ACTIONS.length; i++) if (ACTIONS[i].id === id) return ACTIONS[i]; return null; }
+  // Is this a chord a keypress could ever produce? chordOf() below builds every
+  // real chord the same way — modifiers in Ctrl, Alt, Shift order, single letters
+  // upper-cased — so anything spelled differently can never match, however
+  // reasonable it looks written down. "ctrl+d" and "Shift+Ctrl+P" are the two a
+  // hand-editor writes; both would sit in Settings looking bound and do nothing.
+  function chordLooksReal(c) {
+    if (typeof c !== 'string' || !c) return false;
+    var parts = c.split('+');
+    var key = parts.pop();
+    if (!key) return false;
+    var order = ['Ctrl', 'Alt', 'Shift'];
+    for (var i = 0; i < parts.length; i++) if (order.indexOf(parts[i]) < 0) return false;
+    if (order.filter(function (m) { return parts.indexOf(m) >= 0; }).join('+') !== parts.join('+')) return false;
+    if (!parts.length && !/^F\d+$/.test(key)) return false;      // same floor the Rebind dialog enforces
+    if (key.length === 1 && key !== key.toUpperCase()) return false;
+    return true;
+  }
+  // Adopt a keymap that came off disk. The config file is advertised as
+  // hand-editable and it overrides what the app has, so it is the one path into
+  // the keymap with no human in the loop — it gets the checks the Rebind dialog
+  // already applies. An entry naming an action that doesn't exist, or a chord the
+  // app can never match, is dropped. So is a duplicate: two actions on one key
+  // means whichever the app reaches first wins and the other is silently dead,
+  // which is worse than not being bound at all, because Settings shows it bound.
+  // A dropped entry leaves that action on its default — true, and visibly so.
+  function adoptDiskKeymap(disk) {
+    var valid = {};
+    for (var id in disk) {
+      if (!actionById(id)) continue;
+      if (!chordLooksReal(disk[id])) continue;
+      valid[id] = disk[id];
+    }
+    for (var pass = 0; pass <= ACTIONS.length; pass++) {
+      var seen = {}, loser = null, holder = null;
+      for (var i = 0; i < ACTIONS.length; i++) {
+        var a = ACTIONS[i], ch = valid[a.id] || a.def;
+        if (seen[ch] !== undefined) { loser = a.id; holder = seen[ch]; break; }
+        seen[ch] = a.id;
+      }
+      if (!loser) break;
+      // Drop whichever side of the collision came from disk; if neither did, two
+      // defaults collide, which is our bug and not something to blame the file for.
+      if (valid[loser] !== undefined) delete valid[loser];
+      else if (valid[holder] !== undefined) delete valid[holder];
+      else break;
+    }
+    for (var k in valid) KEYMAP[k] = valid[k];
+    return valid;
+  }
+  // Observability hook so the harness can assert the filtering without a config file.
+  window.__winmuxAdoptKeymap = function (disk) { return adoptDiskKeymap(disk); };
   function effectiveChord(a) { return KEYMAP[a.id] || a.def; }
   // Normalise a keyboard event to a chord string like "Ctrl+Shift+P". Modifier
   // order is fixed (Ctrl, Alt, Shift) so it matches the default chords above.

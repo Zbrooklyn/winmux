@@ -125,6 +125,7 @@ const PORT_SIDEBAR = 9983;    // SB: Obsidian-style sidebar tabs — switch, per
 const PORT_SPLITCLOSE = 9984; // FB: closing a split's last visible tab collapses the split, even across groups
 const PORT_WINCTL = 9987;     // AUDIT-1: the window's close button survives every pane layout at every size
 const PORT_DELHONEST = 9988;  // AUDIT-2: a delete that didn't happen never reports "file removed"
+const PORT_KEYMAPGUARD = 9989; // AUDIT-3: a hand-edited keymap is checked, so nothing shows as bound and stays dead
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -1698,6 +1699,61 @@ check('delhonest', PORT_DELHONEST, async ({ base, t }) => {
   t('and the file survives', fs.existsSync(keep), fs.existsSync(keep));
   t('but it left the list', !(await listed(keep)), await listed(keep));
 }, { WINMUX_PROJECTS_DIR: path.join(OUT, 'delhonest-projects'), WINMUX_CONFIG_FILE: path.join(OUT, 'delhonest-cfg', 'config.json') });
+
+// AUDIT-3: the config file is advertised as hand-editable and it beats what the
+// app has, so it is the one way into the keymap with nobody checking. It used to
+// be adopted verbatim: an action that doesn't exist, a chord spelled in a way a
+// keypress can never produce, or two actions on one key all went straight in —
+// and Settings then displayed a shortcut as bound that did nothing at all. The
+// Rebind dialog inside the app refuses exactly these, so the documented path was
+// the unsafe one. Now both paths apply the same rules.
+check('keymapguard', PORT_KEYMAPGUARD, async ({ browser, base, t }) => {
+  const page = await desktop(browser);
+  try {
+    await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => !!window.__winmuxAdoptKeymap, null, { timeout: 15000 });
+
+    const kept = await page.evaluate(() => window.__winmuxAdoptKeymap({
+      'no-such-action': 'Ctrl+Alt+Q',   // an action that does not exist
+      'find': 'ctrl+shift+9',           // lower-case: a keypress never produces this
+      'zoom': 'Shift+Ctrl+Z',           // modifiers out of order: same problem
+      'new-tab': 'Alt+F9',              // fine
+      'reset-terminal': 'Ctrl+,',       // collides with Settings' own default
+    }));
+    t('an action that does not exist is dropped', !('no-such-action' in kept), Object.keys(kept));
+    t('a lower-case chord is dropped', !('find' in kept), kept.find);
+    t('a chord with its modifiers out of order is dropped', !('zoom' in kept), kept.zoom);
+    t('a chord that collides with another shortcut is dropped', !('reset-terminal' in kept), kept['reset-terminal']);
+    t('a real, free chord is kept', kept['new-tab'] === 'Alt+F9', kept['new-tab']);
+
+    // The whole point: after adopting a file, no two actions may share a key.
+    const dupes = await page.evaluate(() => {
+      const seen = {}, dup = [];
+      window.__winmuxKeymap().effective.forEach((a) => {
+        if (seen[a.chord]) dup.push(seen[a.chord] + ' + ' + a.id + ' both on ' + a.chord);
+        seen[a.chord] = a.id;
+      });
+      return dup;
+    });
+    t('no two actions end up sharing a key', dupes.length === 0, dupes);
+
+    // An override that vacates a default must let another action take it — the
+    // check that a naive "reject anything matching a default" rule would fail.
+    const swap = await page.evaluate(() => window.__winmuxAdoptKeymap({
+      'settings': 'Ctrl+Alt+P', 'reset-terminal': 'Ctrl+,',
+    }));
+    t('freeing a default lets another action claim it',
+      swap.settings === 'Ctrl+Alt+P' && swap['reset-terminal'] === 'Ctrl+,', swap);
+    t('and still nothing collides',
+      (await page.evaluate(() => {
+        const s = {}; let d = 0;
+        window.__winmuxKeymap().effective.forEach((a) => { if (s[a.chord]) d++; s[a.chord] = 1; });
+        return d;
+      })) === 0, true);
+  } finally {
+    await page.close();
+  }
+}, { WINMUX_CONFIG_FILE: path.join(OUT, 'keymapguard-cfg', 'config.json') });
 
 // ST6: non-terminal leaves survive a page reload. Both a diff leaf AND a markdown
 // leaf, opened as pane tabs, must be persisted in the live snapshot and rebuilt on
