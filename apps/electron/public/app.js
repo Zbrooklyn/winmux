@@ -5802,10 +5802,22 @@
   }
   (function connectControl() {
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    // Back off like the terminal socket already does. This used to retry every
+    // 1.5s forever with no cap and no reset — about 57,600 attempts a day
+    // against a server that is not answering, which on a laptop is a socket
+    // being opened and refused every second and a half until the lid closes.
+    // The terminal socket next to it got this right; this one was never given
+    // the same treatment.
+    var retries = 0;
+    var backoff = function () { return Math.min(30000, 750 * Math.pow(2, Math.min(retries++, 6))); };
     function open() {
       var cws;
       try { cws = new WebSocket(proto + '//' + location.host + '/control' + location.search); }
-      catch (e) { setTimeout(open, 2000); return; }
+      catch (e) { setTimeout(open, backoff()); return; }
+      // A connection that actually opened means the outage is over, so the next
+      // one starts fast again. Without this reset the backoff only ever grows
+      // and a brief blip permanently costs half a minute of responsiveness.
+      cws.onopen = function () { retries = 0; };
       cws.onmessage = function (ev) {
         var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
         if (!m || !m.rpc) return;
@@ -5816,7 +5828,7 @@
           function (e) { cws.send(JSON.stringify({ rpc: m.rpc, ok: false, error: String(e && e.message || e) })); }
         );
       };
-      cws.onclose = function () { setTimeout(open, 1500); };   // survive server restarts
+      cws.onclose = function () { setTimeout(open, backoff()); };   // survive server restarts
       cws.onerror = function () { try { cws.close(); } catch (e) {} };
     }
     open();

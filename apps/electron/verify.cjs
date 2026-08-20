@@ -138,6 +138,7 @@ const PORT_BUSYBAR = 9995;     // the busy underline actually paints, and grows,
 const PORT_ORPHAN = 9974;      // AUDIT-8: closing a tab whose socket is down still ends its shell
 const PORT_NOSTRAND = 9972;    // AUDIT-4: a slow answer never strands a live engine and its shells
 const PORT_EXITTRUTH = 9970;   // AUDIT-1: a shell that ends says so, on both engines
+const PORT_CTLBACKOFF = 9961;  // AUDIT-B4: the control socket backs off instead of retrying forever
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -697,6 +698,59 @@ check('busyport', PORT_BUSY, async ({ browser, base, t, shot, skip }) => {
   t('Settings actually closed, so the keys reach the terminal', !stillOpen, stillOpen);
   t('the same terminal still runs commands', await say('"after " + $env:COMPUTERNAME', 'after'));
   await shot(p, 'busyport');
+});
+
+// --- ctlbackoff: the control socket gives up gracefully, not forever ------
+// AUDIT-B4. When the engine goes away, the app's /control socket used to try
+// again every 1.5s with no cap and no reset — roughly 57,600 attempts a day
+// against something that is not answering. The terminal socket sitting next to
+// it in the same file already backed off properly; this one had never been
+// given the same treatment.
+//
+// Measured from inside the page: wrap WebSocket before the app loads and record
+// when each /control attempt is made, then take the engine away and watch the
+// gaps. A flat retry keeps them all ~1500ms and fails the assertions below; a
+// backing-off retry grows them.
+check('ctlbackoff', PORT_CTLBACKOFF, async ({ browser, base, t }) => {
+  const p = await desktop(browser);
+  await p.addInitScript(() => {
+    window.__ctl = [];
+    const Real = window.WebSocket;
+    window.WebSocket = function (url, protos) {
+      if (String(url).indexOf('/control') !== -1) window.__ctl.push(Date.now());
+      return protos === undefined ? new Real(url) : new Real(url, protos);
+    };
+    window.WebSocket.prototype = Real.prototype;
+    ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'].forEach((k, i) => { window.WebSocket[k] = i; });
+  });
+  await p.goto(base + '/', { waitUntil: 'domcontentloaded' });
+  await appReady(p);
+  const opened = await p.evaluate(() => window.__ctl.length);
+  t('the app opens a control socket at all — otherwise this check proves nothing',
+    opened >= 1, opened);
+
+  // Take the engine away. Everything after this is the app talking to nothing,
+  // which is the situation the backoff exists for.
+  SERVERS[PORT_CTLBACKOFF].stop();
+  await p.evaluate(() => { window.__ctl = []; });
+  await p.waitForTimeout(40000);
+  const stamps = await p.evaluate(() => window.__ctl.slice());
+  const gaps = stamps.slice(1).map((s, i) => s - stamps[i]);
+  t('it keeps trying to get back — a dead control socket is not abandoned',
+    stamps.length >= 3, { attempts: stamps.length, gaps });
+  // These thresholds are MEASURED against the old code, not guessed. Putting the
+  // flat retry back gives ~10 attempts over 40s with every gap near 4000ms —
+  // 4000 and not 1500, because a refused connection takes ~2.5s to fail before
+  // the wait even starts. An earlier version of this check asserted "<= 8
+  // attempts" and passed at 6 with the bug still in, which is exactly the kind
+  // of assertion that certifies nothing. The backoff gives ~5 attempts and a
+  // final gap past 9s; the flat retry cannot produce either.
+  t('but it backs off instead of hammering — no fixed-interval retry forever',
+    stamps.length <= 7, { attempts: stamps.length, gaps });
+  t('and the waits actually grow, rather than sitting on one interval',
+    gaps.length >= 2 && gaps[gaps.length - 1] > 9000, gaps);
+  t('and it is capped, so it never stops trying altogether',
+    gaps.every((g) => g <= 40000), gaps);
 });
 
 // --- reason: the failure block's mechanics, measured not eyeballed --------
