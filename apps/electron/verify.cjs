@@ -298,9 +298,10 @@ async function server(port, extraEnv) {
   // WINMUX_VERIFY_BORROW=1 opts back in for driving a dev server by hand.
   if (await inUse('127.0.0.1', port)) {
     if (process.env.WINMUX_VERIFY_BORROW === '1') return { port, borrowed: true, stop() {} };
-    // Fail the checks on THIS port, not the whole run — servers are started
-    // up front, so throwing here would let one stray process cost five hundred
-    // checks instead of the handful it actually invalidates.
+    // Fail the checks on THIS port, not the whole run — throwing here would let
+    // one stray process cost five hundred checks instead of the handful it
+    // actually invalidates. The run also probes every port before it starts, so
+    // a conflict is named up front rather than only when its check comes up.
     return {
       port,
       foreign: 'port ' + port + ' is already taken by another process, so this check would have '
@@ -5678,14 +5679,55 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   // the renderer itself (it engages; the ligature switch forks it; a dpr-stuck
   // canvas resyncs). Everything else reads .xterm-rows text, which only the DOM
   // renderer fills.
-  for (const port of ports) {
-    const env = Object.assign({}, envByPort[port], (port === PORT_GPU || port === PORT_LIG || port === PORT_DPRFIX) ? {} : { WINMUX_FORCE_DOM: '1' });
-    servers[port] = await server(port, env);
-  }
-  for (const port of ports) {
-    console.log(servers[port].foreign ? 'REFUSED port ' + port + ' — something else is on it'
-      : (servers[port].borrowed ? 'using the server already on ' : 'started a server on ') + port);
-  }
+  // AUDIT-P1: start each port's server ON DEMAND, and hand it back as soon as the
+  // last check that needs it is done — instead of starting all of them before the
+  // first check runs and holding every one until the last check ends.
+  //
+  // Starting them eagerly meant ~70 engines alive simultaneously for the whole
+  // run, each a full server process holding a pre-warmed spare shell and its
+  // console. The concurrency cap further down bounds checks IN FLIGHT; nothing
+  // bounded servers ALIVE. On this machine that drove system commit charge to
+  // zero (0 free of 117.6 GB) and Windows fail-fasted the Electron children with
+  // 0xc0000409 — which is why a full Node-engine run could not reach the end at
+  // all, dying at a different check each attempt (1, then 64, then 72 of 78).
+  // The Rust core survived it only because a Rust engine is one small native
+  // binary where a Node engine is a whole Node process.
+  //
+  // Lazily started and promptly stopped, live servers track the concurrency cap
+  // rather than the port count.
+  const envFor = (port) => Object.assign({}, envByPort[port],
+    (port === PORT_GPU || port === PORT_LIG || port === PORT_DPRFIX) ? {} : { WINMUX_FORCE_DOM: '1' });
+
+  // Probing every port up front is cheap — a TCP connect, no process — and it
+  // keeps the one thing the eager start was good for: a stray process sitting on
+  // one of our ports gets named now, not twenty minutes into the run.
+  const taken = [];
+  for (const port of ports) if (await inUse('127.0.0.1', port)) taken.push(port);
+  console.log(taken.length
+    ? 'heads up — these ports are already in use, their checks will refuse: ' + taken.join(', ')
+    : 'all ' + ports.length + ' ports are free; servers start as their checks come up');
+
+  const starting = {};
+  const ensureServer = (port) => {
+    if (servers[port]) return Promise.resolve(servers[port]);
+    // Two workers can want the same shared port at once — memoise the promise so
+    // they wait on one start rather than racing two servers onto one socket.
+    if (!starting[port]) {
+      starting[port] = server(port, envFor(port)).then((s) => {
+        servers[port] = s;
+        console.log('    ' + (s.foreign ? 'REFUSED :' + port + ' — something else is on it'
+          : (s.borrowed ? 'borrowed the server on :' : 'started :') + port));
+        return s;
+      });
+    }
+    return starting[port];
+  };
+
+  // How many checks still need each port. Several checks deliberately SHARE one
+  // server (brand/fresh/busyport), so a port must not be stopped after the first
+  // of them finishes — only after the last one does.
+  const owed = {};
+  for (const c of run) owed[c.port] = (owed[c.port] || 0) + 1;
 
   // Manufacture the port collision the failure checks exist for, once, before
   // any of them run. Only when one of them is actually in this run — otherwise
@@ -5724,6 +5766,10 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
       bell = setTimeout(() => rej(new Error('check timed out after ' + (CHECK_TIMEOUT / 1000) + 's')), CHECK_TIMEOUT);
     });
     try {
+      // The server for this port is started here, on first demand, rather than
+      // before the run began. Racing it against the same cap means a slow start
+      // is reported as this check timing out, not as a silent stall.
+      await Promise.race([ensureServer(c.port), capped]);
       if (servers[c.port] && servers[c.port].foreign) throw new Error(servers[c.port].foreign);
       await Promise.race([c.run({ browser, base: 'http://127.0.0.1:' + c.port, t, skip, shot, errs }), capped]);
     } catch (e) {
@@ -5734,6 +5780,15 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
     console.log('  ' + (skipped ? 'SKIP' : fails ? '✗' : '✓') + ' ' + c.id +
       ' (' + Math.round((Date.now() - started) / 1000) + 's)');
     report.push({ id: c.id, port: c.port, lines, fails, skipped });
+    // Give the port's engine back the moment the last check needing it is done.
+    // This runs whether the check passed, failed or threw — a failing check that
+    // held its server would put the exhaustion straight back.
+    owed[c.port]--;
+    if (owed[c.port] <= 0 && servers[c.port]) {
+      try { servers[c.port].stop(); } catch (e) {}
+      servers[c.port] = null;
+      delete starting[c.port];
+    }
   };
 
   // Concurrency throttle. Running EVERY check at once (unbounded Promise.all)
@@ -5756,7 +5811,10 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
 
   await browser.close();
   if (busyHold) busyHold.stop();
-  for (const port of ports) servers[port].stop();
+  // Most are already down — each was stopped as its last check finished. This
+  // catches the stragglers: a port whose checks were all skipped, or one a check
+  // restarted for itself after the count had run out.
+  for (const port of ports) if (servers[port]) { try { servers[port].stop(); } catch (e) {} }
 
   let bad = 0, skipped = 0, total = 0;
   console.log('');
