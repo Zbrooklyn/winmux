@@ -31,14 +31,14 @@
     "winmux-mcp": "bin/winmux-mcp.cjs"
   },
   "scripts": {
-    "start": "node server.cjs",
+    "start": "node scripts/start.cjs",
     "remote": "powershell -NoProfile -ExecutionPolicy Bypass -File winmux.ps1 start",
     "stop": "powershell -NoProfile -ExecutionPolicy Bypass -File winmux.ps1 stop",
     "status": "powershell -NoProfile -ExecutionPolicy Bypass -File winmux.ps1 status",
     "link": "powershell -NoProfile -ExecutionPolicy Bypass -File winmux.ps1 link",
     "build:electron": "tsc -p tsconfig.electron.json",
     "dev:electron": "npm run build:electron && electron dist-electron/main.js",
-    "verify": "npm run build:electron && node verify.cjs",
+    "verify": "npm run build:electron && node scripts/verify-both.cjs",
     "verify:coexist": "node verify-coexist.cjs",
     "pack": "npm run build:electron && electron-builder --dir",
     "dist": "npm run build:electron && node scripts/dist.cjs",
@@ -47,7 +47,10 @@
     "perf": "node perf.cjs",
     "endurance": "node endurance.cjs",
     "dist:node": "npm run build:electron && node scripts/dist-node.cjs",
-    "dist:node-app": "npm run build:electron && node scripts/dist-node-app.cjs"
+    "dist:node-app": "npm run build:electron && node scripts/dist-node-app.cjs",
+    "start:node": "node scripts/start.cjs --node",
+    "verify:node": "npm run build:electron && node verify.cjs",
+    "verify:rust": "npm run build:electron && node scripts/verify-both.cjs --rust-only"
   },
   "build": {
     "appId": "com.zbrooklyn.winmux",

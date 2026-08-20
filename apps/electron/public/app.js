@@ -2936,7 +2936,7 @@
           '<span class="pgroup"><span class="pc pc-split" title="Split right (' + chordFor('split-right') + ')" role="button">' + SPLIT_SVG + '</span>' +
           '<span class="pc pcaret pc-splitmenu" title="Split…" role="button">' + CARET_SVG + '</span></span>' +
           '<span class="pc pc-pin" title="Pin pane (Alt+P)" role="button">' + PIN_SVG + '</span>' +
-          '<span class="pc pc-zoom" title="Zoom pane (Ctrl+Shift+Enter)" role="button" style="display:none">' + ZOOM_SVG + '</span>' +
+          '<span class="pc pc-zoom" title="Zoom pane (' + chordFor('zoom') + ')" role="button" style="display:none">' + ZOOM_SVG + '</span>' +
           '<span class="pc pc-close" title="Close pane (' + chordFor('close-pane') + ')" role="button" style="display:none">' + CLOSE_SVG + '</span>' +
           '<span class="pc pc-dock" title="Toggle changes panel" role="button">' + DOCK_SVG + '</span>' +
         '</div>' +
@@ -5086,8 +5086,46 @@
     for (var i = 0; i < ACTIONS.length; i++) if (effectiveChord(ACTIONS[i]) === chord) return ACTIONS[i];
     return null;
   }
+  // Every pane control that names a key in its tooltip. The F1 sheet, the
+  // palette and the right-click menus read the binding when they open, so they
+  // are always right; these titles are written once when the pane is built and
+  // were never touched again. Rebind Split right and the button went on
+  // advertising Ctrl+D — the app teaching a key that does nothing, which is the
+  // exact failure the shortcut surfaces were audited for.
+  //
+  // It looked fine on the Node engine purely by accident: a pane rebuild landed
+  // after the rebind there and repainted the titles. On the Rust engine — the
+  // one behind the primary download — the boot data arrives sooner, the rebuild
+  // happens first, and the stale tooltip is what you get.
+  var CHORD_TIPS = [
+    ['.pc-rail', 'Toggle left sidebar', 'toggle-sidebar'],
+    ['.pc-new', 'New tab', 'new-tab'],
+    ['.pc-find', 'Find', 'find'],
+    ['.pc-split', 'Split right', 'split-right'],
+    ['.pc-zoom', 'Zoom pane', 'zoom'],
+    ['.pc-close', 'Close pane', 'close-pane'],
+  ];
+  function refreshChordTips() {
+    panes.forEach(function (p) {
+      if (!p || !p.el) return;
+      CHORD_TIPS.forEach(function (spec) {
+        var el = p.el.querySelector(spec[0]);
+        if (el) el.setAttribute('title', spec[1] + ' (' + chordFor(spec[2]) + ')');
+      });
+      // Pin keeps its own label because it says Pin or Unpin depending on state.
+      if (p.pinBtn) p.pinBtn.title = (p.pinned ? 'Unpin pane' : 'Pin pane') + ' (Alt+P)';
+    });
+    // Tab close buttons name a key too, and there is one per tab.
+    document.querySelectorAll('.ptab .x, .ftab .x').forEach(function (el) {
+      el.setAttribute('title', 'Close tab (' + chordFor('close-tab') + ')');
+    });
+  }
+
   function saveKeymap() {
     try { localStorage.setItem('ct-keymap', JSON.stringify(KEYMAP)); } catch (e) {}
+    // Repaint before the network call — a rebind must be true on screen whether
+    // or not the config save succeeds.
+    try { refreshChordTips(); } catch (e) {}
     if (!configReady) return;
     try {
       fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keymap: KEYMAP }) })

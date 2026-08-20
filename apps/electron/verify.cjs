@@ -1978,6 +1978,20 @@ check('chordtruth', PORT_CHORDTRUTH, async ({ browser, base, t, shot }) => {
       return hits;
     });
     t('no tooltip still advertises the key that was replaced', stale.length === 0, stale);
+
+    // Rebind a second time, touching nothing else. This used to pass only when a
+    // pane rebuild happened to land after the rebind — true on the Node engine,
+    // false on the one that ships. Rebinding twice with no reload in between
+    // leaves no rebuild to hide behind: either the app repaints the tooltip on a
+    // keymap change, or this fails.
+    await page.evaluate(() => window.__winmuxSetKeymap('split-right', 'Ctrl+Alt+7'));
+    await page.waitForTimeout(300);
+    const again = await page.evaluate(() => {
+      const b = document.querySelector('.pc-split');
+      return b ? b.getAttribute('title') : null;
+    });
+    t('and a second rebind moves it again, with no reload to repaint it',
+      /Ctrl\+Alt\+7/.test(again || ''), again);
   } finally {
     await page.close();
   }
