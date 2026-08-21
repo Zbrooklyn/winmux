@@ -4465,14 +4465,24 @@ check('winctl', PORT_WINCTL, async ({ browser, base, t, shot }) => {
     await allUsable('at ' + w + 'x' + h + ' with one pane');
   }
 
-  await page.setViewportSize({ width: 720, height: 480 });
-  await page.waitForTimeout(700);
+  // This check is about the window controls surviving a LAYOUT, not about how
+  // many panes fit. It used to split three times at 720x480 and assert three,
+  // then four panes — which stopped being true the moment splitting got a floor:
+  // at that size two panes is the honest maximum and the third split is refused
+  // on purpose. Asserting it anyway was asserting the absence of the fix.
+  //
+  // So reach each layout at a size where it is legal, then drag down to the
+  // floor and look. Same coverage, no longer coupled to the split rule.
   for (let i = 1; i <= 3; i++) {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(600);
     await winmux(['split', 'right']);
     await page.waitForTimeout(2200);
     const panes = await page.evaluate(() => document.querySelectorAll('.workspace .pane').length);
-    t('split ' + i + ' produced ' + (i + 1) + ' panes at the minimum window size', panes === i + 1, String(panes));
-    await allUsable('after ' + i + ' split' + (i > 1 ? 's' : '') + ' at 720x480');
+    t('split ' + i + ' produced ' + (i + 1) + ' panes at a size that allows it', panes === i + 1, String(panes));
+    await page.setViewportSize({ width: 720, height: 480 });
+    await page.waitForTimeout(900);
+    await allUsable('with ' + (i + 1) + ' panes dragged down to 720x480');
   }
   await shot(page, 'winctl-splits-720');
 
