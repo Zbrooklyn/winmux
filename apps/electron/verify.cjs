@@ -150,6 +150,7 @@ const PORT_FLEETOPEN = 9964;   // AUDIT-B6/B7: the fleet list opens, remembers, 
 const PORT_CWDGONE = 9965;     // AUDIT-B10: a project whose folder moved says so instead of opening elsewhere
 const PORT_CLICLOSE = 9966;    // AUDIT-T4: the command surface can put a layout back, not only grow it
 const PORT_SPLITFLOOR = 9968;  // AUDIT-T1: splitting has a floor, and the refusal is said out loud
+const PORT_FOLDFIT = 9969;     // AUDIT-T2: a saved layout too big for this window folds into tabs, losing nothing
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -960,6 +961,113 @@ check('keytruth', PORT_KEYTRUTH, async ({ browser, base, t, shot }) => {
     window.__winmuxAdoptKeymap({ find: 'Ctrl+F', 'close-tab': 'Ctrl+Alt+7' }));
   t('a config file offering a terminal key is dropped, the good entry beside it kept',
     adopted && adopted.find === undefined && adopted['close-tab'] === 'Ctrl+Alt+7', adopted);
+});
+
+// --- foldfit: a layout too big for this window folds into tabs, losing nothing
+// AUDIT-T2. The split floor is enforced when you split, and splitting is not the
+// only way a layout arrives. A workspace saved on a 2560px monitor and reopened
+// on a laptop, a workspace file written by hand, a layout made before the floor
+// existed — none of those pass through a split, and all of them could hand back
+// exactly the window the floor exists to prevent, every launch, forever.
+//
+// The bar is "nothing is lost", not "it looks tidy": every session that was in
+// the saved layout must still be open and reachable afterwards. So this seeds a
+// layout with eight terminals in eight columns, before the app's first load, and
+// counts them at the other end.
+const FOLD_SEED = (n) => ({
+  v: 4,
+  group: 'Workspace',
+  cols: Array.from({ length: n }, (_, i) => ([{
+    active: 0,
+    tabs: [{ type: 'terminal', group: 'Workspace', title: 'seed-' + (i + 1), shell: '', cwd: '' }],
+  }])),
+});
+
+check('foldfit', PORT_FOLDFIT, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  // Installed BEFORE the first navigation: the app writes its own ct-live as
+  // soon as it loads, so a seed applied after a load is already gone by the time
+  // anything reads it. (Learned the hard way on AUDIT-B10.)
+  await page.addInitScript((seed) => {
+    try { localStorage.setItem('ct-live', JSON.stringify(seed)); } catch (e) {}
+  }, FOLD_SEED(8));
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await appReady(page);
+  await page.waitForTimeout(6000);   // restore, then the deferred fold
+
+  // The notification rows are built when the panel opens, so read them through
+  // the button a person would press rather than off a list that is not there yet.
+  const state = async () => {
+    try { await page.click('#open-notif'); } catch (e) {}
+    await page.waitForTimeout(400);
+    const s = await page.evaluate(() => ({
+      panes: document.querySelectorAll('.pane').length,
+      tabs: document.querySelectorAll('#wsrow .ptabs .ptab').length,
+      narrow: window.__winmuxNarrowest(),
+      notes: [...document.querySelectorAll('.nrow')].map((r) => ({
+        title: (r.querySelector('.nt') || {}).textContent || '',
+        sub: (r.querySelector('.nws') || {}).textContent || '',
+      })),
+    }));
+    try { await page.keyboard.press('Escape'); } catch (e) {}
+    await page.waitForTimeout(200);
+    return s;
+  };
+  const after = await state();
+
+  t('the eight saved sessions are all still open — folding is not closing',
+    after.tabs === 8, { tabs: after.tabs, panes: after.panes });
+  t('they are not still in eight panes — the layout was actually folded',
+    after.panes > 0 && after.panes < 8, after.panes);
+  t('and what is on screen is a usable terminal, not a sliver',
+    after.narrow.cols >= 24, after.narrow);
+
+  // Saying nothing would be its own defect: panes the user arranged are not
+  // where they left them, and they are entitled to know why and that the work
+  // is intact.
+  const note = after.notes.find((x) => /did not fit/i.test(x.title));
+  t('the app says the layout did not fit, instead of silently rearranging it', !!note, after.notes);
+  t('and says in the same breath that nothing was closed',
+    !!note && /none were closed/i.test(note.sub), note && note.sub);
+  await shot(page, 'folded');
+
+  // The fold has to survive the restart it was triggered by, or the user gets
+  // the same message on every launch for the rest of the app's life.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await appReady(page);
+  await page.waitForTimeout(4000);
+  const again = await state();
+  t('the folded layout is what comes back next time, not the broken one',
+    again.panes === after.panes && again.tabs === 8, { panes: again.panes, tabs: again.tabs });
+  // Count, don't look. Notifications are durable by design, so "is there a
+  // did-not-fit notice on screen" answers a different question than the one
+  // being asked — after a reload the FIRST one is still there and always will
+  // be. What must not happen is a SECOND one, every launch, forever.
+  const fitNotes = (s) => s.notes.filter((x) => /did not fit/i.test(x.title)).length;
+  t('and it does not announce itself again on the next launch, having nothing left to fold',
+    fitNotes(again) === fitNotes(after), { first: fitNotes(after), second: fitNotes(again) });
+  await page.close();
+});
+
+// --- foldfit-control: a layout that fits is not touched ---------------------
+// The other half of the claim, and the one that would hurt if it were wrong: a
+// fold that fires when it should not would quietly destroy layouts people meant.
+check('foldkeep', PORT_FOLDFIT + 1, async ({ browser, base, t }) => {
+  const page = await desktop(browser);
+  await page.addInitScript((seed) => {
+    try { localStorage.setItem('ct-live', JSON.stringify(seed)); } catch (e) {}
+  }, FOLD_SEED(2));
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await appReady(page);
+  await page.waitForTimeout(6000);
+  const kept = await page.evaluate(() => ({
+    panes: document.querySelectorAll('.pane').length,
+    notes: [...document.querySelectorAll('.nrow .nt')].map((r) => r.textContent),
+  }));
+  t('a two-pane layout that fits comes back as two panes, untouched', kept.panes === 2, kept.panes);
+  t('and nothing is announced, because nothing was done',
+    !kept.notes.some((x) => /did not fit/i.test(x)), kept.notes);
+  await page.close();
 });
 
 // --- splitfloor: tiling has a floor, and hitting it is said out loud --------

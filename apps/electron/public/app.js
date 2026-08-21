@@ -3024,6 +3024,62 @@
     return 'Each pane would be about ' + n + ' ' + r.what + (n === 1 ? '' : 's') +
       ' — a terminal needs at least ' + r.need + '. Close a pane, or make the window bigger.';
   }
+  // ---- a layout that arrives too small ----------------------------- AUDIT-T2
+  // The floor above is enforced when you SPLIT. Splitting is not the only way a
+  // layout arrives. A workspace saved on a 2560px monitor and reopened on a
+  // laptop, a workspace file written by hand, a layout made before the floor
+  // existed — none of those pass through a split, so all of them could hand back
+  // exactly the window the floor exists to prevent. And they hand it back every
+  // launch, which is what turns one bad afternoon into "the app is broken".
+  //
+  // Nothing is thrown away. A pane that cannot fit is folded into its neighbour
+  // as TABS — which is already what this app does when a pane closes. Every
+  // session survives, every terminal stays one click away, and the user can
+  // split them straight back out the moment there is room for them.
+  var foldTimer = null;
+  function paneCols(p) { var t = activeTermOf(p); return (t && t.term && t.term.cols) || 0; }
+  function paneRows(p) { var t = activeTermOf(p); return (t && t.term && t.term.rows) || 0; }
+  function panesInCol(col) { return panes.filter(function (p) { return p.col === col; }); }
+  // Move every tab out of one pane and into another. The pane empties itself out
+  // of existence on the last move — moveTermToPane already collapses a pane whose
+  // last visible tab leaves, shells and all, exactly as if the tabs were dragged.
+  function absorbPane(from, to) {
+    if (!from || !to || from === to || from.pinned || panes.length <= 1) return false;
+    from.terms.slice().forEach(function (t) { moveTermToPane(t, to); });
+    panes.forEach(fitActive);
+    return true;
+  }
+  function foldOnce() {
+    var cols = [].slice.call(wsrow.querySelectorAll('.wscol'));
+    // Stacks first: how tall a pane is does not depend on how many COLUMNS there
+    // are, so folding a stack can never re-break something already measured.
+    for (var i = 0; i < cols.length; i++) {
+      var stack = panesInCol(cols[i]);
+      if (stack.length < 2) continue;
+      var shortest = stack.reduce(function (a, p) { return Math.min(a, paneRows(p) || 999); }, 999);
+      if (shortest < MIN_ROWS && absorbPane(stack[stack.length - 1], stack[stack.length - 2])) return true;
+    }
+    if (cols.length > 1) {
+      var narrowest = panes.reduce(function (a, p) { return Math.min(a, paneCols(p) || 999); }, 999);
+      if (narrowest < MIN_COLS) {
+        var victims = panesInCol(cols[cols.length - 1]);
+        var host = panesInCol(cols[cols.length - 2]).pop();
+        if (victims.length && host && absorbPane(victims[victims.length - 1], host)) return true;
+      }
+    }
+    return false;
+  }
+  function foldToFloor() {
+    if (document.body.getAttribute('data-mode') === 'narrow') return 0;
+    var n = 0;
+    while (n < 40 && foldOnce()) n++;
+    if (n) {
+      persistLive();
+      notify('That layout did not fit this window',
+        n + ' pane' + (n === 1 ? '' : 's') + ' folded into tabs — every session is still open, none were closed.');
+    }
+    return n;
+  }
   function splitRight(p, shellKey, cwd) {
     var noRoom = splitBlocked(p, 'right');
     if (noRoom) { notify('No room to split', noRoom); return null; }
@@ -3992,6 +4048,13 @@
     applyGroupVisibility();
     updateChrome();
     if (panes[0]) focusPane(panes[0].id);
+    // AUDIT-T2: a restored layout has never been through the split floor, so this
+    // is where one that no longer fits gets folded into tabs. Deferred, because
+    // the answer is measured off the real terminals and they have to have been
+    // laid out and fitted first — asking a terminal how wide it is before the
+    // browser has done that gets a number, just not the right one.
+    clearTimeout(foldTimer);
+    foldTimer = setTimeout(foldToFloor, 500);
     setTimeout(function () { panes.forEach(fitActive); }, 60);
   }
   // Layouts live in a small popover anchored to the sidebar button — saving and
