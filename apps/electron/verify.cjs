@@ -581,9 +581,31 @@ const SHARED_ON_PURPOSE = {
 const PORT_OWNER = new Map();
 PORTS_EXHAUST.forEach((p) => PORT_OWNER.set(p, 'the port-exhaustion test'));
 
+// Chromium refuses to navigate to a short list of ports (kRestrictedPorts) and
+// says so as ERR_UNSAFE_PORT, which arrives looking like a product failure. A
+// port being free is not the same as a port being usable: 10080 is free on this
+// machine and the browser will not go there. Nothing in this file can land on
+// one at base 0 — closeverb is 9980 — so it took a shifted run to find it, three
+// checks from the end of twelve minutes. Cheaper to know at startup.
+const BROWSER_REFUSES = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79,
+  87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137,
+  139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532,
+  540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723,
+  2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669,
+  6679, 6697, 10080,
+]);
+
 // A check may carry an env override for its server (last arg) — e.g. the update
 // check forces WINMUX_FAKE_LATEST so the badge can be proven without a real release.
 const check = (id, port, run, env) => {
+  if (BROWSER_REFUSES.has(port)) {
+    console.error('\n"' + id + '" would run on port ' + port + ', which the browser refuses to open'
+      + ' (ERR_UNSAFE_PORT).' + (PORT_BASE ? '\nWINMUX_VERIFY_PORT_BASE=' + PORT_BASE + ' put it there; '
+        + (port - PORT_BASE) + ' is fine unshifted.' : '')
+      + '\nUse a different base, or move the check.\n');
+    process.exit(2);
+  }
   const owner = PORT_OWNER.get(port);
   if (owner && !(SHARED_ON_PURPOSE[owner] && SHARED_ON_PURPOSE[id])) {
     console.error('\nverify.cjs is misconfigured: "' + owner + '" and "' + id + '" both claim port ' + port

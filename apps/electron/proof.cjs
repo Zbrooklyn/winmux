@@ -31,7 +31,11 @@ const argv = process.argv.slice(2);
 const sep = argv.indexOf('--');
 const only = sep === -1 ? [] : argv.slice(sep + 1);
 const ref = (sep === -1 ? argv[0] : argv.slice(0, sep)[0]) || 'HEAD';
-const BASE = process.env.WINMUX_VERIFY_PORT_BASE || '100';
+// 200, not 100: at +100 the close-verb check lands on 10080, which Chromium
+// refuses to navigate to (ERR_UNSAFE_PORT). verify.cjs now says so at startup
+// instead of three checks from the end of twelve minutes, but the default may
+// as well be a base that works.
+const BASE = process.env.WINMUX_VERIFY_PORT_BASE || '200';
 
 const sha = execFileSync('git', ['rev-parse', '--short', ref], { cwd: TOP, encoding: 'utf8' }).trim();
 const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: TOP, encoding: 'utf8' }).trim();
