@@ -609,14 +609,40 @@ fn spawn_session(shell_key: &str, cwd: &str, state: &Arc<AppState>) -> Result<(S
     cmd.cwd(cwd);
     // Clean top-level session: scrub NO_COLOR + CLAUDE_CODE_* (mirrors the Node fix).
     cmd.env_clear();
+    // Put our own CLI on this shell's PATH (mirrors the Node engine). The agents
+    // guide promises "from any WinMux terminal: winmux agent spawn …", and on an
+    // installed copy that command did not exist by any route — a .cjs sealed in
+    // the app archive, with no Node to run it. Doing it per-shell rather than in
+    // the installer keeps the four side-by-side WinMux identities from fighting
+    // over the bare word `winmux`, and touches nothing outside the app.
+    //
+    // We cannot work the directory out ourselves: this core is a native binary
+    // beside the app, not inside it, so the Electron shell passes it in. Windows
+    // env names are case-insensitive and the real one is usually "Path".
+    let cli_dir = std::env::var("WINMUX_CLI_DIR").ok().filter(|d| {
+        std::path::Path::new(d).join("winmux.cmd").exists()
+    });
     for (k, v) in std::env::vars() {
         if k == "NO_COLOR" || k == "CLAUDECODE" || k == "CLAUDE_PID" || k.starts_with("CLAUDE_CODE_") { continue; }
+        if k.eq_ignore_ascii_case("PATH") {
+            if let Some(dir) = &cli_dir {
+                cmd.env(k, format!("{}{}{}", dir, if cfg!(windows) { ";" } else { ":" }, v));
+                continue;
+            }
+        }
         cmd.env(k, v);
     }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("WINMUX_SID", &sid);
     cmd.env("WINMUX_PORT", state.port.to_string());
+    // The shim runs the .cjs with whatever this names — the app's own binary,
+    // which is a Node runtime on request. WINMUX_APP_EXE is already handed to us
+    // for the same reason (the login launcher), so reuse it rather than inventing
+    // a second name for the same fact.
+    if cli_dir.is_some() {
+        if let Ok(exe) = std::env::var("WINMUX_APP_EXE") { cmd.env("WINMUX_EXE", exe); }
+    }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to start {label}: {e}"))?;
     drop(pair.slave);

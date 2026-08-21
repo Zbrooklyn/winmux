@@ -110,6 +110,13 @@ async function createWindow(): Promise<void> {
         // app — but the core is a sidecar, so its own exe path is winmux-core.exe,
         // which would start a headless server and no window. Hand it the real one.
         WINMUX_APP_EXE: process.execPath,
+        // Same shape again for the `winmux` CLI, which the core puts on the PATH
+        // of every shell it spawns. The core cannot work either of these out: it
+        // is a native binary sitting beside the app, not inside it, and it is not
+        // a Node runtime — the shim needs our executable to run the .cjs at all.
+        WINMUX_CLI_DIR: app.isPackaged
+          ? path.join(process.resourcesPath, 'app.asar.unpacked', 'bin')
+          : path.join(__dirname, '..', 'bin'),
       };
     }
     portPromise = resolveServer({

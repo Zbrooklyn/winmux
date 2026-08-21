@@ -1897,6 +1897,26 @@ const SPARE_POOL = Math.max(1, Number(process.env.WINMUX_SPARE_POOL) || 2);
 // way), so the instant-open handoff still matches.
 const DEFAULT_SHELL_KEY = SHELLS.some((s) => s.key === 'pwsh') ? 'pwsh' : 'powershell';
 
+// Where winmux.cmd actually lives, or null if it does not. Packaged, server.cjs
+// runs from inside app.asar and bin is unpacked beside it — the .cjs would still
+// resolve from the archive, but a shell cannot execute a path inside one, so the
+// unpacked copy is the only usable answer. WINMUX_CLI_DIR lets the Electron shell
+// hand this to the Rust core, which is a separate binary and cannot work it out.
+// Returns null rather than guessing: a wrong PATH entry is worse than none.
+function cliBinDir() {
+  if (process.env.WINMUX_CLI_DIR) {
+    return fs.existsSync(path.join(process.env.WINMUX_CLI_DIR, 'winmux.cmd'))
+      ? process.env.WINMUX_CLI_DIR : null;
+  }
+  for (const dir of [
+    path.join(__dirname.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1'), 'bin'),
+    path.join(__dirname, 'bin'),
+  ]) {
+    try { if (fs.existsSync(path.join(dir, 'winmux.cmd'))) return dir; } catch (e) {}
+  }
+  return null;
+}
+
 function spawnSession(shell, cwd) {
   // Every shell learns its own WinMux identity, the way tmux exports $TMUX_PANE.
   // The session id exists before the pty so an agent's Claude Code hook running
@@ -1911,6 +1931,20 @@ function spawnSession(shell, cwd) {
     WINMUX_SID: id, WINMUX_PORT: String(PORT),
     TERM: 'xterm-256color', COLORTERM: 'truecolor',
   });
+  // Put our own CLI on this shell's PATH. The agents guide promises "from any
+  // WinMux terminal: winmux agent spawn …", and on an installed copy that
+  // command did not exist by any route. Doing it here rather than in the
+  // installer is what makes the promise true without touching the machine: the
+  // four WinMux identities install side by side, so a system PATH entry would
+  // make them fight over the bare word `winmux`, and this way each app's
+  // terminals get their own. WINMUX_EXE is the Node runtime the shim uses —
+  // our own binary, which serves as one on request.
+  const cliDir = cliBinDir();
+  if (cliDir) {
+    env.WINMUX_EXE = process.execPath;
+    const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
+    env[key] = cliDir + path.delimiter + (env[key] || '');
+  }
   // Scrub the launching process's own agent/session pollution before handing the
   // shell to the user. If WinMux was started from inside a Claude Code session it
   // inherited NO_COLOR=1 — the universal "disable all colour" switch, which forces

@@ -70,7 +70,8 @@
     "asarUnpack": [
       "node_modules/node-pty/prebuilds/**",
       "node_modules/node-pty/build/Release/*.node",
-      "public/**/*"
+      "public/**/*",
+      "bin/**/*"
     ],
     "win": {
       "target": [

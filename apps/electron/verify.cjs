@@ -139,6 +139,7 @@ const PORT_ORPHAN = 9974;      // AUDIT-8: closing a tab whose socket is down st
 const PORT_NOSTRAND = 9972;    // AUDIT-4: a slow answer never strands a live engine and its shells
 const PORT_EXITTRUTH = 9970;   // AUDIT-1: a shell that ends says so, on both engines
 const PORT_CTLBACKOFF = 9961;  // AUDIT-B4: the control socket backs off instead of retrying forever
+const PORT_CLIHERE  = 9963;    // AUDIT-9: the winmux CLI runs inside a WinMux terminal, as the guide promises
 const PORT_KEYTRUTH = 9962;    // AUDIT-2: no shortcut is bound to a key the terminal is going to eat
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
@@ -315,7 +316,13 @@ async function server(port, extraEnv) {
   const proc = RUST_CORE
     ? spawn(RUST_CORE, [], {
         cwd: ROOT,
-        env: Object.assign({}, process.env, { WINMUX_PORT: String(port), WINMUX_PUBLIC: path.join(ROOT, 'public'), WINMUX_INSTANCE_FILE: path.join(OUT, 'inst-' + port + '.json'), WINMUX_TRUST_FILE: trustFile(port), WINMUX_CONFIG_FILE: configFile(port) }, extraEnv || {}),
+        // WINMUX_CLI_DIR / WINMUX_APP_EXE mirror what the Electron shell hands the
+        // core in a real app. The core is a native binary beside the app, so it
+        // cannot find the `winmux` CLI itself; without these the shells it spawns
+        // get no CLI on their PATH and the check for that would fail on the engine
+        // we actually ship, for a reason belonging to the harness rather than the
+        // product. Node's server.cjs works this out from its own __dirname.
+        env: Object.assign({}, process.env, { WINMUX_PORT: String(port), WINMUX_PUBLIC: path.join(ROOT, 'public'), WINMUX_INSTANCE_FILE: path.join(OUT, 'inst-' + port + '.json'), WINMUX_TRUST_FILE: trustFile(port), WINMUX_CONFIG_FILE: configFile(port), WINMUX_CLI_DIR: path.join(ROOT, 'bin'), WINMUX_APP_EXE: process.execPath }, extraEnv || {}),
         stdio: 'ignore',
       })
     : spawn(process.execPath, ['server.cjs'], {
@@ -752,6 +759,48 @@ check('ctlbackoff', PORT_CTLBACKOFF, async ({ browser, base, t }) => {
     gaps.length >= 2 && gaps[gaps.length - 1] > 9000, gaps);
   t('and it is capped, so it never stops trying altogether',
     gaps.every((g) => g <= 40000), gaps);
+});
+
+// --- clihere: the command the agents guide teaches actually runs -----------
+// AUDIT-9. The guide says "from any WinMux terminal: winmux agent spawn …" and
+// on an installed copy that command did not exist by any route — a .cjs sealed
+// inside app.asar, on a machine with no Node. This types it into a real shell,
+// because the only proof that matters is the one the guide describes.
+check('clihere', PORT_CLIHERE, async ({ browser, base, t, shot }) => {
+  const p = await desktop(browser);
+  await p.goto(base + '/', { waitUntil: 'domcontentloaded' });
+  await appReady(p);
+
+  const screen = () => p.evaluate(() => {
+    const el = document.querySelector('.xterm-rows') || document.querySelector('.term');
+    return el ? el.innerText.replace(/ /g, ' ') : '';
+  });
+  const say = async (text) => {
+    await p.locator('.xterm-helper-textarea').first().focus();
+    await p.keyboard.press('Escape');          // clear a half-typed line (busyport's lesson)
+    await p.keyboard.type(text);
+    await p.keyboard.press('Enter');
+  };
+
+  // The guide's own words, run verbatim in the place it names. `status` is the
+  // read-only verb — it proves the whole path (shell finds the command, the
+  // command finds the running app) without spawning an agent.
+  await say('winmux status --json');
+  await p.waitForFunction(() => {
+    const el = document.querySelector('.xterm-rows') || document.querySelector('.term');
+    const s = el ? el.innerText : '';
+    return /"port"/.test(s) || /not recognized|CommandNotFound|cannot find/i.test(s);
+  }, null, { timeout: 30000 }).catch(() => {});
+  const out = await screen();
+
+  t('the shell finds `winmux` — the command the guide teaches is on the PATH it promised',
+    !/not recognized|CommandNotFound|is not recognized/i.test(out), out.slice(-400));
+  t('and running it reaches the live app, rather than printing an error',
+    /"port"\s*:/.test(out), out.slice(-400));
+  const port = (out.match(/"port"\s*:\s*(\d+)/) || [])[1];
+  t('and it answers about THIS app, not some other instance it happened to find',
+    String(port) === String(new URL(base).port), { reported: port, expected: new URL(base).port });
+  await shot(p, 'clihere-status');
 });
 
 // --- keytruth: the app never teaches a key the terminal is going to eat ----
