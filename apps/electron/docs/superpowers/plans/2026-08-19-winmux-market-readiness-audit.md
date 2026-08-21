@@ -11,6 +11,30 @@ against the **installed** app and against **both engines**. Every item below is
 either reproduced live (marked PROVEN) or read in the shipped source with a
 file:line citation.
 
+## Status: all ten are closed (2026-08-20)
+
+Every item in the Top 10 has been repaired, and each carries a committed check
+that goes red with the repair removed. Six more defects were found *while*
+fixing these and are closed too (02b, 04b, 06b, 06c, 11, 12) — several of them
+found by the new checks rather than by looking, which is the point.
+
+Two lessons outlived the individual fixes and are worth more than this list:
+
+- **Item 2 was undercounted here.** It names Ctrl+F, Ctrl+B and Ctrl+D as keys
+  that do nothing, but treats Ctrl+B as a spare key. It was Toggle sidebar —
+  a third stranded action. The guard listed its keys in one place and the
+  defaults listed the same keys in another, and nothing connected the two, so
+  nobody comparing them noticed they overlapped. The fix puts that list in one
+  place; the check compares defaults against it structurally, so a fourth
+  instance fails without anyone thinking to test for it.
+- **Item 9 is the shape to remember.** Like item 5, it worked perfectly from a
+  source checkout and existed only in the build we ship. Source-green is not
+  evidence for anything that differs when packaged. Its fix was proven by
+  building a real installer and running the command out of the packaged tree.
+
+Live state, statuses and evidence for everything still open:
+`scratchpad/winmux-problem-register.html` (published as "Every problem we have").
+
 ## Why the harness said 471/471
 
 Three structural blind spots, all mine:
@@ -34,7 +58,7 @@ with its author.
 
 ## Top 10, ranked by likelihood x damage
 
-### 1. Typing `exit` leaves a fake-alive tab (shipping engine only) — PROVEN
+### 1. Typing `exit` leaves a fake-alive tab (shipping engine only) — CLOSED (034c35f, check `exittruth`)
 Rust core has no shell-exit notifier: the meta frame carries no `exited` field
 and the socket is never closed (`core/rust/crates/winmux-core/src/main.rs:608-611`,
 `:537-560`). Node does it correctly (`server.cjs:1799-1809`), so the client's
@@ -43,7 +67,7 @@ Measured: after `exit`, terminal shows no end marker, engine session count stays
 1 -> 1, sidebar still reads "1 session · idle", keystrokes vanish into a dead
 PTY. Reload replays a corpse as a live session.
 
-### 2. Ctrl+F, Ctrl+B and Ctrl+D do nothing, and the app teaches all three — PROVEN
+### 2. Ctrl+F, Ctrl+B and Ctrl+D do nothing, and the app teaches all three — CLOSED (a0339b1, check `keytruth`) — and it was THREE actions, not two: Ctrl+B was Toggle sidebar
 `app.js:4927-4931` hands those three chords to the shell whenever the terminal
 has focus — which is always, since `activateTerm` focuses it (`:1644`). The
 dispatch at `:4936` is never reached. They are advertised in the F1 cheat sheet
@@ -74,7 +98,7 @@ own centre; close right edge = 720/720. New `winctl` harness check (12
 assertions) walks 720x480 / 900x620 / 1440x900 x 1..4 panes so this cannot
 regress silently.
 
-### 4. A slow health check silently strands every running shell
+### 4. A slow health check silently strands every running shell — CLOSED (5f5eb4e, check `nostrand`)
 `electron/server-host.ts:35` gives `/api/info` 1200ms. Miss it (AV scan, Dropbox
 sync, cold page-in) and a second engine spawns; the Rust core walks to the next
 free port instead of failing (`main.rs:377-388`) and overwrites `instance.json`
@@ -83,7 +107,7 @@ Result: empty workspace, every shell/agent/unsaved scrollback stranded on an
 unreachable detached engine that nothing will ever kill, both engines then
 fighting over the same workspace and backlog.
 
-### 5. Four visible features are broken only in the shipped build
+### 5. Four visible features are broken only in the shipped build — CLOSED (46a9ad5, check `shipped05`)
 The Rust engine is missing routes and fields the UI calls, and every call site
 fails silently: **Changes tab** shows "Could not read changes" (no `/api/git`
 in Rust at all); **"Start when I log in"** is a switch that cannot move (no
@@ -94,7 +118,7 @@ send confused users to — prints "undefined · undefined" and "NaNm NaNs"
 `updateAvailable:false`). None of this reproduces from a source checkout,
 because `npm start` runs the Node engine.
 
-### 6. Saving a project can silently overwrite a different project
+### 6. Saving a project can silently overwrite a different project — CLOSED
 The path is a slug of the name with no existence check (`server.cjs:962-973`);
 `:967` reads the old file's `created` back out, so the code knows a file is
 there and overwrites anyway, reporting "Project saved". "Client A / Prod" and
@@ -102,7 +126,7 @@ there and overwrites anyway, reporting "Project saved". "Client A / Prod" and
 (`app.js:3777-3789`) runs on first boot after upgrade and re-saves every legacy
 layout by name, overwriting same-slug project files with no prompt.
 
-### 7. Dismissing the Rebind dialog by clicking outside it kills the keyboard
+### 7. Dismissing the Rebind dialog by clicking outside it kills the keyboard — CLOSED
 `rebindShortcut()` (`app.js:3532-3557`) wires its `cleanup()` to Escape, Cancel
 and success — but not to the shared `.ovl` backdrop dismiss (`:3447-3449`) that
 every other dialog uses. Click the dimmed area: the dialog closes looking
@@ -111,14 +135,14 @@ swallowing every keystroke app-wide. The first modified chord pressed to escape
 — Ctrl+C by reflex — is written into the keymap and persisted, and from then on
 Ctrl+C never reaches any shell again, across restarts.
 
-### 8. Closing a reconnecting tab spawns invisible orphan shells
+### 8. Closing a reconnecting tab spawns invisible orphan shells — CLOSED
 `killShell` (`app.js:1569-1573`) only sends the kill if the socket is OPEN — it
 isn't, during a reconnect — and never clears the retry timer armed at `:2420`.
 `connect()` has no `t.closing` guard (`:2288`), though two of the three sites
 that need it have one. Restart the engine, tidy up 10 dead tabs, get 10
 invisible PowerShells with no tab, no sidebar row, and no way to reach them.
 
-### 9. The CLI the onboarding teaches does not exist on an installed copy
+### 9. The CLI the onboarding teaches does not exist on an installed copy — CLOSED (c71a2c1, check `clihere`), proven from a packaged build
 The agents guide presents `winmux agent spawn "..."` as a core pillar
 (`index.html:1044`) and `docs/agent-integration.md:50` states the CLI "is on
 PATH when WinMux is installed". Nothing puts it there: no NSIS include, no
@@ -126,7 +150,7 @@ shim, and `bin/**` isn't in `asarUnpack` (`package.json:60-71`) so it's sealed
 inside `app.asar` and can't even be run by full path. Confirmed against the
 real install directory — no `bin/`, no `winmux.cmd`.
 
-### 10. A corrupt config is silently replaced instead of reported
+### 10. A corrupt config is silently replaced instead of reported — CLOSED
 `readConfig()` swallows parse errors and returns `{}` (`server.cjs:298-301`);
 the next settings change merges onto that empty base and atomically writes it
 (`:879-885`), destroying every imported theme and keybinding — and answers
