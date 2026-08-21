@@ -3415,8 +3415,19 @@ check('groups', PORT_GROUPS, async ({ browser, base, t, shot }) => {
   t('and the top strip grew with it', grown.shown === 2, grown.tabs);
 
   // The chevron peeks into a group. Peeking is not switching.
+  //
+  // This clicked once and asserted "now it is open", which quietly assumed the
+  // group started shut. That assumption was true only by accident, and AUDIT-B6
+  // — the fleet list ships open and remembers — made it false, so the one click
+  // shut the group and this read 0. The check was measuring a starting state it
+  // never established. It now drives the control as what it actually is, a
+  // toggle: shut it if it is showing, then open it, and assert on the open side.
   const otherId = grown.rows.find((r) => r.name !== 'Client work').id;
-  await p.click('.prow[data-switch="' + otherId + '"] .pexpand');
+  const arrow = '.prow[data-switch="' + otherId + '"] .pexpand';
+  if ((await p.evaluate(SIDEBAR)).kids > 0) { await p.click(arrow); await p.waitForTimeout(400); }
+  const shut = await p.evaluate(SIDEBAR);
+  t('the arrow shuts a group that is showing its sessions', shut.kids === 0, shut.kids);
+  await p.click(arrow);
   await p.waitForTimeout(400);
   const peeked = await p.evaluate(SIDEBAR);
   t('the arrow opens that group\'s sessions inline', peeked.kids === 1, peeked.kids);
@@ -5300,7 +5311,13 @@ check('doing', PORT_DOING, async ({ browser, base, t, shot }) => {
     const ex = document.querySelector('[data-expand]');
     return ex ? ex.getAttribute('data-expand') : null;
   });
-  if (gid) { try { await page.click('[data-expand="' + gid + '"]'); } catch (e) {} }
+  // Ensure expanded, don't toggle blindly: since AUDIT-B6 the list ships open,
+  // and a click on an already-open group collapses it — which took the row this
+  // check is entirely about off the screen.
+  if (gid) {
+    const showing = await page.evaluate(() => document.querySelectorAll('.skids .srow').length > 0);
+    if (!showing) { try { await page.click('[data-expand="' + gid + '"]'); } catch (e) {} }
+  }
   await page.waitForTimeout(300);
 
   const res = await page.evaluate(async () => {
