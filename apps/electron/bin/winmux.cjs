@@ -156,8 +156,11 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
     if (cmd === 'status') {
       const i = await get('/api/info');
       if (has(argv, '--json')) return out(i);
+      // Four copies can be installed and running at once, and until now every
+      // one of them said "WinMux" here — so you could not tell which app you
+      // had just driven, or which one the CLI had picked for you.
       return out([
-        'WinMux ' + (i.host || '127.0.0.1') + ':' + i.port + '  (pid ' + i.pid + ')',
+        (i.identity || 'WinMux') + '  ' + (i.host || '127.0.0.1') + ':' + i.port + '  (pid ' + i.pid + ')',
         '  sessions: ' + i.sessions + (i.detached ? '  (' + i.detached + ' detached, waiting to reattach)' : ''),
         '  phone:    ' + (i.phone || 'off'),
         '  shells:   ' + (Array.isArray(i.shells) ? i.shells.join(', ') : ''),

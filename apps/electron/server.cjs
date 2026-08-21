@@ -410,6 +410,20 @@ function workspaceFile() {
   const wsBase = base.startsWith('instance') ? base.replace(/^instance/, 'workspace') : 'workspace.' + base;
   return path.join(path.dirname(inst), wsBase);
 }
+// Which of the installed copies this server IS. Four identities install side by
+// side, each with its own instance file, settings and sessions — and nothing
+// anywhere said which one you were talking to. The name comes from the same
+// instance-file basename that already separates their state, so it cannot drift
+// away from the identity it labels (AUDIT-B9).
+const IDENTITY_NAMES = { '': 'WinMux', rust: 'WinMux Rust', tauri: 'WinMux Tauri', node: 'WinMux Node', dev: 'WinMux (dev)' };
+function identity() {
+  if (process.env.WINMUX_NO_INSTANCE) return { key: '', name: 'WinMux' };
+  const inst = process.env.WINMUX_INSTANCE_FILE || path.join(os.homedir(), '.winmux', 'instance.json');
+  const m = /^instance(?:\.([^.]+))?\.json$/i.exec(path.basename(inst));
+  const key = m ? (m[1] || '').toLowerCase() : '';
+  return { key, name: IDENTITY_NAMES[key] || ('WinMux (' + (key || path.basename(inst)) + ')') };
+}
+
 let memWorkspace = null;
 function readWorkspace() {
   const file = workspaceFile();
@@ -1251,6 +1265,9 @@ function handle(req, res, viaPhone) {
       version: VERSION,
       // `runtime` is the row Diagnostics shows: which engine is actually serving
       // you. `node` stays for anything still reading it.
+      // Which installed copy this is — the primary app, WinMux Rust, Tauri or
+      // Node. Four of them coexist; every one of them used to answer "WinMux".
+      identity: identity().name, identityKey: identity().key,
       pid: process.pid, node: process.version, runtime: 'Node ' + process.version,
       platform: process.platform,
       arch: process.arch, uptime: Math.round(process.uptime()), host: HOST, port: PORT,

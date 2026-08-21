@@ -152,6 +152,8 @@ const PORT_CLICLOSE = 9966;    // AUDIT-T4: the command surface can put a layout
 const PORT_SPLITFLOOR = 9968;  // AUDIT-T1: splitting has a floor, and the refusal is said out loud
 const PORT_FOLDFIT = 9969;     // AUDIT-T2: a saved layout too big for this window folds into tabs, losing nothing
 const PORT_CLIPROJ = 9970;    // AUDIT-B11: `winmux open` rejected the project file the app itself writes
+const PORT_WHOAMI = 9971;     // AUDIT-B9: four copies, and every one of them called itself "WinMux"
+const PORT_WHOAMI2 = 9972;    // AUDIT-B9: a second identity, to prove the name is derived and moves
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -997,6 +999,76 @@ const FOLD_SEED = (n) => ({
 // `workspace file needs a "sessions" array`. The doc was not wrong about what
 // should happen; the verb was missing half its job. Now one word opens either
 // shape, and a project rebuilds its panes the way the Projects menu does.
+// AUDIT-B9. Four WinMux identities install and run side by side — the primary
+// app, WinMux Rust, WinMux Tauri, WinMux Node — each with its own settings,
+// sessions and discovery file. Nothing anywhere named the one you were talking
+// to. `winmux status` said "WinMux" whichever it had reached, and the CLI picks
+// for you when several are live, so you could drive the wrong app and read a
+// confident report about it. The name now comes off the same instance-file the
+// identities already use to keep their state apart, so it cannot drift.
+check('whoami', PORT_WHOAMI, async ({ base, t }) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'winmux-ident-'));
+  const run = (instFile) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), 'status'],
+      { cwd: ROOT, env: Object.assign({}, process.env, {
+        WINMUX_PORT: String(PORT_WHOAMI), WINMUX_HOST: '127.0.0.1',
+        WINMUX_INSTANCE_FILE: instFile,
+      }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => { o += d; });
+    proc.stderr.on('data', (d) => { e += d; });
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+
+  // The server under test is the harness's own, so what the CLI reports is the
+  // server's own answer — this proves the wire, not a client-side guess.
+  const info = JSON.parse((await get(base + '/api/info')).body);
+  t('the running server says which of the four copies it is, instead of only "WinMux"',
+    typeof info.identity === 'string' && info.identity.length > 0, info.identity);
+  t('and it says so in a word a person recognises, not a filename',
+    /^WinMux( |$)/.test(info.identity || ''), info.identity);
+
+  const said = await run(path.join(dir, 'instance.json'));
+  t('the line still carries the address and pid it always did',
+    /127\.0\.0\.1:/.test(said.out) && /pid \d+/.test(said.out), said.out.split('\n')[0]);
+
+  // The name is DERIVED, not configured — so prove it moves. A second server,
+  // identical but for the discovery file it was handed, must call itself
+  // something else. Reading one server twice could never show this.
+  const side = spawn(process.execPath, [path.join(ROOT, 'server.cjs')], {
+    cwd: ROOT, stdio: 'ignore',
+    env: Object.assign({}, process.env, {
+      PORT: String(PORT_WHOAMI2), WINMUX_PORT: String(PORT_WHOAMI2), WINMUX_HOST: '127.0.0.1',
+      WINMUX_INSTANCE_FILE: path.join(dir, 'instance.rust.json'),
+      WINMUX_CONFIG_FILE: path.join(dir, 'config.json'),
+    }),
+  });
+  await new Promise((r) => setTimeout(r, 4500));
+  let sideInfo = {};
+  try { sideInfo = JSON.parse((await get('http://127.0.0.1:' + PORT_WHOAMI2 + '/api/info')).body); } catch (e) {}
+  t('a second copy, told only that it is the Rust identity, calls itself that and not "WinMux"',
+    sideInfo.identity === 'WinMux Rust', sideInfo.identity);
+  t('so two copies running at once cannot report the same name',
+    sideInfo.identity !== info.identity, { first: info.identity, second: sideInfo.identity });
+
+  // And the CLI says it where a person looks. Asserting the first line merely
+  // CONTAINS "WinMux" proves nothing — the old line did too, for every copy.
+  // It has to carry the name of the copy it actually reached.
+  const sideSaid = await new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), 'status'],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_WHOAMI2), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => { o += d; });
+    proc.stderr.on('data', (d) => { e += d; });
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+  t('`winmux status` opens with the name of the copy it reached, not "WinMux" for all four',
+    sideSaid.code === 0 && /^WinMux Rust\b/.test(sideSaid.out.split('\n')[0]), sideSaid.out.split('\n')[0]);
+  try { side.kill(); } catch (e) {}
+
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
+});
+
 check('cliproject', PORT_CLIPROJ, async ({ browser, base, t, shot }) => {
   const winmux = (args) => new Promise((resolve) => {
     const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
