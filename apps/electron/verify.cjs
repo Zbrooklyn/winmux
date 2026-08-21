@@ -6785,10 +6785,14 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   // product regression. That is what the old flat cap of 3 was really protecting,
   // and throttling all 86 checks to protect one of them cost ten minutes a run.
   //
-  // So it runs alone, last. Everything else keeps the full width. The electron
-  // smoke has a 100ms budget too but takes the best of three samples, which is
-  // the other way to survive a loaded machine; it stays in the pool.
-  const SOLO = { localecho: 1 };
+  // So it runs alone, last. Everything else keeps the full width.
+  //
+  // `electron` joins it: its global-summon budget is also 100ms, and I argued
+  // that best-of-three would carry it through a loaded machine. Two runs out of
+  // three at 8-way say otherwise. Best-of-three lowers the flake rate; it does
+  // not make a latency claim true on a machine that is busy. Any check asserting
+  // a WALL-CLOCK budget belongs here — that is the rule, not the list.
+  const SOLO = { localecho: 1, electron: 1 };
   const queue = run.filter((c) => !SOLO[c.id]);
   const solo = run.filter((c) => SOLO[c.id]);
   console.log('running ' + queue.length + ' checks, ' + MAX_CONCURRENCY + ' at a time'

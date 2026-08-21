@@ -36,6 +36,21 @@ This is the whole of the old "Tier 0" minus the word.
 cannot be checked from the file's own text or the file system is not a guard, it
 is a wish.
 
+The worked example is `clickLive`. A hover-revealed control burned a thirty-
+second timeout once; then `orphan` clicked a tab's close button, watched the
+shell count not move, and reported *"closing it does not end the shell"* — at
+3-way concurrency and again at 8-way. Both times the product was fine and the
+mouse was what was actually being measured. Playwright's actionability check
+means visible and stable, which a control halfway through a reveal transition can
+satisfy while something else is still under the cursor. So on the second
+occurrence it became a helper: hover the parent, wait until the target is
+genuinely the element at its own centre, then click — and if it never becomes
+hittable, say *harness* rather than letting the silence be scored against the
+product.
+
+That is the general shape of everything worth keeping: **a failure mode that
+cannot tell you which side it came from is the expensive kind.**
+
 ## G2 — `node verify.cjs --prove <check>`
 
 Red-before, green-after, one command, no stashing. Costs about twice the check's
@@ -44,20 +59,50 @@ runtime — seconds. It refuses a no-op and treats a failed revert as fatal.
 Not a gate. A thing to reach for when the question "did that actually do
 anything" is worth ten seconds.
 
-## G3 — The full run happens without me
+## G3 — The full run, launched detached, never waited on
 
-`npm run verify` is twelve minutes at three checks in parallel on a twenty-four
-core machine. Waiting on it four times was the single largest cost of the
-experiment — larger than every other overhead combined.
+The full run found five real defects that nothing else could see. It was also the
+single largest cost of the experiment — larger than every other overhead
+combined — because it took twelve minutes and got waited on four times.
 
-The fix is not to run it less. It found five real defects that nothing else
-could see. The fix is that **it never blocks anyone**:
+Both halves of that were fixed by one line. The concurrency cap was a flat 3, set
+years ago against a flake that no longer reproduces, on a machine with 24 cores:
 
-- a `post-commit` hook launches `proof.cjs HEAD` detached
-- single-flight: a new commit kills the in-flight run and starts on the new tip.
-  Nobody needs a verdict on an intermediate state
-- **green is silent.** Red writes `verify-out/RED.md` and nothing else
-- concurrency comes off the floor of three
+    3 at a time  →  ~12 min   637/637
+    8 at a time  →  2m 26s    637/637
+    8 at a time  →  2m 28s    636/637   ← the second run flaked
+
+The flake is worth reading, because it is the whole reason the cap existed. It
+was `localecho`, which asserts a *latency* — a keystroke painted within 32ms —
+and under seven sibling Electron processes the paint never landed in its window.
+One check with a timing budget was making the other eighty-five run at a fifth
+speed. It now runs alone, last; everything else keeps the full width.
+
+At two and a half minutes there is nothing left to engineer. No git hook, no
+single-flight lock, no notification bus — those were all designed to work around
+a cost that turned out to be a default nobody had re-measured. What remains is a
+habit:
+
+**Launch `node proof.cjs HEAD` in the background and keep working. Never wait on
+it.** Read the result when it lands, in whatever you are doing next.
+
+And the second-order effect, which was the real payoff: once the run is cheap it
+gets repeated, and **repetition is the only thing that exposes a coin flip.**
+
+Five runs of essentially the same commit gave 637/637, 636/637, 637/637,
+636/637, 631/635. Four different checks flipped across them. `637/637` was never
+a property of the code — it was a sample, and it was reported as proof twice.
+
+Two of the four are fixed (`orphan`, `localecho`). One is a latency claim that
+belongs in the solo lane (`electron`). One (`resume`) is unexplained and is
+written down rather than chased, because chasing every instrument defect the
+moment it appears is the runaway this whole document exists to stop.
+
+**The number to trust is not the pass count. It is the pass count repeated.** A
+single green full run means the suite did not fail this time.
+
+The one thing worth remembering: it proves the *commit*, not the working tree. If
+the answer matters, commit first.
 
 ## The rule that was missing
 
@@ -78,6 +123,18 @@ before touching anything. The first full run of the experiment contained both th
 CLI-port defect and the missing-build defect. Only the first was acted on, so the
 second cost an extra twelve-minute run to rediscover. That was not the loop's
 fault; it was a batching failure with the log already open.
+
+## The whole loop, as it is actually run
+
+    write for twenty to forty minutes inside one file family
+    node verify.cjs <check> <neighbour>     # only when there is a real question
+    node verify.cjs --prove <check>         # when "did that do anything" is worth 10s
+    git commit                              # on coherence, not on a step
+    node proof.cjs HEAD &                   # detached, never waited on
+
+The guards run inside every one of those invocations and cost nothing. That is
+the entire mechanism. If a step ever needs a name, a tier, or a decision tree, it
+is not part of this loop.
 
 ## Deleted
 
