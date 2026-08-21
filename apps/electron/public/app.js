@@ -3007,6 +3007,52 @@
       ' — a terminal needs at least ' + r.need + '. Close a pane, or make the window bigger.';
   }
 
+  // A layout saved on a big screen and reopened on a small one used to rebuild
+  // itself at any size — eight panes at seventeen columns, every one unusable.
+  // Folding moves a pane's tabs into its neighbour: moveTermToPane already
+  // collapses an emptied pane, so nothing is closed and no shell is killed.
+  // That distinction is the whole design — closePane would end sessions the
+  // user never asked to end.
+  var foldTimer = null;
+  function paneCols(p) { var t = activeTermOf(p); return (t && t.term && t.term.cols) || 0; }
+  function paneRows(p) { var t = activeTermOf(p); return (t && t.term && t.term.rows) || 0; }
+  function panesInCol(col) { return panes.filter(function (p) { return p.col === col; }); }
+  function absorbPane(from, to) {
+    if (!from || !to || from === to || from.pinned || panes.length <= 1) return false;
+    from.terms.slice().forEach(function (t) { moveTermToPane(t, to); });
+    panes.forEach(fitActive);
+    return true;
+  }
+  function foldOnce() {
+    var cols = [].slice.call(wsrow.querySelectorAll('.wscol'));
+    for (var i = 0; i < cols.length; i++) {
+      var stack = panesInCol(cols[i]);
+      if (stack.length < 2) continue;
+      var shortest = stack.reduce(function (a, p) { return Math.min(a, paneRows(p) || 999); }, 999);
+      if (shortest < MIN_ROWS && absorbPane(stack[stack.length - 1], stack[stack.length - 2])) return true;
+    }
+    if (cols.length > 1) {
+      var narrowest = panes.reduce(function (a, p) { return Math.min(a, paneCols(p) || 999); }, 999);
+      if (narrowest < MIN_COLS) {
+        var victims = panesInCol(cols[cols.length - 1]);
+        var host = panesInCol(cols[cols.length - 2]).pop();
+        if (victims.length && host && absorbPane(victims[victims.length - 1], host)) return true;
+      }
+    }
+    return false;
+  }
+  function foldToFloor() {
+    if (document.body.getAttribute('data-mode') === 'narrow') return 0;
+    var n = 0;
+    while (n < 40 && foldOnce()) n++;
+    if (n) {
+      persistLive();
+      notify('That layout did not fit this window',
+        n + ' pane' + (n === 1 ? '' : 's') + ' folded into tabs — every session is still open, none were closed.');
+    }
+    return n;
+  }
+
   function splitRight(p, shellKey, cwd) {
     var noRoom = splitBlocked(p, 'right');
     if (noRoom) { notify('No room to split', noRoom); return null; }
@@ -3971,6 +4017,10 @@
     updateChrome();
     if (panes[0]) focusPane(panes[0].id);
     setTimeout(function () { panes.forEach(fitActive); }, 60);
+    // After the fit has settled, not before — the terminals have to report
+    // their real size before anything can decide the layout does not fit.
+    clearTimeout(foldTimer);
+    foldTimer = setTimeout(foldToFloor, 500);
   }
   // Layouts live in a small popover anchored to the sidebar button — saving and
   // loading are the same short list, so they are one surface, not two modals.

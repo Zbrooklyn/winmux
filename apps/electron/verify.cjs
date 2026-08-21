@@ -130,6 +130,7 @@ const PORT_BASE = (() => {
 // #246: three ports the port check holds itself, so it can prove the
 // every-candidate-taken refusal without starving the other auto-picking checks.
 const PORT_SPLITFLOOR = 9900;  // AUDIT-T1: splitting has a floor, and the refusal is said out loud
+const PORT_FOLDFIT = 9901;     // AUDIT-T2: a saved layout too big for this window folds into tabs, losing nothing
 const PORTS_EXHAUST_RAW = [9952, 9953, 9954];
 const PORTS_EXHAUST = PORTS_EXHAUST_RAW.map((p) => p + PORT_BASE);
 const PORT_DIFF = 9956;       // ST5: git diff opens as a pane tab (leaf), not a side dock
@@ -5483,6 +5484,59 @@ check('doing', PORT_DOING, async ({ browser, base, t, shot }) => {
 // columns wide holding a shell you cannot type into, with no word about it.
 // This measures the tightest TERMINAL, not the pane count — the floor is about
 // how small a terminal got, and only the terminal knows that.
+// AUDIT-T2. A layout saved on a big screen and reopened on a small one rebuilt
+// itself at any size: eight panes at seventeen columns, every one unusable, and
+// no word about it. Folding must move tabs, never close panes — the sessions
+// are the user's, and "it did not fit" is not consent to end them.
+const FOLD_SEED = (n) => ({
+  v: 4,
+  group: 'Workspace',
+  cols: Array.from({ length: n }, (_, i) => ([{
+    active: 0,
+    tabs: [{ type: 'terminal', group: 'Workspace', title: 'seed-' + (i + 1), shell: '', cwd: '' }],
+  }])),
+});
+
+check('foldfit', PORT_FOLDFIT, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  // Installed BEFORE the first navigation: the app writes its own ct-live as
+  // soon as it loads, so a seed applied afterwards is already gone.
+  await page.addInitScript((seed) => {
+    try { localStorage.setItem('ct-live', JSON.stringify(seed)); } catch (e) {}
+  }, FOLD_SEED(8));
+  await page.setViewportSize({ width: 900, height: 600 });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await appReady(page);
+  await page.waitForTimeout(3500);
+
+  const state = async () => {
+    // .nrow only exists once the panel is opened — reading it closed returns an
+    // empty list, which looks exactly like "nothing was announced".
+    try { await page.click('#open-notif'); } catch (e) {}
+    await page.waitForTimeout(400);
+    const s = await page.evaluate(() => ({
+      panes: document.querySelectorAll('.workspace .pane').length,
+      tabs: document.querySelectorAll('.workspace .ptab').length,
+      narrow: window.__winmuxNarrowest ? window.__winmuxNarrowest() : null,
+      notes: [].map.call(document.querySelectorAll('.nrow .nt'), (e) => e.textContent),
+    }));
+    try { await page.keyboard.press('Escape'); } catch (e) {}
+    await page.waitForTimeout(200);
+    return s;
+  };
+
+  const after = await state();
+  t('the saved eight panes did not all come back at an unusable size',
+    after.panes < 8, { panes: after.panes });
+  t('no terminal is left below the floor after folding',
+    after.narrow && after.narrow.cols >= 24 && after.narrow.rows >= 6, after.narrow);
+  t('every session survives — folded into tabs, not closed',
+    after.tabs === 8, { tabs: after.tabs });
+  t('and it says what it did, rather than quietly rearranging your work',
+    after.notes.some((x) => /did not fit/i.test(x)), after.notes.slice(0, 3));
+  await shot(page, 'foldfit');
+});
+
 check('splitfloor', PORT_SPLITFLOOR, async ({ browser, base, t, shot }) => {
   const page = await desktop(browser);
   await page.goto(base, { waitUntil: 'domcontentloaded' });
