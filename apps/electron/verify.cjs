@@ -5761,14 +5761,45 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   const envFor = (port) => Object.assign({}, envByPort[port],
     (port === PORT_GPU || port === PORT_LIG || port === PORT_DPRFIX) ? {} : { WINMUX_FORCE_DOM: '1' });
 
-  // Probing every port up front is cheap — a TCP connect, no process — and it
-  // keeps the one thing the eager start was good for: a stray process sitting on
-  // one of our ports gets named now, not twenty minutes into the run.
-  const taken = [];
-  for (const port of ports) if (await inUse('127.0.0.1', port)) taken.push(port);
-  console.log(taken.length
-    ? 'heads up — these ports are already in use, their checks will refuse: ' + taken.join(', ')
-    : 'all ' + ports.length + ' ports are free; servers start as their checks come up');
+  // RESERVE every port up front, with a bare socket rather than a server.
+  //
+  // The eager start was doing two jobs and I only noticed one of them. Besides
+  // running the engines, holding all ~70 ports FENCED THE RANGE OFF: several
+  // things in this suite start a server with no port forced and let it pick for
+  // itself, and with every harness port already bound they could not land on
+  // one. Starting lazily emptied the range, so an auto-picking server squatted
+  // on 9912 and the check that came to use it threw "already taken by another
+  // process ... held by node". That is a regression I introduced, and I had
+  // talked myself out of this exact explanation once by reading only the failing
+  // check instead of the interaction.
+  //
+  // A listening socket costs a file handle, not a process, so the reservation
+  // survives without the memory that made a full run unfinishable. Each one is
+  // released in ensureServer, immediately before its real engine binds.
+  const holds = {};
+  const takenByOthers = [];
+  for (const port of ports) {
+    try {
+      holds[port] = await new Promise((resolve, reject) => {
+        const s = net.createServer();
+        s.once('error', reject);
+        s.listen(port, '127.0.0.1', () => resolve(s));
+      });
+    } catch (e) { takenByOthers.push(port); }   // someone else's — server() will refuse it
+  }
+  console.log(takenByOthers.length
+    ? 'heads up — these ports are already in use, their checks will refuse: ' + takenByOthers.join(', ')
+    : 'reserved all ' + ports.length + ' ports; engines start as their checks come up');
+
+  // Drop our reservation so the real engine can take the socket. Awaiting the
+  // close matters: binding while the placeholder is still listening is an
+  // EADDRINUSE the engine would report as a foreign process — us.
+  const releaseHold = (port) => new Promise((resolve) => {
+    const h = holds[port];
+    if (!h) return resolve();
+    delete holds[port];
+    h.close(() => resolve());
+  });
 
   const starting = {};
   const ensureServer = (port) => {
@@ -5776,7 +5807,7 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
     // Two workers can want the same shared port at once — memoise the promise so
     // they wait on one start rather than racing two servers onto one socket.
     if (!starting[port]) {
-      starting[port] = server(port, envFor(port)).then((s) => {
+      starting[port] = releaseHold(port).then(() => server(port, envFor(port))).then((s) => {
         servers[port] = s;
         console.log('    ' + (s.foreign ? 'REFUSED :' + port + ' — something else is on it'
           : (s.borrowed ? 'borrowed the server on :' : 'started :') + port));
@@ -5878,6 +5909,8 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   // catches the stragglers: a port whose checks were all skipped, or one a check
   // restarted for itself after the count had run out.
   for (const port of ports) if (servers[port]) { try { servers[port].stop(); } catch (e) {} }
+  // And any reservation never claimed — a port whose checks all skipped.
+  for (const port of Object.keys(holds)) { try { holds[port].close(); } catch (e) {} }
 
   let bad = 0, skipped = 0, total = 0;
   console.log('');
