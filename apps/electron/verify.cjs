@@ -112,9 +112,25 @@ const PORT_WINGET = 9949;     // distribution: the winget manifest generator emi
 const PORT_TUNOVR = 9950;     // #246: the WINMUX_TUNNELLED_PORTS override is honored (no fail-open under load)
 const PORT_LIG = 9955;        // #238: the ligature switch really shapes glyphs, and pays for it in renderer
 const PORT_RESUME = 9951;     // #240: an armed tab auto-runs its resume command on a cold reopen, not on a warm reattach
+// A second copy of the suite cannot run beside the first, because these numbers
+// are machine-global — worktree isolation stops a run reading a mutating tree,
+// but it does nothing at all about contention. WINMUX_VERIFY_PORT_BASE shifts
+// this suite's whole namespace so a pinned full run and live targeted runs can
+// coexist. Defined here, above every port that depends on it.
+const PORT_BASE = (() => {
+  const n = Number(process.env.WINMUX_VERIFY_PORT_BASE) || 0;
+  if (!n) return 0;
+  if (n % 100 !== 0 || n < -400 || n > 400) {
+    console.error('\nWINMUX_VERIFY_PORT_BASE must be a multiple of 100 between -400 and 400 (got ' + n + ').\n');
+    process.exit(2);
+  }
+  return n;
+})();
+
 // #246: three ports the port check holds itself, so it can prove the
 // every-candidate-taken refusal without starving the other auto-picking checks.
-const PORTS_EXHAUST = [9952, 9953, 9954];
+const PORTS_EXHAUST_RAW = [9952, 9953, 9954];
+const PORTS_EXHAUST = PORTS_EXHAUST_RAW.map((p) => p + PORT_BASE);
 const PORT_DIFF = 9956;       // ST5: git diff opens as a pane tab (leaf), not a side dock
 const PORT_LEAFPERSIST = 9957; // ST6: non-terminal leaves survive a page reload
 const PORT_PREDICT = 9958;    // Phase 2: pwsh PSReadLine inline history prediction + RightArrow accept
@@ -402,9 +418,43 @@ function serverAuto() {
 // server is already running. `port` says which of the two it needs.
 
 const CHECKS = [];
+
+// ---- Tier 0: the ports are not trusted to a reader -------------------------
+// Servers are memoised per port, so two checks on one port means the second one
+// silently receives the FIRST one's server, built for the first one's
+// conditions, and grades that. The harness doing the exact thing it exists to
+// catch the product doing. It is also invisible: the run stays green until
+// scheduling puts the wrong check first, then a red appears somewhere unrelated
+// and moves the next time.
+//
+// Some checks DO share a server on purpose and the refcount in `owed` exists for
+// them. Sharing is fine when intended; the danger is sharing nobody meant. So
+// intent is written down here, and a pair not on this list is a mistake by
+// definition.
+const SHARED_ON_PURPOSE = {
+  brand: 1, fresh: 1, busyport: 1, launchfail: 1, reason: 1,  // all ride the PORT_BUSY server
+  electron: 1, groups: 1,
+  onboard: 1, profile: 1,
+};
+// Not every port in this file flows through check(). The exhaustion test binds
+// PORTS_EXHAUST itself; a check quietly assigned one of those numbers dies with
+// a raw EADDRINUSE from inside an unrelated check. Seed them so the guard sees
+// the whole picture, not the half that happens to be registered.
+const PORT_OWNER = new Map();
+PORTS_EXHAUST_RAW.forEach((p) => PORT_OWNER.set(p, 'the port-exhaustion test'));
+
 // A check may carry an env override for its server (last arg) — e.g. the update
 // check forces WINMUX_FAKE_LATEST so the badge can be proven without a real release.
-const check = (id, port, run, env) => CHECKS.push({ id, port, run, env });
+const check = (id, port, run, env) => {
+  const owner = PORT_OWNER.get(port);
+  if (owner && !(SHARED_ON_PURPOSE[owner] && SHARED_ON_PURPOSE[id])) {
+    console.error('\nverify.cjs is misconfigured: "' + owner + '" and "' + id + '" both claim port ' + port
+      + '.\nTwo checks on one port grade each other’s server. Give one of them a free port.\n');
+    process.exit(2);
+  }
+  PORT_OWNER.set(port, id);
+  CHECKS.push({ id, port: port + PORT_BASE, run, env });
+};
 
 // One idiom, copy-pasted 29 times: navigate, then sleep 4500ms hoping the app
 // has booted and a shell is answering. Three of today's honest-failure bugs came
