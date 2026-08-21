@@ -1150,6 +1150,18 @@
   // bypassing only the throttle timer, so the harness can prove a row reflects the
   // latest output deterministically.
   window.__winmuxCaptureDoing = function () { var n = 0; eachTerm(function (t) { if (captureDoing(t)) n++; }); return n; };
+  // AUDIT-T1 observability: the narrowest and shortest terminal actually on
+  // screen, in characters. That is the number the split floor exists to protect,
+  // and the only honest way to ask "did the layout stay usable" — pane pixels
+  // don't answer it, because the chrome inside a pane never shrinks.
+  window.__winmuxNarrowest = function () {
+    var cols = Infinity, rows = Infinity, n = 0;
+    eachTerm(function (t) {
+      if (!t.term || !t.term.cols || !t.host || t.host.style.display === 'none') return;
+      n++; cols = Math.min(cols, t.term.cols); rows = Math.min(rows, t.term.rows);
+    });
+    return { terms: n, cols: n ? cols : 0, rows: n ? rows : 0 };
+  };
   // SP-5 observability hook: flip one terminal's status and report how long the
   // repaint work took, so the harness can prove a fleet tick costs O(row), not
   // O(sidebar), at any scale.
@@ -2949,7 +2961,72 @@
     }
     closePane(p);
   }
+  // ---- the floor under splitting ---------------------------------- AUDIT-T1
+  // Every split hands one more pane a share of a width that never grows, while
+  // the chrome each pane carries stays exactly the same size. Left alone the
+  // arithmetic just goes negative: measured live, this app went to 19 panes at
+  // 50px each with the terminal down to 4 columns — narrower than the word
+  // "PowerShell" — and not one of those splits was declined. tmux, Zellij,
+  // iTerm2 and Windows Terminal all refuse long before that point.
+  //
+  // The floor is counted in characters, not pixels, because characters are what
+  // a terminal is measured in and what stops being usable first. 24 columns
+  // still holds a prompt and a short command; 6 rows still shows the answer.
+  // Below that the pane is decoration.
+  // The conversion from pixels to characters is taken from THIS terminal as it
+  // is actually rendered — its own width divided by its own column count —
+  // rather than from the renderer's ideal cell size. The two differ: xterm
+  // loses a little to internal padding and to flooring, so an ideal-cell sum
+  // reads one column wider than the pane ever turns out to be, and the first
+  // version of this floor let exactly one split through on that difference.
+  // Measuring the relationship instead of deriving it also errs on the safe
+  // side, because the live column count is itself already floored.
+  var MIN_COLS = 24, MIN_ROWS = 6;
+  function perChar(t) {
+    var w = t.host.clientWidth / t.term.cols;
+    var h = t.host.clientHeight / t.term.rows;
+    return { w: w > 0 ? w : 9, h: h > 0 ? h : 18 };
+  }
+  // What a split would leave behind, in characters. Returns null when there is
+  // nothing measurable to reason about — an empty pane, a browser tab, the
+  // phone layout, which does not tile at all. An honest "don't know" never
+  // blocks: refusing on a guess would be its own defect.
+  function splitRoom(p, dir) {
+    if (document.body.getAttribute('data-mode') === 'narrow') return null;
+    var t = p && activeTermOf(p);
+    if (!t || !t.term || !t.host || !t.term.cols || !t.term.rows) return null;
+    if (!p.el.clientWidth || !t.host.clientWidth) return null;
+    var cell = perChar(t);
+    if (dir === 'down') {
+      var col = p.col;
+      if (!col || !col.clientHeight || !t.host.clientHeight) return null;
+      var np = col.querySelectorAll('.pane').length;
+      var dv = col.querySelector('.wsdiv');
+      var dh = (dv && dv.getBoundingClientRect().height) || 4;
+      var chromeH = p.el.clientHeight - t.host.clientHeight;
+      var eachH = (col.clientHeight - np * dh) / (np + 1);
+      return { what: 'row', have: Math.floor((eachH - chromeH) / cell.h), need: MIN_ROWS };
+    }
+    if (!wsrow.clientWidth) return null;
+    var nc = wsrow.querySelectorAll('.wscol').length;
+    var dh2 = wsrow.querySelector(':scope > .wsdiv');
+    var dw = (dh2 && dh2.getBoundingClientRect().width) || 4;
+    var chromeW = p.el.clientWidth - t.host.clientWidth;
+    var eachW = (wsrow.clientWidth - nc * dw) / (nc + 1);
+    return { what: 'column', have: Math.floor((eachW - chromeW) / cell.w), need: MIN_COLS };
+  }
+  // The refusal has to be said out loud. A split that silently does nothing is
+  // the same defect as a close that silently does nothing.
+  function splitBlocked(p, dir) {
+    var r = splitRoom(p, dir);
+    if (!r || r.have >= r.need) return '';
+    var n = Math.max(0, r.have);
+    return 'Each pane would be about ' + n + ' ' + r.what + (n === 1 ? '' : 's') +
+      ' — a terminal needs at least ' + r.need + '. Close a pane, or make the window bigger.';
+  }
   function splitRight(p, shellKey, cwd) {
+    var noRoom = splitBlocked(p, 'right');
+    if (noRoom) { notify('No room to split', noRoom); return null; }
     clearZoom();
     var np = makePane(makeCol());
     newTerm(np, shellKey || startShell(), cwd);
@@ -2958,6 +3035,8 @@
     return np;
   }
   function splitDown(p, shellKey, cwd) {
+    var noRoom = splitBlocked(p, 'down');
+    if (noRoom) { notify('No room to split', noRoom); return null; }
     clearZoom();
     var np = makePane(p.col, p);
     newTerm(np, shellKey || startShell(), cwd);
@@ -3320,6 +3399,11 @@
       if (z === 'center') { moveTermToPane(t, p); return; }
       // Same pane, only tab, nothing to split into — leave it alone.
       if (t.paneId === p.id && p.terms.length === 1) return;
+      // AUDIT-T1: dropping a tab on an edge is a split like any other, and it
+      // was the one route that could still make a 4-column pane after the
+      // buttons and the command line learned to refuse.
+      var dropNo = splitBlocked(p, (z === 'left' || z === 'right') ? 'right' : 'down');
+      if (dropNo) { notify('No room to split', dropNo); return; }
       clearZoom();
       var np;
       if (z === 'left' || z === 'right') np = makePane(makeColAt(p.col, z === 'left'));
@@ -5816,8 +5900,14 @@
     if (cmd === 'split') {
       var sp = paneById(activePaneId) || panes[0];
       if (!sp) throw new Error('no pane to split');
-      (args.dir === 'down' ? splitDown : splitRight)(sp, args.shell || startShell(), args.cwd);
-      return { ok: true, dir: args.dir === 'down' ? 'down' : 'right' };
+      var sdir = args.dir === 'down' ? 'down' : 'right';
+      // AUDIT-T1. An agent is the caller most able to split a window into
+      // nothing, and least able to see that it has. It gets the refusal as an
+      // error it cannot mistake for success, not a notification it never reads.
+      var sno = splitBlocked(sp, sdir);
+      if (sno) throw new Error('no room to split — ' + sno);
+      (sdir === 'down' ? splitDown : splitRight)(sp, args.shell || startShell(), args.cwd);
+      return { ok: true, dir: sdir };
     }
     // AUDIT-T4. The command surface had fifteen verbs and not one of them closed
     // anything: new-tab and split created, everything else read. So an agent

@@ -149,6 +149,7 @@ const PORT_KEYTRUTH = 9962;    // AUDIT-2: no shortcut is bound to a key the ter
 const PORT_FLEETOPEN = 9964;   // AUDIT-B6/B7: the fleet list opens, remembers, and the guide's button shows it
 const PORT_CWDGONE = 9965;     // AUDIT-B10: a project whose folder moved says so instead of opening elsewhere
 const PORT_CLICLOSE = 9966;    // AUDIT-T4: the command surface can put a layout back, not only grow it
+const PORT_SPLITFLOOR = 9968;  // AUDIT-T1: splitting has a floor, and the refusal is said out loud
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -959,6 +960,90 @@ check('keytruth', PORT_KEYTRUTH, async ({ browser, base, t, shot }) => {
     window.__winmuxAdoptKeymap({ find: 'Ctrl+F', 'close-tab': 'Ctrl+Alt+7' }));
   t('a config file offering a terminal key is dropped, the good entry beside it kept',
     adopted && adopted.find === undefined && adopted['close-tab'] === 'Ctrl+Alt+7', adopted);
+});
+
+// --- splitfloor: tiling has a floor, and hitting it is said out loud --------
+// AUDIT-T1. Splitting divided a width that never grows between one more pane
+// each time, while the chrome inside a pane stayed exactly the same size, and
+// nothing anywhere said stop. Measured live before the fix: 19 panes, 50px
+// apiece, the terminal down to 4 columns — and not one of those splits was
+// declined. Every other tiler refuses long before that.
+//
+// The floor is asserted in CHARACTERS, not pane pixels, because pixels can't
+// answer the question: a 200px pane is fine at one font size and useless at
+// another, and the chrome inside it never shrinks. So this check splits until
+// the app says no, then reads the narrowest terminal actually on screen.
+check('splitfloor', PORT_SPLITFLOOR, async ({ browser, base, t, shot }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_SPLITFLOOR), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => { o += d; });
+    proc.stderr.on('data', (d) => { e += d; });
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await appReady(page);
+
+  const panes = () => page.evaluate(() => document.querySelectorAll('.pane').length);
+  const narrow = () => page.evaluate(() => window.__winmuxNarrowest());
+
+  // 1. The floor must not get in the way of ordinary use. One split on a full
+  //    window is the most normal thing this app does.
+  const first = await winmux(['split', 'right']);
+  await page.waitForTimeout(1500);
+  t('a normal split still just works — the floor is not a tax on everyone',
+    first.code === 0 && (await panes()) === 2, { code: first.code, panes: await panes(), err: first.err });
+
+  // 2. Now do what nothing stopped before: keep going. The cap of 30 is a
+  //    runaway guard, not the expected count — if it is ever reached the app
+  //    did not refuse and this check has to fail, loudly.
+  let refusal = null, tries = 0;
+  while (tries++ < 30) {
+    const r = await winmux(['split', 'right']);
+    await page.waitForTimeout(700);
+    if (r.code !== 0) { refusal = r; break; }
+  }
+  const atStop = await panes();
+  t('the app eventually refuses to split — it does not divide forever',
+    !!refusal, { refused: !!refusal, splitsAccepted: tries, panes: atStop });
+
+  // 3. A refusal that reads like a success is worse than no refusal at all.
+  t('the refusal is a real failure the caller cannot miss',
+    !!refusal && refusal.code !== 0 && /no room to split/i.test(refusal.err),
+    refusal && { code: refusal.code, err: refusal.err });
+  t('and it says how much room there is and how much is needed, in a sentence',
+    !!refusal && /\d+\s+columns?/.test(refusal.err) && /at least\s+\d+/.test(refusal.err),
+    refusal && refusal.err);
+
+  // 4. The refusal must not half-happen. A pane that appears and then is
+  //    disowned is the worst of both.
+  const after = await winmux(['split', 'right']);
+  await page.waitForTimeout(700);
+  t('a refused split changes nothing — no half-made pane left behind',
+    after.code !== 0 && (await panes()) === atStop, { panes: await panes(), was: atStop });
+
+  // 5. The point of all of it: what is on screen is still a terminal.
+  const n = await narrow();
+  t('every terminal left on screen is still wide enough to use', n.cols >= 24, n);
+  t('and tall enough to use', n.rows >= 6, n);
+  await shot(page, 'at-the-floor');
+
+  // 6. Stacking has its own floor, in rows, and its own refusal.
+  const down = [];
+  for (let i = 0; i < 30; i++) {
+    const r = await winmux(['split', 'down']);
+    await page.waitForTimeout(700);
+    down.push(r.code);
+    if (r.code !== 0) break;
+  }
+  const lastDown = down[down.length - 1];
+  t('stacking downward is refused on its own terms, in rows',
+    lastDown !== 0, { codes: down.length, last: lastDown });
+  const n2 = await narrow();
+  t('and no terminal was left too short to read', n2.rows >= 6, n2);
+  await page.close();
 });
 
 // --- cliclose: the command surface can put a layout back, not only grow it --
