@@ -698,11 +698,11 @@
   /* U4 — the approve/deny action row + the live-prompt preview inside the panel. */
   .sxpv .pv-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
   .sxpv .pv-acts .pv-btn { width: auto; flex: 1 1 auto; min-width: 96px; }
-  /* Phase 8 — Approve leads, Reject is the error-tinted secondary (Option-B card). */
+  /* Phase 8 — Approve leads, Deny is the error-tinted secondary (Option-B card). */
   .sxpv .pv-acts .pv-approve { flex: 1.6 1 auto; }
-  .sxpv .pv-acts .pv-reject { color: var(--err);
+  .sxpv .pv-acts .pv-deny { color: var(--err);
     border-color: color-mix(in srgb, var(--err) 45%, transparent); background: transparent; }
-  .sxpv .pv-acts .pv-reject:hover { background: color-mix(in srgb, var(--err) 12%, transparent); }
+  .sxpv .pv-acts .pv-deny:hover { background: color-mix(in srgb, var(--err) 12%, transparent); }
   .sxpv .pv-screen { margin: 0 0 12px; padding: 10px 11px; border-radius: 8px; background: var(--term-bg);
     border: 1px solid var(--border); color: var(--muted); font-size: 11.5px; line-height: 1.5;
     white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; }
@@ -1050,7 +1050,12 @@
       </div>
       <div class="wc-pt">
         <span class="wc-ic"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg></span>
-        <div><div class="wc-h">Approve from anywhere</div><div class="wc-s">When an agent needs a yes, its row turns amber. <span class="kbd sm">Approve</span> or <span class="kbd sm">Deny</span> right from the sidebar, on this PC or your phone.</div></div>
+        <!-- AUDIT-B8. This used to promise Approve OR Deny "right from the sidebar".
+             Only Approve is on the row; Deny is one click further in, on the card the
+             row opens. Promising a control that is not where you said it is costs more
+             than the click it saves — the person looks for it, does not find it, and
+             stops trusting the rest of the sentence. -->
+        <div><div class="wc-h">Approve from anywhere</div><div class="wc-s">When an agent needs a yes, its row turns amber. <span class="kbd sm">Approve</span> straight from the sidebar, or open the row to <span class="kbd sm">Deny</span> — on this PC or your phone.</div></div>
       </div>
       <div class="wc-pt">
         <span class="wc-ic"><svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg></span>

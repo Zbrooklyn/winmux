@@ -1352,9 +1352,9 @@
       primary = '<div class="pv-primary hot"><div class="pv-lbl">Needs your OK</div>' + ask +
         '<div class="pv-acts">' +
         '<button class="btn primary pv-btn pv-approve" data-pv="approve">Approve</button>' +
-        '<button class="btn pv-btn pv-reject" data-pv="deny">Reject</button>' +
+        '<button class="btn pv-btn pv-deny" data-pv="deny">Deny</button>' +
         '</div>' +
-        '<div class="pv-hint">Approve sends Enter to continue · Reject sends Esc to cancel · or Open to type a full reply</div></div>';
+        '<div class="pv-hint">Approve sends Enter to continue · Deny sends Esc to cancel · or Open to type a full reply</div></div>';
     } else if (t.status === 'closed') {
       primary = '<div class="pv-primary hot"><div class="pv-lbl">Session ended</div>' +
         '<div class="pv-ask">This session has closed.</div>' +

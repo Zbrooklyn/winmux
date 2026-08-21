@@ -6371,14 +6371,35 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
     const card = document.querySelector('.sxpv.on');
     const approve = document.querySelector('.pv-approve');
     const lbl = (document.querySelector('.pv-lbl') || {}).textContent || null;
+    // AUDIT-B8: read the words while the card is still open. Approve closes it,
+    // so anything asked afterwards is asking an element that no longer exists —
+    // and comes back empty, which reads as "the word is gone" rather than "I
+    // looked too late".
+    const no = (document.querySelector('.pv-deny') || {}).textContent || '';
+    const hint = (document.querySelector('.pv-hint') || {}).textContent || '';
     if (approve) approve.click();
     await new Promise((r) => setTimeout(r, 250));
-    return { cardOpen: !!card, hadApprove: !!approve, lbl, sent: window.__sent };
+    return { cardOpen: !!card, hadApprove: !!approve, lbl, no, hint, sent: window.__sent };
   });
   const sentEnter = !!res && (res.sent || []).some((d) => { try { return JSON.parse(d).d === '\r'; } catch (e) { return false; } });
   t('the approval card opens with an Approve button labelled "Needs your OK"',
     !!res && res.cardOpen === true && res.hadApprove === true && res.lbl === 'Needs your OK', res);
   t('clicking Approve sends Enter to the shell over its socket', sentEnter, { sent: res && res.sent });
+
+  // AUDIT-B8. The app had three words for two actions: the welcome screen said
+  // "Deny", the card said "Reject", and the notification said "Denied". Nobody
+  // reads all three at once, which is exactly why it survives — and why it
+  // quietly teaches a person that the words in this app are approximate.
+  const words = { no: (res && res.no) || '', hint: (res && res.hint) || '' };
+  t('the button that refuses is called Deny, not a third word', words.no.trim() === 'Deny', words.no);
+  t('and the line under it uses that same word', /Deny sends Esc/.test(words.hint), words.hint);
+  t('the word "Reject" is gone from the card entirely', !/Reject/i.test(words.hint + words.no), words);
+  // The welcome copy is read from the page the server actually serves, not from
+  // a DOM this harness has already dismissed the onboarding out of.
+  const shipped = (await get(base + '/')).body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  const promise = (shipped.match(/When an agent needs a yes.{0,240}/) || [''])[0];
+  t('the welcome screen says where Deny actually is, instead of promising it on the row',
+    /straight from the sidebar/i.test(promise) && /open the row to/i.test(promise), promise);
   await shot(page, 'approvecard');
   await page.close();
 });
