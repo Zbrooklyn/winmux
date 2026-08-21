@@ -63,6 +63,18 @@ process.on('SIGINT', () => { cleanup(); process.exit(130); });
       }
     }
     const cwd = path.join(tree, rel);
+
+    // The TypeScript output is not in git, so a fresh worktree has none of it —
+    // and `node verify.cjs` does not build. That is why the project's own entry
+    // point is `npm run verify` (build, THEN verify): five checks load
+    // dist-electron/*.js directly and fail in 0s without it. Proving a commit
+    // means proving what that commit compiles to, so the build happens here, and
+    // a build failure aborts the run instead of being reported as five red
+    // product checks.
+    console.log('compiling the pinned source…');
+    const tsc = require.resolve('typescript/bin/tsc', { paths: [ROOT] });
+    execFileSync(process.execPath, [tsc, '-p', 'tsconfig.electron.json'], { cwd, stdio: 'inherit' });
+
     const log = fs.createWriteStream(logFile);
     const code = await new Promise((resolve) => {
       const p = spawn(process.execPath, ['verify.cjs', ...only], {

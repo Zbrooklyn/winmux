@@ -82,6 +82,21 @@ const P = (n) => n + PORT_BASE;
   }
 })();
 
+// Same idea, different lie. `node verify.cjs` does not compile anything, but
+// five checks load dist-electron/*.js and fail in zero seconds without it — as
+// five red PRODUCT checks, which is the worst possible way to report a missing
+// build step. The project's real entry point is `npm run verify` (build, then
+// verify); running the file bare in a tree that has never been built produced a
+// whole afternoon of green targeted runs sitting on top of it.
+(() => {
+  if (require('fs').existsSync(require('path').join(__dirname, 'dist-electron', 'main.js'))) return;
+  console.error('\nverify.cjs: dist-electron is missing — this tree has never been compiled.'
+    + '\nFive checks load it directly and would report the missing build as product failures.'
+    + '\n\n  npm run build:electron     (then re-run)'
+    + '\n  npm run verify             (builds first — the entry point that cannot get this wrong)\n');
+  process.exit(2);
+})();
+
 // Two ports on purpose. The busy one is where we prove that a phone flip which
 // cannot bind MUST fail politely instead of taking the app down with it.
 // It used to be 8799, borrowed from tailscaled's accidental hold on that port —
