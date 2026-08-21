@@ -68,7 +68,12 @@ const P = (n) => n + PORT_BASE;
     if (/PORTS_EXHAUST_RAW\s*=/.test(line)) return;   // raw on purpose; mapped through P below
     const code = line.split('//')[0];
     let m;
-    const re = /(?<![\w.\-])99[0-9][0-9](?![\w])/g;
+    // No hyphen in the lookbehind, deliberately. The first version excluded it
+    // to avoid false positives and so walked straight past
+    // 'workspace-9978.json' — a port baked into a FILENAME, where the check
+    // asserted on the shifted name and told the engine to write the unshifted
+    // one. A port is a port wherever it is spelled.
+    const re = /(?<![\w.])99[0-9][0-9](?![\w])/g;
     while ((m = re.exec(code))) {
       if (code.slice(Math.max(0, m.index - 2), m.index) !== 'P(') stray.push((i + 1) + ': ' + line.trim());
     }
@@ -2181,7 +2186,7 @@ check('workspace', PORT_WORKSPACE, async ({ browser, base, t, shot }) => {
   } finally {
     await pageB.close();
   }
-}, { WINMUX_WORKSPACE_FILE: path.join(OUT, 'workspace-9978.json') });
+}, { WINMUX_WORKSPACE_FILE: path.join(OUT, 'workspace-' + PORT_WORKSPACE + '.json') });
 
 // PT-4: saved scrollbacks are a visible list, not 235 invisible files. The engine
 // lists every backlog entry with its expiry (STATE.md: silent expiry is a contract
@@ -3385,7 +3390,10 @@ check('drop', PORT_DROP, async ({ browser, base, t }) => {
   t('contents decide it when two folders share a name',
     picked.length && picked[0].path.toLowerCase() === right.toLowerCase(), picked[0]);
 
-  const none = await find('no-folder-is-called-this-9917', ['a', 'b']);
+  // The suffix used to be -9917, which is port-shaped. It was never a port, but
+  // the raw-literal scan cannot know that, and an exemption list is how a guard
+  // starts dying. Cheaper to pick a string that is obviously not a port.
+  const none = await find('no-folder-is-called-this-zzq', ['a', 'b']);
   t('a folder that is not on this machine comes back empty, not wrong', none.length === 0, none);
 
   const page = await desktop(browser);
