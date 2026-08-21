@@ -28,95 +28,20 @@ const { chromium } = require('playwright');
 const ROOT = __dirname;
 const OUT = path.join(ROOT, 'verify-out');
 
-// Two ports on purpose. The busy one is where we prove that a phone flip which
-// cannot bind MUST fail politely instead of taking the app down with it.
-// It used to be 8799, borrowed from tailscaled's accidental hold on that port —
-// which meant the check silently skipped on any machine where the accident
-// wasn't happening, and "a skip is not a pass". Now the harness creates the
-// collision itself (holdTailnet below), so the check runs everywhere Tailscale
-// runs. 9914 is deliberately outside PORT_CANDIDATES and outside the serve
-// rules on this machine.
-const PORT_BUSY = 9914;
-const PORT_FREE = 9912;
-// The remote group opens the phone door for real, so it gets its own port —
-// sharing PORT_FREE would have two groups fighting over one phone switch.
-const PORT_REMOTE = 9911;
-// The trust group needs a guest list nobody else is writing to, and a fresh one
-// — "the switch is off on a fresh install" is only provable from empty.
-const PORT_TRUST = 9915;
-// The phone group opens and closes the door for real, so it must never borrow
-// @edward's live WinMux — that would flip his own switch mid-run, and when his
-// door is already open on 9912 the group used to skip instead. A skip is not a
-// pass, so it gets a port of its own.
-const PORT_PHONE = 9913;
-// The survival group counts running shells, so it must be the only thing
-// talking to its server — borrowing @edward's would count his terminals as
-// leaks and kill a tab he is using.
-const PORT_SURVIVE = 9916;
-// The drop group makes twin folders on disk and asks the server to tell them
-// apart, so it wants a server whose answers nobody else is racing.
-const PORT_DROP = 9917;
-// The colour group types into a real shell and reads the painted result back,
-// so it needs a server whose terminals nobody else is writing to.
-const PORT_COLOUR = 9918;
-const PORT_GROUPS = 9919;
-// Reopening the page must reattach to the running shell, not orphan it.
-// NOT 9920: that is the installed WinMux Rust engine's standing port — the
-// harness would borrow the LIVE engine and type into Edward's real workspace.
-const PORT_RELOAD = 9985;
-// A full reboot kills the server; its scrollback must survive on disk and replay.
-const PORT_RESTART = 9960;
-// The CLI check needs its own server + a connected app, on a port nobody else
-// is driving, so `winmux new-tab` counts don't race another group's terminals.
-// NOT 9921: that is the installed WinMux Tauri engine's standing port — a
-// running Tauri app kept /control connected and made "no app connected"
-// impossible (the old documented gotcha; the port move retires it).
-const PORT_CLI = 9986;
-// The markdown check opens a viewer surface and edits the file under it, so it
-// needs a server whose /api/md nobody else is racing and a /control of its own.
-const PORT_MD = 9922;
-// The paste check fires real paste events at a live terminal and reads whether
-// the multi-line guard stopped to ask, so it wants a shell nobody else touches.
-const PORT_PASTE = 9923;
-// The migrate check seeds a saved layout from a hypothetical future WinMux and
-// proves the app still boots to a working terminal, so it needs its own server.
-const PORT_MIGRATE = 9924;
-// The onboarding check loads with a virgin localStorage to prove the first-run
-// welcome appears, dismisses, and stays gone. Its own server, its own state.
-const PORT_ONBOARD = 9925;
-const PORT_APPROVE = 9926;
-const PORT_PWSH = 9927;
-const PORT_FOOTER = 9928;
-const PORT_UPDATE = 9929;
-const PORT_GPU = 9930;
-const PORT_FONT = 9931;
-const PORT_INSTANT = 9932;
-const PORT_SURVIVE2 = 9933;   // registered port (runner boots a throwaway here)
-const PORT_PARITY = 9934;     // terminal-parity addons (web-links, unicode11)
-const PORT_NOTIFY = 9935;     // attention bus: `winmux notify` flips a session to needs-you
-const PORT_OSNOTIFY = 9936;   // attention bus: OS notification fires only when unfocused
-const PORT_MCP = 9937;        // winmux-mcp: an MCP client drives the live app over stdio
-const PORT_DOING = 9938;      // cockpit: a session row shows a live "what's it doing" line
-const PORT_CLIP = 9939;       // cockpit: cross-device clipboard round-trips through /api/clip
-const PORT_CONFIG = 9940;     // config: durable on-disk settings via /api/config
-const PORT_THEME = 9941;      // theme import: a Windows Terminal scheme recolours the terminal
-const PORT_KEYS = 9942;       // custom keybindings: a remapped chord runs the action, the old one doesn't
-const PORT_MDRICH = 9943;     // markdown richness: tables, task-list checkboxes, images render in the viewer
-const PORT_MARKS = 9945;      // terminal command-marks jump + reset (browser verbs ride the electron smoke)
-const PORT_CMDTAG = 9975;     // Phase 4: command-blocks status tag (✓/✗ + time) renders on OSC-133 D-marks
-const PORT_APPROVECARD = 9976;// Phase 8: the phone approval card's Approve button actually sends Enter to the shell
-const PORT_AGENTENV = 9946;   // agent: every shell exports WINMUX_SID/WINMUX_PORT
-const PORT_AGENTSTATE = 9947; // agent: winmux agent <state> flips the session's cockpit status
-const PORT_AGENTHOOKS = 9948; // agent: the Claude Code hooks preset drives live state
-const PORT_WINGET = 9949;     // distribution: the winget manifest generator emits valid manifests
-const PORT_TUNOVR = 9950;     // #246: the WINMUX_TUNNELLED_PORTS override is honored (no fail-open under load)
-const PORT_LIG = 9955;        // #238: the ligature switch really shapes glyphs, and pays for it in renderer
-const PORT_RESUME = 9951;     // #240: an armed tab auto-runs its resume command on a cold reopen, not on a warm reattach
 // A second copy of the suite cannot run beside the first, because these numbers
 // are machine-global — worktree isolation stops a run reading a mutating tree,
 // but it does nothing at all about contention. WINMUX_VERIFY_PORT_BASE shifts
 // this suite's whole namespace so a pinned full run and live targeted runs can
-// coexist. Defined here, above every port that depends on it.
+// coexist.
+//
+// Every port below is declared THROUGH P(). That is the whole design. Shifting
+// the namespace at the registration choke point looked right and was wrong:
+// fifteen checks hand their raw constant to the winmux CLI as WINMUX_PORT, so
+// under a base the server moved and the CLI did not, and thirty-five checks
+// failed in a way the default run — base 0, where raw and shifted are the same
+// number — can never show. A half-applied namespace is worse than none: it is
+// green exactly where it is not being used. Declared already-shifted, a raw
+// number has nowhere to leak from.
 const PORT_BASE = (() => {
   const n = Number(process.env.WINMUX_VERIFY_PORT_BASE) || 0;
   if (!n) return 0;
@@ -126,48 +51,162 @@ const PORT_BASE = (() => {
   }
   return n;
 })();
+const P = (n) => n + PORT_BASE;
 
+// …and the rule is enforced on the file itself, because the last one wasn't.
+// The namespace was applied at the registration choke point and I believed it
+// held — right up to the first pinned full run, where thirty-five checks went
+// red because they had passed a raw constant to the CLI. Nothing about that was
+// visible at base 0. So this reads its own source, comments stripped, and
+// refuses to start if a 99xx literal appears anywhere that is not wrapped in
+// P(). It costs about a millisecond and it is the only thing here that can see
+// the mistake before a twelve-minute run does.
+(() => {
+  const src = require('fs').readFileSync(__filename, 'utf8').split('\n');
+  const stray = [];
+  src.forEach((line, i) => {
+    if (/PORTS_EXHAUST_RAW\s*=/.test(line)) return;   // raw on purpose; mapped through P below
+    const code = line.split('//')[0];
+    let m;
+    const re = /(?<![\w.\-])99[0-9][0-9](?![\w])/g;
+    while ((m = re.exec(code))) {
+      if (code.slice(Math.max(0, m.index - 2), m.index) !== 'P(') stray.push((i + 1) + ': ' + line.trim());
+    }
+  });
+  if (stray.length) {
+    console.error('\nverify.cjs has ' + stray.length + ' raw port literal(s) that skip the namespace:\n');
+    stray.forEach((l) => console.error('  ' + l));
+    console.error('\nWrap each one in P(…). A port that skips P() is correct at base 0 and wrong'
+      + '\neverywhere else, which is the failure mode that hid thirty-five red checks.\n');
+    process.exit(2);
+  }
+})();
+
+// Two ports on purpose. The busy one is where we prove that a phone flip which
+// cannot bind MUST fail politely instead of taking the app down with it.
+// It used to be 8799, borrowed from tailscaled's accidental hold on that port —
+// which meant the check silently skipped on any machine where the accident
+// wasn't happening, and "a skip is not a pass". Now the harness creates the
+// collision itself (holdTailnet below), so the check runs everywhere Tailscale
+// runs. 9914 is deliberately outside PORT_CANDIDATES and outside the serve
+// rules on this machine.
+const PORT_BUSY = P(9914);
+const PORT_FREE = P(9912);
+// The remote group opens the phone door for real, so it gets its own port —
+// sharing PORT_FREE would have two groups fighting over one phone switch.
+const PORT_REMOTE = P(9911);
+// The trust group needs a guest list nobody else is writing to, and a fresh one
+// — "the switch is off on a fresh install" is only provable from empty.
+const PORT_TRUST = P(9915);
+// The phone group opens and closes the door for real, so it must never borrow
+// @edward's live WinMux — that would flip his own switch mid-run, and when his
+// door is already open on 9912 the group used to skip instead. A skip is not a
+// pass, so it gets a port of its own.
+const PORT_PHONE = P(9913);
+// The survival group counts running shells, so it must be the only thing
+// talking to its server — borrowing @edward's would count his terminals as
+// leaks and kill a tab he is using.
+const PORT_SURVIVE = P(9916);
+// The drop group makes twin folders on disk and asks the server to tell them
+// apart, so it wants a server whose answers nobody else is racing.
+const PORT_DROP = P(9917);
+// The colour group types into a real shell and reads the painted result back,
+// so it needs a server whose terminals nobody else is writing to.
+const PORT_COLOUR = P(9918);
+const PORT_GROUPS = P(9919);
+// Reopening the page must reattach to the running shell, not orphan it.
+// NOT 9920: that is the installed WinMux Rust engine's standing port — the
+// harness would borrow the LIVE engine and type into Edward's real workspace.
+const PORT_RELOAD = P(9985);
+// A full reboot kills the server; its scrollback must survive on disk and replay.
+const PORT_RESTART = P(9960);
+// The CLI check needs its own server + a connected app, on a port nobody else
+// is driving, so `winmux new-tab` counts don't race another group's terminals.
+// NOT 9921: that is the installed WinMux Tauri engine's standing port — a
+// running Tauri app kept /control connected and made "no app connected"
+// impossible (the old documented gotcha; the port move retires it).
+const PORT_CLI = P(9986);
+// The markdown check opens a viewer surface and edits the file under it, so it
+// needs a server whose /api/md nobody else is racing and a /control of its own.
+const PORT_MD = P(9922);
+// The paste check fires real paste events at a live terminal and reads whether
+// the multi-line guard stopped to ask, so it wants a shell nobody else touches.
+const PORT_PASTE = P(9923);
+// The migrate check seeds a saved layout from a hypothetical future WinMux and
+// proves the app still boots to a working terminal, so it needs its own server.
+const PORT_MIGRATE = P(9924);
+// The onboarding check loads with a virgin localStorage to prove the first-run
+// welcome appears, dismisses, and stays gone. Its own server, its own state.
+const PORT_ONBOARD = P(9925);
+const PORT_APPROVE = P(9926);
+const PORT_PWSH = P(9927);
+const PORT_FOOTER = P(9928);
+const PORT_UPDATE = P(9929);
+const PORT_GPU = P(9930);
+const PORT_FONT = P(9931);
+const PORT_INSTANT = P(9932);
+const PORT_SURVIVE2 = P(9933);   // registered port (runner boots a throwaway here)
+const PORT_PARITY = P(9934);     // terminal-parity addons (web-links, unicode11)
+const PORT_NOTIFY = P(9935);     // attention bus: `winmux notify` flips a session to needs-you
+const PORT_OSNOTIFY = P(9936);   // attention bus: OS notification fires only when unfocused
+const PORT_MCP = P(9937);        // winmux-mcp: an MCP client drives the live app over stdio
+const PORT_DOING = P(9938);      // cockpit: a session row shows a live "what's it doing" line
+const PORT_CLIP = P(9939);       // cockpit: cross-device clipboard round-trips through /api/clip
+const PORT_CONFIG = P(9940);     // config: durable on-disk settings via /api/config
+const PORT_THEME = P(9941);      // theme import: a Windows Terminal scheme recolours the terminal
+const PORT_KEYS = P(9942);       // custom keybindings: a remapped chord runs the action, the old one doesn't
+const PORT_MDRICH = P(9943);     // markdown richness: tables, task-list checkboxes, images render in the viewer
+const PORT_MARKS = P(9945);      // terminal command-marks jump + reset (browser verbs ride the electron smoke)
+const PORT_CMDTAG = P(9975);     // Phase 4: command-blocks status tag (✓/✗ + time) renders on OSC-133 D-marks
+const PORT_APPROVECARD = P(9976);// Phase 8: the phone approval card's Approve button actually sends Enter to the shell
+const PORT_AGENTENV = P(9946);   // agent: every shell exports WINMUX_SID/WINMUX_PORT
+const PORT_AGENTSTATE = P(9947); // agent: winmux agent <state> flips the session's cockpit status
+const PORT_AGENTHOOKS = P(9948); // agent: the Claude Code hooks preset drives live state
+const PORT_WINGET = P(9949);     // distribution: the winget manifest generator emits valid manifests
+const PORT_TUNOVR = P(9950);     // #246: the WINMUX_TUNNELLED_PORTS override is honored (no fail-open under load)
+const PORT_LIG = P(9955);        // #238: the ligature switch really shapes glyphs, and pays for it in renderer
+const PORT_RESUME = P(9951);     // #240: an armed tab auto-runs its resume command on a cold reopen, not on a warm reattach
 // #246: three ports the port check holds itself, so it can prove the
 // every-candidate-taken refusal without starving the other auto-picking checks.
-const PORT_SPLITFLOOR = 9900;  // AUDIT-T1: splitting has a floor, and the refusal is said out loud
-const PORT_FOLDFIT = 9901;     // AUDIT-T2: a saved layout too big for this window folds into tabs, losing nothing
+const PORT_SPLITFLOOR = P(9900);  // AUDIT-T1: splitting has a floor, and the refusal is said out loud
+const PORT_FOLDFIT = P(9901);     // AUDIT-T2: a saved layout too big for this window folds into tabs, losing nothing
 const PORTS_EXHAUST_RAW = [9952, 9953, 9954];
-const PORTS_EXHAUST = PORTS_EXHAUST_RAW.map((p) => p + PORT_BASE);
-const PORT_DIFF = 9956;       // ST5: git diff opens as a pane tab (leaf), not a side dock
-const PORT_LEAFPERSIST = 9957; // ST6: non-terminal leaves survive a page reload
-const PORT_PREDICT = 9958;    // Phase 2: pwsh PSReadLine inline history prediction + RightArrow accept
-const PORT_IMAGES = 9959;     // Phase 3: inline images (addon-image) + `winmux image` verb
-const PORT_DPRFIX = 9977;     // MR-1: a devicePixelRatio-stuck WebGL canvas is resynced (prompt-float fix)
-const PORT_AGENTJOB = 9968;   // Stage 3: server-side agent-job store (spawn/wait/result), no browser needed
-const PORT_WORKSPACE = 9978;  // PT-3: the engine-owned workspace file survives a wiped browser profile
-const PORT_RECOVER = 9979;    // PT-4: Recent & recoverable — saved scrollbacks are listed, restorable, dismissable
-const PORT_CLOSEVERB = 9980;  // PT-5: Close project = unbind with three honest outcomes; Delete is real and confirmed
-const PORT_SOT = 9981;        // PT-6: the engine's config.json is the settings authority; localStorage is only a cache
-const PORT_LOCALECHO = 9982;  // SP-1: predictive local echo — instant paint, honest reconcile, no secret leak
-const PORT_SIDEBAR = 9983;    // SB: Obsidian-style sidebar tabs — switch, persist, notif-in-rail, drag-resize
-const PORT_SPLITCLOSE = 9984; // FB: closing a split's last visible tab collapses the split, even across groups
-const PORT_WINCTL = 9987;     // AUDIT-1: the window's close button survives every pane layout at every size
-const PORT_DELHONEST = 9988;  // AUDIT-2: a delete that didn't happen never reports "file removed"
-const PORT_KEYMAPGUARD = 9989; // AUDIT-3: a hand-edited keymap is checked, so nothing shows as bound and stays dead
-const PORT_CHORDTRUTH = 9990;  // AUDIT-4: every surface that advertises a shortcut shows the key actually bound
-const PORT_WRITELOUD = 9991;   // AUDIT-5: an engine write that failed says so — once per outage, and again on recovery
-const PORT_SLASHFAST = 9992;   // AUDIT-6: `winmux slash` refuses a non-Claude tab fast instead of hanging 90s
-const PORT_SHIPPED05 = 9993;   // AUDIT-7: the four features that were broken only in the engine we ship
-const PORT_UPDFEED = 9994;     // AUDIT-7's own stand-in release feed, so the update path is proven for real
-const PORT_NOCLOBBER = 9997;   // AUDIT-8: saving a project never writes over a different project
-const PORT_KEYBACK = 9996;     // AUDIT-9: a dialog that took the keyboard gives it back however it is dismissed
-const PORT_CFGSAFE = 9998;     // AUDIT-10: a damaged settings file is kept and reported, never quietly replaced
-const PORT_BUSYBAR = 9995;     // the busy underline actually paints, and grows, while a shell works
-const PORT_ORPHAN = 9974;      // AUDIT-8: closing a tab whose socket is down still ends its shell
-const PORT_NOSTRAND = 9972;    // AUDIT-4: a slow answer never strands a live engine and its shells
-const PORT_EXITTRUTH = 9970;   // AUDIT-1: a shell that ends says so, on both engines
-const PORT_CTLBACKOFF = 9961;  // AUDIT-B4: the control socket backs off instead of retrying forever
-const PORT_CLIHERE  = 9963;    // AUDIT-9: the winmux CLI runs inside a WinMux terminal, as the guide promises
-const PORT_KEYTRUTH = 9962;    // AUDIT-2: no shortcut is bound to a key the terminal is going to eat
-const PORT_FLEETOPEN = 9964;   // AUDIT-B6/B7: the fleet list opens, remembers, and the guide's button shows it
-const PORT_CWDGONE = 9965;     // AUDIT-B10: a project whose folder moved says so instead of opening elsewhere
-const PORT_CLICLOSE = 9966;    // AUDIT-T4: the command surface can put a layout back, not only grow it
-const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
+const PORTS_EXHAUST = PORTS_EXHAUST_RAW.map(P);
+const PORT_DIFF = P(9956);       // ST5: git diff opens as a pane tab (leaf), not a side dock
+const PORT_LEAFPERSIST = P(9957); // ST6: non-terminal leaves survive a page reload
+const PORT_PREDICT = P(9958);    // Phase 2: pwsh PSReadLine inline history prediction + RightArrow accept
+const PORT_IMAGES = P(9959);     // Phase 3: inline images (addon-image) + `winmux image` verb
+const PORT_DPRFIX = P(9977);     // MR-1: a devicePixelRatio-stuck WebGL canvas is resynced (prompt-float fix)
+const PORT_AGENTJOB = P(9968);   // Stage 3: server-side agent-job store (spawn/wait/result), no browser needed
+const PORT_WORKSPACE = P(9978);  // PT-3: the engine-owned workspace file survives a wiped browser profile
+const PORT_RECOVER = P(9979);    // PT-4: Recent & recoverable — saved scrollbacks are listed, restorable, dismissable
+const PORT_CLOSEVERB = P(9980);  // PT-5: Close project = unbind with three honest outcomes; Delete is real and confirmed
+const PORT_SOT = P(9981);        // PT-6: the engine's config.json is the settings authority; localStorage is only a cache
+const PORT_LOCALECHO = P(9982);  // SP-1: predictive local echo — instant paint, honest reconcile, no secret leak
+const PORT_SIDEBAR = P(9983);    // SB: Obsidian-style sidebar tabs — switch, persist, notif-in-rail, drag-resize
+const PORT_SPLITCLOSE = P(9984); // FB: closing a split's last visible tab collapses the split, even across groups
+const PORT_WINCTL = P(9987);     // AUDIT-1: the window's close button survives every pane layout at every size
+const PORT_DELHONEST = P(9988);  // AUDIT-2: a delete that didn't happen never reports "file removed"
+const PORT_KEYMAPGUARD = P(9989); // AUDIT-3: a hand-edited keymap is checked, so nothing shows as bound and stays dead
+const PORT_CHORDTRUTH = P(9990);  // AUDIT-4: every surface that advertises a shortcut shows the key actually bound
+const PORT_WRITELOUD = P(9991);   // AUDIT-5: an engine write that failed says so — once per outage, and again on recovery
+const PORT_SLASHFAST = P(9992);   // AUDIT-6: `winmux slash` refuses a non-Claude tab fast instead of hanging 90s
+const PORT_SHIPPED05 = P(9993);   // AUDIT-7: the four features that were broken only in the engine we ship
+const PORT_UPDFEED = P(9994);     // AUDIT-7's own stand-in release feed, so the update path is proven for real
+const PORT_NOCLOBBER = P(9997);   // AUDIT-8: saving a project never writes over a different project
+const PORT_KEYBACK = P(9996);     // AUDIT-9: a dialog that took the keyboard gives it back however it is dismissed
+const PORT_CFGSAFE = P(9998);     // AUDIT-10: a damaged settings file is kept and reported, never quietly replaced
+const PORT_BUSYBAR = P(9995);     // the busy underline actually paints, and grows, while a shell works
+const PORT_ORPHAN = P(9974);      // AUDIT-8: closing a tab whose socket is down still ends its shell
+const PORT_NOSTRAND = P(9972);    // AUDIT-4: a slow answer never strands a live engine and its shells
+const PORT_EXITTRUTH = P(9970);   // AUDIT-1: a shell that ends says so, on both engines
+const PORT_CTLBACKOFF = P(9961);  // AUDIT-B4: the control socket backs off instead of retrying forever
+const PORT_CLIHERE  = P(9963);    // AUDIT-9: the winmux CLI runs inside a WinMux terminal, as the guide promises
+const PORT_KEYTRUTH = P(9962);    // AUDIT-2: no shortcut is bound to a key the terminal is going to eat
+const PORT_FLEETOPEN = P(9964);   // AUDIT-B6/B7: the fleet list opens, remembers, and the guide's button shows it
+const PORT_CWDGONE = P(9965);     // AUDIT-B10: a project whose folder moved says so instead of opening elsewhere
+const PORT_CLICLOSE = P(9966);    // AUDIT-T4: the command surface can put a layout back, not only grow it
+const PORT_AGENTSPAWN = P(9967); // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
 // never drops a "Verify Project.winmux.json" into the real Documents\WinMux Projects.
@@ -525,7 +564,7 @@ const SHARED_ON_PURPOSE = {
 // a raw EADDRINUSE from inside an unrelated check. Seed them so the guard sees
 // the whole picture, not the half that happens to be registered.
 const PORT_OWNER = new Map();
-PORTS_EXHAUST_RAW.forEach((p) => PORT_OWNER.set(p, 'the port-exhaustion test'));
+PORTS_EXHAUST.forEach((p) => PORT_OWNER.set(p, 'the port-exhaustion test'));
 
 // A check may carry an env override for its server (last arg) — e.g. the update
 // check forces WINMUX_FAKE_LATEST so the badge can be proven without a real release.
@@ -537,7 +576,7 @@ const check = (id, port, run, env) => {
     process.exit(2);
   }
   PORT_OWNER.set(port, id);
-  CHECKS.push({ id, port: port + PORT_BASE, run, env });
+  CHECKS.push({ id, port, run, env });
 };
 
 // One idiom, copy-pasted 29 times: navigate, then sleep 4500ms hoping the app
@@ -4093,7 +4132,7 @@ check('tunnel-override', PORT_TUNOVR, async ({ base, t }) => {
 
   // Refusal: force a port AND mark that same port tunnelled via the override. The
   // server must refuse (exit 2) purely from the override — no tailscale call needed.
-  const forced = 9951;
+  const forced = P(9951);
   const refused = await new Promise((resolve) => {
     const proc = spawn(process.execPath, ['server.cjs'], {
       cwd: ROOT,
@@ -5193,7 +5232,7 @@ check('nostrand', PORT_NOSTRAND, async ({ t }) => {
     // as a rival, the restarted engine becomes undiscoverable, which is how this
     // fix first showed up as two unrelated Rust failures in the full run.
     const succFile = path.join(scratch, 'succession.json');
-    const succPort = 9971;
+    const succPort = P(9971);
     fs.writeFileSync(succFile, JSON.stringify({
       port: succPort, host: '127.0.0.1', pid: holder.pid, started: Date.now() - 60000,
     }));
