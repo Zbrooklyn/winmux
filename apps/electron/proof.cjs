@@ -28,6 +28,85 @@ const path = require('path');
 const ROOT = __dirname;
 const TOP = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: ROOT, encoding: 'utf8' }).trim();
 const argv = process.argv.slice(2);
+const RAN_AT = new Date().toISOString();
+
+// --- the flake ledger -------------------------------------------------------
+// A green run is not a fact about the code, it is one sample. Proven the hard
+// way: five runs of the same commit returned 637, 636, 637, 636 and 631 passing
+// assertions, with four different checks flipping between them, after "637/637"
+// had already been reported twice as if it settled something.
+//
+// So each run appends one line here, and --flakes reads them back. It costs a
+// few bytes and it is the only thing that can tell a real regression (fails
+// every run from a known commit) from a coin flip (fails some).
+const LEDGER = path.join(ROOT, 'verify-out', 'runs.jsonl');
+
+const recordRun = (rec) => {
+  try {
+    fs.mkdirSync(path.dirname(LEDGER), { recursive: true });
+    fs.appendFileSync(LEDGER, JSON.stringify(rec) + '\n');
+  } catch (e) {}
+};
+
+if (argv[0] === '--flakes') {
+  let rows = [];
+  try {
+    rows = fs.readFileSync(LEDGER, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  } catch (e) {}
+  if (!rows.length) { console.log('no runs recorded yet — run: node proof.cjs HEAD'); process.exit(0); }
+  console.log(rows.length + ' recorded run' + (rows.length === 1 ? '' : 's') + ':\n');
+  for (const r of rows.slice(-12)) {
+    console.log('  ' + r.ran.slice(0, 16).replace('T', ' ') + '  ' + r.sha
+      + '  ' + (r.checks - (r.failed || []).length) + '/' + r.checks
+      + ((r.failed || []).length ? '  ✗ ' + r.failed.join(' ') : ''));
+  }
+
+  // A flake is a check that gave BOTH answers for the SAME commit. Comparing
+  // across commits only tells you a red got fixed, which is what a red is for —
+  // the first version of this counted those too and made thirty-eight checks
+  // look unreliable when four were. The instrument answering a slightly
+  // different question than the one you meant, again.
+  const bySha = new Map();
+  for (const r of rows) {
+    if (!bySha.has(r.sha)) bySha.set(r.sha, []);
+    bySha.get(r.sha).push(r);
+  }
+  const flakes = new Map();
+  for (const [sha, runs] of bySha) {
+    if (runs.length < 2) continue;
+    const fails = new Map();
+    for (const r of runs) for (const id of r.failed || []) fails.set(id, (fails.get(id) || 0) + 1);
+    for (const [id, n] of fails) {
+      if (n === runs.length) continue;            // failed every time → a real red
+      const prev = flakes.get(id) || { bad: 0, of: 0, shas: [] };
+      flakes.set(id, { bad: prev.bad + n, of: prev.of + runs.length, shas: prev.shas.concat(sha) });
+    }
+  }
+
+  const single = [...bySha.values()].filter((v) => v.length < 2).length;
+  if (!flakes.size) {
+    console.log('\nNo check has given two different answers for the same commit'
+      + (single ? ' — but ' + single + ' commit(s) have only one run each, which proves nothing.' : '.'));
+  } else {
+    console.log('\nchecks that gave BOTH answers for the same commit:\n');
+    [...flakes.entries()].sort((a, b) => b[1].bad - a[1].bad).forEach(([id, f]) => {
+      console.log('  ' + id.padEnd(16) + 'failed ' + f.bad + ' of ' + f.of
+        + ' runs of ' + f.shas.join(', '));
+    });
+    console.log('\nEach one goes in docs/FLAKES.md and gets one sitting — not the session');
+    console.log('in front of you. Until then, treat any run containing it as unproven.\n');
+  }
+  const last = rows[rows.length - 1];
+  if ((last.failed || []).length) {
+    console.log('latest run (' + last.sha + ') was red on: ' + last.failed.join(' '));
+  }
+  if (single) {
+    console.log('\n' + single + ' commit(s) have a single run. One green run is a sample, not a fact —');
+    console.log('the whole reason this ledger exists. `node proof.cjs HEAD` again to sample twice.');
+  }
+  process.exit(0);
+}
+
 const sep = argv.indexOf('--');
 const only = sep === -1 ? [] : argv.slice(sep + 1);
 const ref = (sep === -1 ? argv[0] : argv.slice(0, sep)[0]) || 'HEAD';
@@ -45,7 +124,10 @@ if (dirty && ref === 'HEAD') {
 
 const tree = path.join(os.tmpdir(), 'winmux-proof-' + sha + '-' + process.pid);
 const rel = path.relative(TOP, ROOT).split(path.sep).join('/');
-const logFile = path.join(os.tmpdir(), 'winmux-proof-' + sha + '.log');
+// Stamped per run, not per commit. The old name was winmux-proof-<sha>.log, so
+// running the same commit twice silently overwrote the first log — which is
+// exactly the evidence a flake ledger needs to keep.
+const logFile = path.join(os.tmpdir(), 'winmux-proof-' + sha + '-' + process.pid + '.log');
 
 const cleanup = () => {
   try { execFileSync('git', ['worktree', 'remove', '--force', tree], { cwd: TOP, stdio: 'ignore' }); } catch (e) {}
@@ -112,9 +194,16 @@ const sweep = () => {
     const out = fs.readFileSync(logFile, 'utf8');
     const summary = (out.match(/^.*checks (?:passed|FAILED).*$/m) || ['(no summary)'])[0].trim();
     const reds = (out.match(/^  FAIL .*$/gm) || []).map((l) => l.trim());
+    const failed = (out.match(/^ {2}✗ (\S+)/gm) || []).map((l) => l.trim().split(' ')[1]);
     console.log('\n' + sha + ': ' + summary);
     if (reds.length) { console.log(''); reds.slice(0, 20).forEach((r) => console.log('  ' + r)); }
+    // Every run leaves a line behind, because a pass count is a sample and a
+    // sample is only worth anything next to the other samples. Five runs of one
+    // commit gave 637, 636, 637, 636, 631 — four different checks flipping — and
+    // nobody would have known from any single one of them.
+    recordRun({ sha, ran: RAN_AT, checks: (out.match(/^ {2}(✓|✗) /gm) || []).length, failed });
     console.log('\nfull log: ' + logFile);
+    console.log('flake history: node proof.cjs --flakes');
     process.exitCode = code;
   } finally {
     cleanup();

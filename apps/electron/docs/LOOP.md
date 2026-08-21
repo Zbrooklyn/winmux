@@ -1,8 +1,15 @@
 # The loop
 
+> Don't engineer elaborate loops around slow tools. First make the underlying
+> tools fast. Then preserve the natural coding flow and add only safeguards whose
+> cost is effectively invisible.
+
 Designed backwards from how the work actually goes fastest, not forwards from a
 verification architecture. Three mechanisms. Everything else that was proposed or
 built during the experiment is deleted; the reasoning is in LOOP-EXPERIMENT.md.
+
+    CODE → CODE → CODE → invisible guards throughout → pinned full run
+                        → respond only to the reds that block you → continue
 
 ## The behaviour this is built around
 
@@ -100,6 +107,12 @@ moment it appears is the runaway this whole document exists to stop.
 
 **The number to trust is not the pass count. It is the pass count repeated.** A
 single green full run means the suite did not fail this time.
+
+So every run appends a line to `verify-out/runs.jsonl`, and `node proof.cjs
+--flakes` reads them back — comparing runs of the *same commit*, because a check
+that fails on one commit and passes on the next is a red that got fixed, which is
+what reds are for. Open flakes live in `docs/FLAKES.md`, which is the bounded
+queue: **one sitting, never the session in front of you.**
 
 The one thing worth remembering: it proves the *commit*, not the working tree. If
 the answer matters, commit first.
