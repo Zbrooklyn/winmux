@@ -53,7 +53,27 @@ const cleanup = () => {
 };
 process.on('SIGINT', () => { cleanup(); process.exit(130); });
 
+// A killed run cannot finish its own cleanup, and rmSync stops at a junction it
+// will not follow — so husks accumulate in temp. Sweep them on the way in: the
+// junction is unlinked first (never followed; the real node_modules is on the
+// other side of it), then whatever is left.
+const sweep = () => {
+  try { execFileSync('git', ['worktree', 'prune'], { cwd: TOP, stdio: 'ignore' }); } catch (e) {}
+  for (const name of fs.readdirSync(os.tmpdir())) {
+    if (!/^winmux-proof-.*-\d+$/.test(name)) continue;
+    const dir = path.join(os.tmpdir(), name);
+    if (dir === tree) continue;
+    for (const d of ['node_modules', path.join(rel, 'node_modules')]) {
+      const link = path.join(dir, d);
+      try { if (fs.lstatSync(link).isSymbolicLink()) fs.unlinkSync(link); } catch (e) {}
+      try { fs.rmdirSync(link); } catch (e) {}
+    }
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
+  }
+};
+
 (async () => {
+  sweep();
   console.log('proving ' + sha + ' in a throwaway worktree, ports +' + BASE);
   execFileSync('git', ['worktree', 'add', '--detach', tree, sha], { cwd: TOP, stdio: 'ignore' });
   try {
