@@ -516,7 +516,7 @@ const settings = async (p, tab) => {
 // The desk door binding is not enough. If the Tailscale side of a port is
 // taken, phone access can never turn on there, so with no PORT forced the
 // server must move off it by itself instead of failing politely later.
-check('port', PORT_FREE, async ({ t }) => {
+check('port', PORT_FREE, async ({ t, engine }) => {
   const ip = tailscaleIp();
   const auto = await serverAuto();
   try {
@@ -612,11 +612,18 @@ check('port', PORT_FREE, async ({ t }) => {
 
   // An explicit port is never overridden — the busy-port fixture below depends
   // on actually getting the busy port.
-  const forced = await server(PORT_BUSY);
-  try {
+  // Through `engine`, not the raw server(): PORT_BUSY belongs to three other
+  // checks and is fenced by a reservation socket until the run hands it over.
+  // Starting it ourselves worked only when one of those checks happened to be
+  // dequeued at the same moment — and stopping it afterwards would have taken
+  // their server out from under them. The run owns the lifetime; we borrow.
+  const forced = await engine(PORT_BUSY);
+  if (forced && forced.foreign) {
+    t('an explicit PORT is honoured exactly, not auto-moved', false, forced.foreign);
+  } else {
     const onBusy = await get('http://127.0.0.1:' + PORT_BUSY + '/');
     t('an explicit PORT is honoured exactly, not auto-moved', onBusy.status === 200, PORT_BUSY);
-  } finally { forced.stop(); }
+  }
 });
 
 // --- brand: the name is really rendered, in the right colours -------------
@@ -6485,7 +6492,14 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   for (const port of ports) {
     try {
       holds[port] = await new Promise((resolve, reject) => {
-        const s = net.createServer();
+        // HANG UP on anything that connects. A bare net server ACCEPTS a
+        // connection and then never says a word, so anything in this suite that
+        // talks to a port before its engine exists — an HTTP GET, a waitUp poll
+        // — waits for an answer that is never coming. It is not a slow port; it
+        // is a port that will hold a conversation open forever. Refusing is both
+        // the honest answer (nothing is serving here yet) and the one that fails
+        // fast enough to be diagnosed.
+        const s = net.createServer((sock) => { sock.destroy(); });
         s.once('error', reject);
         s.listen(port, '127.0.0.1', () => resolve(s));
       });
@@ -6502,6 +6516,13 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
     const h = holds[port];
     if (!h) return resolve();
     delete holds[port];
+    // close() does not close a listening socket so much as stop accepting NEW
+    // connections and then wait for every existing one to end. One connection
+    // that never ends is therefore enough to deadlock this port permanently:
+    // the engine that needs it never starts, and every check on that port hangs
+    // until the 300s cap kills it. Drop the connections first — the socket
+    // exists to fence a port, nothing is riding on it.
+    try { h.closeAllConnections(); } catch (e) {}
     h.close(() => resolve());
   });
 
@@ -6580,7 +6601,15 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
       if (servers[c.port] && servers[c.port].foreign) {
         blocked = servers[c.port].foreign;
       } else {
-        await Promise.race([c.run({ browser, base: 'http://127.0.0.1:' + c.port, t, skip, shot, errs }), capped]);
+        // `engine` is how a check asks for a SECOND port's server. Calling the
+        // raw server() for another port looks equivalent and is not: every port
+        // in this run is fenced by a reservation socket until ensureServer drops
+        // it, so a raw call meets our own placeholder and reports it as a
+        // foreign process squatting the port. Which of those two happens comes
+        // down to whether some other check happened to be dequeued first — it
+        // passed for months on that coincidence and failed the moment the run
+        // went one-at-a-time.
+        await Promise.race([c.run({ browser, base: 'http://127.0.0.1:' + c.port, t, skip, shot, errs, engine: ensureServer }), capped]);
       }
     } catch (e) {
       fails++;
