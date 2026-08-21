@@ -643,6 +643,33 @@ async function appReady(page, floorMs, capMs) {
   if (left > 0) await page.waitForTimeout(left);
 }
 
+// clickLive — click a control that only exists once something is hovered.
+//
+// Twice now a check has been defeated by this and reported it as the product's
+// fault: `.pc-split` timed out for thirty seconds against a hover-revealed pane
+// control, and `orphan` clicked a tab's close button, saw the shell count never
+// move, and called it a failure to end the shell. Playwright's actionability
+// check says "visible and stable", which a control halfway through a reveal
+// transition can satisfy while something else is still the thing under the
+// cursor. So: hover the parent, then wait until the target is genuinely the
+// element at its own centre — the same elementFromPoint idiom the window-control
+// check uses — and only then click.
+//
+// If it never becomes hittable, that is a HARNESS problem and it says so, rather
+// than letting the silence be scored against the product.
+async function clickLive(page, hoverSel, targetSel, timeout) {
+  await page.hover(hoverSel);
+  await page.waitForFunction(`(function () {
+    var el = document.querySelector(${JSON.stringify(targetSel)});
+    if (!el) return false;
+    var r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return false;
+    var top = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    return !!top && (top === el || el.contains(top) || top.contains(el));
+  })()`, null, { timeout: timeout || 10000 });
+  await page.click(targetSel);
+}
+
 const desktop = async (browser, extraSettings) => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
   // Every check gets a fresh context, so the first-run onboarding would pop over
@@ -3097,10 +3124,18 @@ check('orphan', PORT_ORPHAN, async ({ browser, base, t }) => {
     });
     t('the tab has a shell id and its socket is down', !!dropped && !!dropped.sid, dropped);
 
-    // The close control is hover-reveal, so hover first — that is the real path a
-    // user takes, and clicking straight at a hidden control just waits forever.
-    await page.hover('.ptab[data-active]');
-    await page.click('.ptab[data-active] .x', { timeout: 10000 });
+    // The close control is hover-reveal. Hovering first is not enough on a loaded
+    // machine: the reveal transition can still be running when the click fires,
+    // the click lands on the tab instead of its X, and the shell count never
+    // moves — which this check then reported as "closing it does not end the
+    // shell". It failed that way at 3-way concurrency and again at 8-way.
+    // clickLive waits until the X is actually the element at its own centre.
+    const tabsBefore = await page.evaluate(() => document.querySelectorAll('.ptab').length);
+    await clickLive(page, '.ptab[data-active]', '.ptab[data-active] .x');
+    // If the tab is still there the click did not land, and nothing below says
+    // anything about the product. Fail loudly as a harness problem instead.
+    await page.waitForFunction(
+      `document.querySelectorAll('.ptab').length < ${tabsBefore}`, null, { timeout: 10000 });
     // Wait for the count to drop — but do NOT assert on that moment. Before the
     // fix it DID drop, and then the queued retry reattached by sid and put the
     // shell straight back: a check that graded the transient called the bug fixed.
