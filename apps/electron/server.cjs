@@ -2033,9 +2033,18 @@ function onShellConnection(ws, req) {
   }
 
   const shell = shellByKey(key);
-  // Honour a requested start folder only when it really is one.
+  // Honour a requested start folder only when it really is one. Falling back to
+  // home is right — you should still get a terminal — but doing it silently is
+  // not: a project whose folder was moved, renamed or deleted opened somewhere
+  // else entirely and looked completely normal. Remember what we could not use
+  // so the app can say so, exactly as it does for a session that is gone.
   let cwd = os.homedir();
-  try { if (want && fs.statSync(want).isDirectory()) cwd = want; } catch (e) {}
+  let cwdLost = '';
+  if (want) {
+    let ok = false;
+    try { ok = fs.statSync(want).isDirectory(); } catch (e) {}
+    if (ok) cwd = want; else cwdLost = want;
+  }
 
   // Hand over the pre-warmed spare when the request matches it (the common case:
   // the default shell at home) — that is the instant open. Otherwise boot one
@@ -2059,7 +2068,7 @@ function onShellConnection(ws, req) {
 
   // `lost` says we were asked for a session that is no longer here, so the app
   // can say that plainly instead of pretending this fresh shell is the old one.
-  ws.send(JSON.stringify({ type: 'meta', sid: s.id, shell: s.shell, cwd: s.cwd, resumed: false, lost: !!sid }));
+  ws.send(JSON.stringify({ type: 'meta', sid: s.id, shell: s.shell, cwd: s.cwd, resumed: false, lost: !!sid, cwdLost: cwdLost }));
   // A brand-new shell printed its prompt blind at 80x24; the first client resize
   // will trigger a clean top-anchored repaint (see the resize handler in attach()).
   s.needsClear = true;

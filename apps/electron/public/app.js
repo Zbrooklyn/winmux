@@ -2449,6 +2449,24 @@
           if (m.sid) { t.sid = m.sid; persistLive(); }
           if (m.shell && ttEl && !t.renamed) ttEl.textContent = m.shell;
           if (m.cwd) { t.cwd = m.cwd; }
+          // The folder this tab asked for is not there any more — a project whose
+          // directory was moved, renamed or deleted. You still get a shell, at
+          // home, which is the right fallback; saying nothing about it is not.
+          // Same dim in-terminal line as a session that is gone, for the same
+          // reason: the thing you asked for and the thing you got differ, and
+          // only the terminal is guaranteed to be where you are looking.
+          // Written AFTER the shell has printed and gone quiet, not here: a cold
+          // shell clears its own screen on first render, so a line painted now is
+          // wiped before anyone sees it. That is the same trap the kept-scrollback
+          // replay below documents — and it caught this fix too, the first run
+          // showed a bare prompt and nothing else.
+          if (m.cwdLost) {
+            t._cwdLost = { gone: m.cwdLost, at: m.cwd || 'your home folder' };
+            // And on the notification bus, which is the durable half. Restoring a
+            // project can reopen several tabs at once and you can only read one of
+            // them; a line in a terminal nobody is looking at is not being told.
+            notify('Folder not found', m.cwdLost + ' — opened in ' + (m.cwd || 'your home folder') + ' instead', id);
+          }
           if (m.resumed) {
             // Redraw from the shell's own record rather than trusting whatever
             // half-written screen we were left holding.
@@ -2492,6 +2510,19 @@
         // A lost session with kept scrollback: once the fresh shell has printed and
         // gone quiet (so its startup clear is already done), reset and paint the
         // history on top, then nudge an empty Enter so the live prompt lands below it.
+        // The folder this tab wanted is gone. Same timing as the replay below —
+        // wait for the shell's own startup paint to finish, then say so, so the
+        // notice survives on screen instead of being cleared a frame later.
+        if (t._cwdLost) {
+          clearTimeout(t._cwdLostTimer);
+          t._cwdLostTimer = setTimeout(function () {
+            var g = t._cwdLost;
+            if (!g) return;
+            t._cwdLost = null;
+            term.write('\r\n\x1b[90m[' + g.gone + ' is not there any more — opened in ' +
+              g.at + ' instead]\x1b[0m\r\n');
+          }, 600);
+        }
         if (t._replaySid) {
           clearTimeout(t._replayTimer);
           var replaySid = t._replaySid;

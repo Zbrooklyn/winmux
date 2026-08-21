@@ -733,8 +733,22 @@ async fn handle_pty(
     };
     let want_sid = q.get("sid").cloned().filter(|s| !s.is_empty());
     let shell_key = q.get("shell").map(|s| s.as_str()).unwrap_or("powershell").to_string();
-    let cwd = q.get("cwd").cloned().filter(|c| !c.is_empty())
-        .unwrap_or_else(|| std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into()));
+    // A start folder that no longer exists — a project whose directory was moved,
+    // renamed or deleted — used to be passed straight to the spawn. Measured on
+    // this engine: the shell lands in the home directory anyway, and the session
+    // kept the REQUESTED path as its cwd. That is not merely silent, it is wrong:
+    // meta.cwd is what labels the tab, and it is what save_backlog writes as the
+    // session's folder, so a recovery record pointed at a folder that isn't there.
+    // Check the folder here, keep the cwd honest about where the shell actually
+    // is, and report the one we could not use so the app can say so.
+    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
+    let asked = q.get("cwd").cloned().filter(|c| !c.is_empty());
+    let mut cwd_lost = String::new();
+    let cwd = match asked {
+        Some(a) if std::path::Path::new(&a).is_dir() => a,
+        Some(a) => { cwd_lost = a; home }
+        None => home,
+    };
 
     // Reattach to a live session, or spawn a fresh one.
     let existing = want_sid.as_ref().and_then(|s| state.sessions.lock().unwrap().get(s).cloned());
@@ -753,6 +767,10 @@ async fn handle_pty(
     let meta = json!({
         "type":"meta","sid":sid,"shell":session.shell,"cwd":session.cwd,
         "resumed":resumed,"lost": want_sid.is_some() && !resumed,
+        // The folder we were asked for and could not use. Empty in the normal
+        // case; the app says so plainly when it is set, the same way it does for
+        // a session that is gone.
+        "cwdLost": cwd_lost,
     }).to_string();
     if sink.send(Message::Text(meta)).await.is_err() { return; }
 

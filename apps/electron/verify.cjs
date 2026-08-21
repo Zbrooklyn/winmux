@@ -147,6 +147,7 @@ const PORT_CTLBACKOFF = 9961;  // AUDIT-B4: the control socket backs off instead
 const PORT_CLIHERE  = 9963;    // AUDIT-9: the winmux CLI runs inside a WinMux terminal, as the guide promises
 const PORT_KEYTRUTH = 9962;    // AUDIT-2: no shortcut is bound to a key the terminal is going to eat
 const PORT_FLEETOPEN = 9964;   // AUDIT-B6/B7: the fleet list opens, remembers, and the guide's button shows it
+const PORT_CWDGONE = 9965;     // AUDIT-B10: a project whose folder moved says so instead of opening elsewhere
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -957,6 +958,109 @@ check('keytruth', PORT_KEYTRUTH, async ({ browser, base, t, shot }) => {
     window.__winmuxAdoptKeymap({ find: 'Ctrl+F', 'close-tab': 'Ctrl+Alt+7' }));
   t('a config file offering a terminal key is dropped, the good entry beside it kept',
     adopted && adopted.find === undefined && adopted['close-tab'] === 'Ctrl+Alt+7', adopted);
+});
+
+// --- cwdgone: a project whose folder moved says so, on both engines ---------
+// AUDIT-B10, and a second defect found while measuring it.
+//
+// Opening a project whose directory had been moved, renamed or deleted gave you
+// a shell in your HOME folder and looked completely normal. You could type a
+// destructive command believing you were somewhere else entirely.
+//
+// Measuring it on both engines — rather than reading the source — turned up
+// worse. The Node engine at least reported the folder the shell was really in.
+// THE SHIPPED ENGINE REPORTED THE FOLDER THAT DOES NOT EXIST: meta.cwd came
+// back as the requested path while the shell sat in home. That value labels the
+// tab and is what save_backlog writes as the session's folder, so the recovery
+// record pointed somewhere that isn't there. A silent wrong answer, on the half
+// of the product people actually run, exactly like the four in audit item 5.
+//
+// (The first version of the probe behind this set WINMUX_CORE=rust on
+// `node server.cjs` and measured Node twice — server.cjs never reads that
+// variable, it IS the Node engine. The two "agreed" beautifully. Launch the
+// binary you mean to measure; see P10.)
+check('cwdgone', PORT_CWDGONE, async ({ browser, base, t, shot }) => {
+  const GONE = 'C:/winmux-gone-' + PORT_CWDGONE;   // never created, by design
+  const p = await desktop(browser);
+  // Seed the saved layout BEFORE the first load, so the app restores it on the
+  // way up — which is what actually happens to a person: you open WinMux and
+  // yesterday's project comes back. Seeding after a load and reloading did not
+  // restore it (the app had already written its own ct-live over the seed), and
+  // the check then measured a plain fresh tab and blamed the fix for being
+  // silent. The reproduction has to be the real one.
+  await p.addInitScript((gone) => {
+    try {
+      localStorage.setItem('ct-live', JSON.stringify({
+        v: 4, group: '',
+        cols: [[{ active: 0, tabs: [{ type: 'terminal', group: '', title: '',
+          shell: 'powershell', cwd: gone, sid: '', resume: '', resumeId: '', resumePin: false }] }]],
+      }));
+    } catch (e) {}
+  }, GONE);
+  try {
+    await p.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    await appReady(p);
+    t('the folder this check depends on really is absent', !fs.existsSync(GONE), GONE);
+
+    // 1. Ask the engine directly, from inside the page, so this runs against
+    //    whichever engine the suite is pointed at without a node-side ws client.
+    const meta = await p.evaluate((gone) => new Promise((resolve) => {
+      const url = location.origin.replace(/^http/, 'ws') + '/pty?shell=powershell&cwd=' + encodeURIComponent(gone);
+      const ws = new WebSocket(url);
+      const bell = setTimeout(() => { try { ws.close(); } catch (e) {} resolve({ timedOut: true }); }, 15000);
+      ws.onmessage = (e) => {
+        if (typeof e.data !== 'string' || e.data.charAt(0) !== '{') return;
+        try {
+          const j = JSON.parse(e.data);
+          if (j.type === 'meta') { clearTimeout(bell); try { ws.close(); } catch (err) {} resolve(j); }
+        } catch (err) {}
+      };
+      ws.onerror = () => { clearTimeout(bell); resolve({ error: true }); };
+    }), GONE);
+    t('the engine names the folder it could not use', meta.cwdLost === GONE, meta);
+    // The one that was wrong on the shipped engine: it must report where the
+    // shell IS, never the folder it failed to reach.
+    t('and reports where the shell actually is, not the folder that is gone',
+      !!meta.cwd && meta.cwd !== GONE, meta.cwd);
+
+    // 2. The path a person actually takes: a saved layout pointing at a folder
+    //    that has since moved. Restoring it must say so in the terminal.
+    // Read the NOTIFICATION, not the terminal. The in-terminal line is written
+    // too, but a terminal is repainted by the shell that owns it — the first
+    // version of this check asserted the line and went red because the cold
+    // shell's startup clear wiped it a frame later. More to the point, that line
+    // is only telling you anything if you happen to be looking at that tab, and
+    // restoring a project can reopen several at once. The bus is the durable half,
+    // so the bus is what gets asserted.
+    // The badge first: it is the signal a person actually sees without opening
+    // anything, and it does not depend on the panel rendering.
+    const badge = await p.evaluate(() => {
+      const b = document.getElementById('notif-badge');
+      return b ? { shown: b.style.display !== 'none', text: b.textContent } : null;
+    });
+    t('the unread badge lights up, so you can see it happened without hunting',
+      !!badge && badge.shown, badge);
+    // Then the panel. Clicking it through evaluate rather than a real click, the
+    // same way the notifications check does — a Playwright click here races the
+    // sidebar's own layout and silently misses, which is how an earlier version
+    // of this check read an empty list and blamed the fix.
+    await p.evaluate(() => { const b = document.getElementById('open-notif'); if (b) b.click(); });
+    await p.waitForTimeout(900);
+    const notes = await p.evaluate(() =>
+      [].slice.call(document.querySelectorAll('.nrow')).map((n) => ({
+        title: (n.querySelector('.nt') || {}).textContent || '',
+        sub: (n.querySelector('.nws') || {}).textContent || '',
+      })));
+    const hit = notes.find((n) => /folder not found/i.test(n.title));
+    t('reopening it tells you the folder is gone, instead of looking normal', !!hit, notes);
+    t('and it names the folder you lost, so you know which project this was',
+      !!hit && hit.sub.indexOf(GONE) >= 0, hit && hit.sub);
+    t('and it says where you ended up instead',
+      !!hit && /opened in /.test(hit.sub), hit && hit.sub);
+    await shot(p, 'cwdgone-told');
+  } finally {
+    await p.close();
+  }
 });
 
 // --- fleetopen: the fleet list is visible, remembers, and can be shown to you
