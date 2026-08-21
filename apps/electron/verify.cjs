@@ -4332,15 +4332,26 @@ check('winctl', PORT_WINCTL, async ({ browser, base, t, shot }) => {
     await allUsable('at ' + w + 'x' + h + ' with one pane');
   }
 
-  await page.setViewportSize({ width: 720, height: 480 });
+  // This used to split three times AT 720x480, which AUDIT-T1 now correctly
+  // refuses: three panes in a 720px window is a terminal too narrow to use, and
+  // the app says so instead of making it. The subject of this check was never
+  // the splitting — it is whether the close button survives many panes in a tiny
+  // window, and that state is still perfectly reachable: split where there is
+  // room, then drag the window down onto the panes you already have. Which is
+  // also the more honest reproduction of what Edward actually did.
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.waitForTimeout(700);
   for (let i = 1; i <= 3; i++) {
     await winmux(['split', 'right']);
     await page.waitForTimeout(2200);
     const panes = await page.evaluate(() => document.querySelectorAll('.workspace .pane').length);
-    t('split ' + i + ' produced ' + (i + 1) + ' panes at the minimum window size', panes === i + 1, String(panes));
-    await allUsable('after ' + i + ' split' + (i > 1 ? 's' : '') + ' at 720x480');
+    t('split ' + i + ' produced ' + (i + 1) + ' panes where there is room for them', panes === i + 1, String(panes));
   }
+  await page.setViewportSize({ width: 720, height: 480 });
+  await page.waitForTimeout(900);
+  const squeezed = await page.evaluate(() => document.querySelectorAll('.workspace .pane').length);
+  t('shrinking the window keeps the panes — the squeeze is real, not undone', squeezed === 4, String(squeezed));
+  await allUsable('with 4 panes squeezed into the minimum window size');
   await shot(page, 'winctl-splits-720');
 
   // The reserved corner must be real: the rightmost pane's tab row has to stop
