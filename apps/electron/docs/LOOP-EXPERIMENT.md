@@ -84,6 +84,34 @@ gate is false confidence.
   top" would have said so instantly — and that same class of measurement is what
   found the broadcast Stop button sitting under the window controls.
 
+**And then it found four more, in one run each.** The full pinned proof was worth
+building four times over, and every one of these was invisible to a targeted run:
+
+- *The build that never happened.* `node verify.cjs` does not compile. The
+  project's real entry point is `npm run verify` — build, then verify — and I had
+  been running the file bare all session. In the main tree that was invisible,
+  because the compiled output was already sitting on disk from earlier work. In a
+  fresh worktree it is not, and five checks that load `dist-electron/*.js`
+  directly failed in **zero seconds**, reported as five red *product* checks.
+  That is the worst possible way to say "you forgot to compile."
+- *A port that is free but unusable.* Chromium's restricted list answers
+  `ERR_UNSAFE_PORT`. Nothing here can land on one at base 0 — but 9980 + 100 is
+  10080, and that is where a check died, three from the end of twelve minutes.
+- *A port baked into a filename.* `workspace-9978.json`: the check computed its
+  expected path from the shifted constant and told the engine to write the
+  unshifted name. The raw-literal scan walked past it because I had excluded a
+  leading hyphen from the lookbehind to avoid false positives. The guard was
+  applied to the shape I had in mind rather than to the value.
+- *A neighbour that encoded the old rule.* `winctl` split three times at 720×480
+  and asserted three then four panes. The split floor makes the second split a
+  legal refusal at that size — so the check was asserting the absence of the fix.
+  It now reaches each layout at a size that allows it and drags down to the floor
+  to look, which is what it was always about.
+
+Trajectory of the same suite across four full runs: **80 of 495 red → 14 of 590 →
+5 of 637 → 0**. The count of assertions rises because red checks abort early;
+each fix does not just clear its own failure, it un-blocks the rest of its check.
+
 ## What the tiers are actually for
 
 Not "cheap first, expensive later." They answer different questions, and the
