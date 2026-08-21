@@ -14,11 +14,20 @@ Run `node proof.cjs --flakes` for the live picture. It compares runs of the
 *same commit*, because a check that fails on one commit and passes on the next
 is a red that got fixed, which is what reds are for.
 
-## Open
+## Open — one of these is not a flake
 
 | check | seen | what it looks like | best guess |
 |---|---|---|---|
+| **`port`** | **3 of 3 runs of `1b46e00`** | every assertion passes, then the check throws `read ECONNRESET` on its last step — a `get()` against `PORT_BUSY` after the exhaustion block | **not a flake — a deterministic red.** It passed at `3763175`; the only functional change since is `electron` moving to the solo lane, which shifted when `port` runs relative to the five checks that share the `PORT_BUSY` server. `port` spawns its *own* server on that shared port and stops it in a `finally`, which was always a hazard and is now reliably hit |
+| `writeloud` | 1 of 3 runs of `1b46e00` | — | unexamined |
+| `recover` | 1 of 3 runs of `1b46e00` | — | unexamined |
 | `resume` | 1 of 3 runs of `3763175` | `{id}` template substitution and the cold-reopen auto-run both fail, plus a throw | unknown — not yet reproduced alone |
+
+`port` is the one that has to be fixed before this branch can be called green,
+and it is the first thing the next sitting takes. It is listed here rather than
+fixed on the spot because it does not invalidate anything the current work
+concluded — which is the rule, applied to a case where applying it is
+uncomfortable.
 
 ## Closed
 
