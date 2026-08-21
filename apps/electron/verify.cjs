@@ -10,7 +10,12 @@
 //   node verify.cjs --headed     watch it drive
 //   node verify.cjs phone brand  run only the named checks
 //
-// Exit code is 0 only when every check that could run, passed.
+// Exit code is 0 only when every check that could run, passed — and only when
+// every check that SHOULD have been able to run, did. A check whose port is
+// held by a stray process is reported BLOCKED and exits non-zero: it says
+// nothing about the product, but it also did not verify it, so the run is not
+// green. A skip (this machine has no Tailscale) is a capability it never had;
+// a block (something is on port 9912) is a mess it can clean up.
 
 const { spawn, execSync } = require('child_process');
 const net = require('net');
@@ -334,6 +339,33 @@ async function server(port, extraEnv) {
   return { port, borrowed: false, stop() { try { proc.kill(); } catch (e) {} } };
 }
 
+// Every no-port server this run spawned. These are the only servers in the
+// suite that choose their own port, and they choose it from server.cjs's
+// SHIPPED candidate list — which overlaps the harness's own ports on purpose,
+// because that list is what is under test. So one that survives the run does
+// not merely leak a process: it squats on a port the NEXT run needs. That is
+// not hypothetical. pid 35216 outlived its parent, held 9912, and the next
+// run's `port` check reported it as a failure of the product.
+const AUTO_PROCS = [];
+
+// Kill every one of them and CONFIRM it died. `proc.kill()` is a request, not
+// a guarantee — escalate by PID for any that ignored it. By PID only: Edward
+// runs his own WinMux and node processes beside this suite, so killing by
+// image name would take down his work to tidy up ours.
+async function reapAutoServers() {
+  const alive = () => AUTO_PROCS.filter((p) => p.pid && p.exitCode === null && p.signalCode === null);
+  for (const p of alive()) { try { p.kill(); } catch (e) {} }
+  await new Promise((r) => setTimeout(r, 1200));
+  const stubborn = alive();
+  for (const p of stubborn) {
+    try { execSync('taskkill /PID ' + p.pid + ' /T /F', { stdio: 'ignore' }); } catch (e) {}
+  }
+  if (stubborn.length) {
+    console.log('reaped ' + stubborn.length + ' auto-port server(s) that ignored the soft kill: ' +
+      stubborn.map((p) => p.pid).join(', '));
+  }
+}
+
 // Start a server with NO port forced, and read back the port it chose for
 // itself. Never borrows a running server — the choice IS the thing under test.
 function serverAuto() {
@@ -343,6 +375,10 @@ function serverAuto() {
     const proc = spawn(process.execPath, ['server.cjs'], {
       cwd: ROOT, env, stdio: ['ignore', 'pipe', 'ignore'],
     });
+    // Registered before anything can go wrong, so the end-of-run reap covers
+    // the paths a `finally` cannot: a check that throws before it, a timeout
+    // that rejects, or a spawn whose announcement never arrives.
+    AUTO_PROCS.push(proc);
     let buf = '';
     const timer = setTimeout(() => {
       try { proc.kill(); } catch (e) {}
@@ -6009,7 +6045,7 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   // the pool below can call it under a concurrency cap.
   const runOne = async (c) => {
     const lines = [];
-    let fails = 0, skipped = null;
+    let fails = 0, skipped = null, blocked = null;
     const t = (name, pass, note) => {
       if (!pass) fails++;
       lines.push('  ' + (pass ? 'PASS  ' : 'FAIL  ') + name +
@@ -6033,16 +6069,28 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
       // before the run began. Racing it against the same cap means a slow start
       // is reported as this check timing out, not as a silent stall.
       await Promise.race([ensureServer(c.port), capped]);
-      if (servers[c.port] && servers[c.port].foreign) throw new Error(servers[c.port].foreign);
-      await Promise.race([c.run({ browser, base: 'http://127.0.0.1:' + c.port, t, skip, shot, errs }), capped]);
+      // A port held by something outside this run is a dirty machine, not a
+      // broken product. This used to throw, which printed "FAIL the check
+      // itself threw" and made the run report "1 of 594 checks FAILED" — a red
+      // whose real meaning was "close that other process". A red that blames
+      // the product for the environment is worse than no red at all: it is the
+      // exact thing that teaches you to skim past failures. So it is recorded
+      // as BLOCKED, which is neither a pass nor a product failure — and which
+      // still exits non-zero, because the check did not run and nobody may
+      // call this run green.
+      if (servers[c.port] && servers[c.port].foreign) {
+        blocked = servers[c.port].foreign;
+      } else {
+        await Promise.race([c.run({ browser, base: 'http://127.0.0.1:' + c.port, t, skip, shot, errs }), capped]);
+      }
     } catch (e) {
       fails++;
       lines.push('  FAIL  the check itself threw\n          ' + String(e.message || e).slice(0, 200));
     }
     clearTimeout(bell);
-    console.log('  ' + (skipped ? 'SKIP' : fails ? '✗' : '✓') + ' ' + c.id +
+    console.log('  ' + (blocked ? 'BLOCKED' : skipped ? 'SKIP' : fails ? '✗' : '✓') + ' ' + c.id +
       ' (' + Math.round((Date.now() - started) / 1000) + 's)');
-    report.push({ id: c.id, port: c.port, lines, fails, skipped });
+    report.push({ id: c.id, port: c.port, lines, fails, skipped, blocked });
     // Give the port's engine back the moment the last check needing it is done.
     // This runs whether the check passed, failed or threw — a failing check that
     // held its server would put the exhaustion straight back.
@@ -6074,6 +6122,9 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
 
   await browser.close();
   if (busyHold) busyHold.stop();
+  // Before any port bookkeeping: the no-port servers are the only ones that
+  // can still be holding a socket nobody in this run is tracking.
+  await reapAutoServers();
   // Most are already down — each was stopped as its last check finished. This
   // catches the stragglers: a port whose checks were all skipped, or one a check
   // restarted for itself after the count had run out.
@@ -6081,9 +6132,17 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   // And any reservation never claimed — a port whose checks all skipped.
   for (const port of Object.keys(holds)) { try { holds[port].close(); } catch (e) {} }
 
-  let bad = 0, skipped = 0, total = 0;
+  let bad = 0, skipped = 0, blocked = 0, total = 0;
   console.log('');
   for (const r of report.sort((a, b) => a.id.localeCompare(b.id))) {
+    // BLOCKED is deliberately its own category, printed above the failures so
+    // it is read first: it is the only outcome here that says nothing at all
+    // about the product, and the only one the reader can fix in ten seconds.
+    if (r.blocked) {
+      blocked++;
+      console.log('BLOCKED  ' + r.id + ' — ' + r.blocked);
+      continue;
+    }
     if (r.skipped) {
       skipped++;
       console.log('SKIP  ' + r.id + ' — ' + r.skipped);
@@ -6095,8 +6154,19 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
     console.log(r.lines.join('\n'));
   }
   console.log('');
-  console.log(bad ? bad + ' of ' + total + ' checks FAILED' : total + '/' + total + ' checks passed');
+  // "0/0 checks passed" is the sentence a run prints when it verified nothing
+  // at all, and it reads like success. Say what happened instead.
+  if (bad) console.log(bad + ' of ' + total + ' checks FAILED');
+  else if (total) console.log(total + '/' + total + ' checks passed');
+  else console.log('no checks ran');
   if (skipped) console.log(skipped + ' group(s) skipped — see the reasons above; a skip is not a pass');
+  // Said in the product's own voice, because the person reading this is about
+  // to decide whether the build is good. It is not a verdict on the build.
+  if (blocked) {
+    console.log(blocked + ' group(s) could not run — something else on this PC is holding their ports.');
+    console.log('  That is this machine, not the product: nothing above tells you whether those checks would pass.');
+    console.log('  Close the process each line names, then run this again.');
+  }
   console.log('screenshots: ' + OUT);
-  process.exit(bad ? 1 : 0);
+  process.exit(bad || blocked ? 1 : 0);
 })();
