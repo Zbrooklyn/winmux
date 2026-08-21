@@ -6743,12 +6743,26 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   // process and the headroom argument becomes real again.
   // Override with WINMUX_VERIFY_CONCURRENCY (1 = fully serial).
   const MAX_CONCURRENCY = Math.max(1, Number(process.env.WINMUX_VERIFY_CONCURRENCY) || Math.min(8, cpu - 2));
-  console.log('running ' + run.length + ' checks, ' + MAX_CONCURRENCY + ' at a time');
-  const queue = run.slice();
+  // localecho asserts a LATENCY, not a behaviour: a keystroke painted within
+  // 32ms of the keypress. That is a claim about the app on an unloaded machine,
+  // and seven other Electron processes are not an unloaded machine — at 8-way it
+  // measured -1 (the paint never landed in the window) and reported it as a
+  // product regression. That is what the old flat cap of 3 was really protecting,
+  // and throttling all 86 checks to protect one of them cost ten minutes a run.
+  //
+  // So it runs alone, last. Everything else keeps the full width. The electron
+  // smoke has a 100ms budget too but takes the best of three samples, which is
+  // the other way to survive a loaded machine; it stays in the pool.
+  const SOLO = { localecho: 1 };
+  const queue = run.filter((c) => !SOLO[c.id]);
+  const solo = run.filter((c) => SOLO[c.id]);
+  console.log('running ' + queue.length + ' checks, ' + MAX_CONCURRENCY + ' at a time'
+    + (solo.length ? ', then ' + solo.length + ' timing-sensitive alone' : ''));
   const workers = Array.from({ length: Math.min(MAX_CONCURRENCY, queue.length) }, async () => {
     while (queue.length) { await runOne(queue.shift()); }
   });
   await Promise.all(workers);
+  for (const c of solo) await runOne(c);
 
   await browser.close();
   if (busyHold) busyHold.stop();
