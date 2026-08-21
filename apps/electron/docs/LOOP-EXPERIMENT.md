@@ -33,6 +33,26 @@ live targeted run on :99xx from the working tree, both fully green, no
 interference. Source pinning stops staleness; only the namespace stops
 contention. The original plan named one of these two.
 
+**The namespace was half-built, and only the full pinned run could see it.**
+The paragraph above was written before the first full proof, and it was wrong in
+the way that matters. Shifting the ports at the registration choke point moved
+the servers; it did not move the fifteen checks that hand their raw port
+constant to the `winmux` CLI as `WINMUX_PORT`. Under a base the server listened
+on 10068 and the CLI dialled 9968. Thirty-five of eighty-five checks went red.
+
+None of it is visible at base 0, where the raw and shifted numbers are the same
+number — which is precisely why the targeted concurrency test passed. **A
+half-applied namespace is green exactly where it is not being used.** The
+targeted run answered "do these two runs interfere," which was the question I
+asked; the question I meant was "is this suite correct under a shifted base,"
+and only the whole suite could answer it. That is P10 again, committed by the
+person who had just written P10 down.
+
+The fix is not fifteen call sites. Ports are declared already-shifted —
+`P(9914)`, not `9914` — so a raw number has nowhere to leak from, and a startup
+self-scan refuses to run if a `99xx` literal appears outside `P()`. One
+millisecond, and it sees what a twelve-minute run sees.
+
 **`--prove` — kept, and it earned its place by failing correctly.** Its first
 run reported NOT PROVEN. The fault was inside `--prove` itself: git resolves
 pathspecs against the working directory, so the revert silently did nothing, the
@@ -63,6 +83,24 @@ gate is false confidence.
   A liveness helper that fails with "exists but nothing can click it, X is on
   top" would have said so instantly — and that same class of measurement is what
   found the broadcast Stop button sitting under the window controls.
+
+## What the tiers are actually for
+
+Not "cheap first, expensive later." They answer different questions, and the
+cheap one cannot be made to answer the expensive one's:
+
+- **Tier 0** (milliseconds, no browser) — is the instrument self-consistent?
+  Port uniqueness, no raw literal skipping `P()`. Catches by name, before
+  anything runs. Both of its rules exist because judgement demonstrably failed
+  at exactly that spot.
+- **Tier 1** (targeted, seconds to a minute) — does *this* change do what I
+  said? `--prove` red-before / green-after on the named checks.
+- **Tier 2** (full, pinned, ~12 min) — is the suite still true *as a whole*?
+  This is the only tier that can catch a defect in the harness's own
+  cross-cutting machinery, because a targeted run is by definition a subset that
+  may not contain the affected checks. Tier 2 is not a formality at the end of
+  the work. It is the only instrument that can see a class of bug the other two
+  are structurally blind to, and skipping it is how a wrong instrument ships.
 
 ## Still deferred, deliberately
 
