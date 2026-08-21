@@ -139,6 +139,7 @@ const PORT_ORPHAN = 9974;      // AUDIT-8: closing a tab whose socket is down st
 const PORT_NOSTRAND = 9972;    // AUDIT-4: a slow answer never strands a live engine and its shells
 const PORT_EXITTRUTH = 9970;   // AUDIT-1: a shell that ends says so, on both engines
 const PORT_CTLBACKOFF = 9961;  // AUDIT-B4: the control socket backs off instead of retrying forever
+const PORT_KEYTRUTH = 9962;    // AUDIT-2: no shortcut is bound to a key the terminal is going to eat
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -751,6 +752,125 @@ check('ctlbackoff', PORT_CTLBACKOFF, async ({ browser, base, t }) => {
     gaps.length >= 2 && gaps[gaps.length - 1] > 9000, gaps);
   t('and it is capped, so it never stops trying altogether',
     gaps.every((g) => g <= 40000), gaps);
+});
+
+// --- keytruth: the app never teaches a key the terminal is going to eat ----
+// AUDIT-2. Three actions shipped with defaults the app's own "terminal is king"
+// guard throws away — Split right on Ctrl+D, Find on Ctrl+F, Toggle sidebar on
+// Ctrl+B — and every surface advertised them anyway. The first assertion here is
+// the structural one: it compares the defaults against the guard's own list, so
+// it fails on a fourth instance without anyone thinking to test for it. The rest
+// walk the real path, because "the table looks right" is not "the key works".
+check('keytruth', PORT_KEYTRUTH, async ({ browser, base, t, shot }) => {
+  const p = await desktop(browser);
+  // Record what the page actually sends to the shell. Watching whether the app
+  // swallowed the keydown is not good enough — xterm stops the event
+  // propagating, so a listener never sees it either way and the assertion
+  // reads undefined, which is not the same as "the terminal got it".
+  await p.addInitScript(() => {
+    window.__sent = [];
+    const send = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (data) {
+      try {
+        const m = JSON.parse(data);
+        if (m && m.t === 'i') window.__sent.push(m.d);
+      } catch (e) {}
+      return send.apply(this, arguments);
+    };
+  });
+  await p.goto(base + '/', { waitUntil: 'domcontentloaded' });
+  await appReady(p);
+  await p.waitForFunction(() => !!window.__winmuxTerminalChords && !!window.__winmuxKeymap, null, { timeout: 15000 });
+
+  // 1. Structural. No action may sit on a chord the guard hands to the shell.
+  const clash = await p.evaluate(() => {
+    const owned = window.__winmuxTerminalChords();
+    return window.__winmuxKeymap().effective.filter((a) => owned.indexOf(a.chord) >= 0);
+  });
+  t('no shortcut is bound to a key the terminal takes — the app cannot advertise a dead key',
+    clash.length === 0, clash);
+
+  const panes = () => p.evaluate(() => document.querySelectorAll('.pane').length);
+  const focusTerm = () => p.locator('.xterm-helper-textarea').first().focus();
+  // The app spells the Ctrl modifier "Ctrl"; Playwright insists on "Control".
+  // Press what the app says is bound, not a chord retyped by hand here — a
+  // hand-typed one would keep passing after the binding moved.
+  const press = async (id) => {
+    const chord = await p.evaluate((x) =>
+      (window.__winmuxKeymap().effective.find((a) => a.id === x) || {}).chord, id);
+    await p.keyboard.press(String(chord).replace(/^Ctrl\+/, 'Control+'));
+    return chord;
+  };
+  const chordFor = (id) => p.evaluate((x) =>
+    (window.__winmuxKeymap().effective.find((a) => a.id === x) || {}).chord, id);
+
+  // 2 & 3. Both split directions fire, from a focused terminal, which is the
+  // only state that matters. They were advertised side by side with one real.
+  await focusTerm();
+  const before = await panes();
+  const rightChord = await press('split-right');
+  await p.waitForTimeout(900);
+  const afterRight = await panes();
+  t('Split right actually splits, pressed from inside the terminal',
+    afterRight === before + 1, { before, afterRight, chord: rightChord });
+
+  await focusTerm();
+  await press('split-down');
+  await p.waitForTimeout(900);
+  const afterDown = await panes();
+  t('and so does Split down — the two directions behave the same way',
+    afterDown === afterRight + 1, { afterRight, afterDown });
+
+  // 4. Find, the other action that was stranded on a terminal key.
+  await focusTerm();
+  const findChord = await press('find');
+  await p.waitForTimeout(600);
+  const findOpen = await p.evaluate(() => !!document.querySelector('.findbar.on'));
+  t('Find opens from its shortcut too', findOpen, { chord: findChord });
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(300);
+
+  // 5. The guard still works. This fix must not have bought working shortcuts by
+  // quietly taking Ctrl+D back off the shell — that was the whole reason those
+  // keys were given away, and losing it would be a worse bug than the one fixed.
+  await focusTerm();
+  const paneCountBeforeD = await panes();
+  await p.evaluate(() => { window.__sent.length = 0; });
+  await p.keyboard.press('Control+d');
+  await p.waitForTimeout(600);
+  // Ctrl+D is EOT — the shell sees byte 0x04. If the app had grabbed the key
+  // to run an action, nothing would go down the wire at all.
+  const gotEot = await p.evaluate(() => window.__sent.some((d) => String(d).indexOf('') >= 0));
+  const paneCountAfterD = await panes();
+  t('Ctrl+D still reaches the shell — terminal is king, and this fix did not take that back',
+    gotEot && paneCountAfterD === paneCountBeforeD,
+    { sentEot: gotEot, panesBefore: paneCountBeforeD, panesAfter: paneCountAfterD });
+
+  // 6. The lie cannot be recreated by hand. Settings used to happily accept
+  // Ctrl+D and then show it bound forever.
+  await p.evaluate(() => window.__winmuxRebind('split-right'));
+  await p.waitForTimeout(400);
+  await p.keyboard.press('Control+d');
+  await p.waitForTimeout(400);
+  const err = await p.evaluate(() => {
+    const e = document.querySelector('#dlg-body .dlg-err');
+    return e ? e.textContent.trim() : null;
+  });
+  t('Rebind refuses a terminal key and says why, instead of storing a dead binding',
+    /belongs to the terminal/.test(err || ''), err);
+  await shot(p, 'keytruth-rebind-refused');
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(300);
+  const stillReal = await chordFor('split-right');
+  t('and the refusal left the working binding alone', stillReal === 'Ctrl+Shift+R', stillReal);
+
+  // 7. Nor by hand-editing the config file, which is the one path with no human
+  // in the loop — and which is how an existing user carrying an old default
+  // gets migrated onto a key that works.
+  const adopted = await p.evaluate(() =>
+    window.__winmuxAdoptKeymap({ find: 'Ctrl+F', 'close-tab': 'Ctrl+Alt+7' }));
+  t('a config file offering a terminal key is dropped, the good entry beside it kept',
+    adopted && adopted.find === undefined && adopted['close-tab'] === 'Ctrl+Alt+7', adopted);
 });
 
 // --- reason: the failure block's mechanics, measured not eyeballed --------

@@ -3667,6 +3667,13 @@
       var hasMod = e.ctrlKey || e.metaKey || e.altKey || e.shiftKey;
       if (!hasMod && !/^F\d+$/.test(k)) { err.textContent = 'That needs a modifier (Ctrl / Alt / Shift) or a function key.'; return; }
       var chord = chordOf(e);
+      // Refuse a chord the terminal owns before checking anything else — the
+      // reason is more specific than a clash, and accepting it would put the
+      // action somewhere the shell eats it.
+      if (terminalOwns(chord)) {
+        err.textContent = '"' + chord + '" belongs to the terminal — the shell gets it, so this would never fire.';
+        return;
+      }
       var clash = keymapLookup(chord);
       if (clash && clash.id !== id) { err.textContent = '"' + chord + '" is already used by "' + clash.label + '".'; return; }
       if (chord === a.def) delete KEYMAP[id]; else KEYMAP[id] = chord;
@@ -4705,13 +4712,13 @@
   var KEYS = [
     ['New tab', 'Alt+T', 'new-tab'], ['Close tab', 'Alt+W', 'close-tab'], ['Select tab 1–9', 'Alt+1…9'],
     ['Switch tabs (recent first)', 'Ctrl+Tab'], ['Reopen closed tab', 'Ctrl+Shift+T'],
-    ['Split right', 'Ctrl+D', 'split-right'], ['Split down', 'Ctrl+Shift+D', 'split-down'],
+    ['Split right', 'Ctrl+Shift+R', 'split-right'], ['Split down', 'Ctrl+Shift+D', 'split-down'],
     ['Zoom pane', 'Ctrl+Shift+Enter', 'zoom'],
     ['Pin pane', 'Alt+P'], ['Close pane', 'Alt+Shift+W', 'close-pane'],
     ['Broadcast input', 'Ctrl+Alt+B', 'broadcast'],
-    ['Find in terminal', 'Ctrl+F', 'find'], ['Copy mode (select with keys)', 'Ctrl+Shift+M'],
+    ['Find in terminal', 'Ctrl+Shift+F', 'find'], ['Copy mode (select with keys)', 'Ctrl+Shift+M'],
     ['Copy / Paste', 'Ctrl+Shift+C / V', 'copy+paste'], ['Font size', 'Ctrl+= / − / 0'],
-    ['Toggle sidebar', 'Ctrl+B', 'toggle-sidebar'], ['Changes panel', 'Ctrl+Alt+D', 'toggle-dock'],
+    ['Toggle sidebar', 'Ctrl+Shift+B', 'toggle-sidebar'], ['Changes panel', 'Ctrl+Alt+D', 'toggle-dock'],
     ['Notifications', 'Ctrl+Alt+N', 'notifications'],
     ['Command palette', 'Ctrl+Shift+P', 'palette'], ['Settings', 'Ctrl+,', 'settings'],
     ['Save layout', 'Ctrl+Alt+S', 'save-layout'], ['Load layout', 'Ctrl+Alt+O', 'load-layout'],
@@ -4994,18 +5001,18 @@
     { id: 'help', label: 'Keyboard help', def: 'F1', run: function () { openCheat(); } },
     { id: 'palette', label: 'Command palette', def: 'Ctrl+Shift+P', run: function () { openPalette(); } },
     { id: 'settings', label: 'Settings', def: 'Ctrl+,', run: function () { openSettings(); } },
-    { id: 'toggle-sidebar', label: 'Toggle sidebar', def: 'Ctrl+B', run: function () { toggleSidebar(); } },
+    { id: 'toggle-sidebar', label: 'Toggle sidebar', def: 'Ctrl+Shift+B', run: function () { toggleSidebar(); } },
     { id: 'toggle-dock', label: 'Toggle dock', def: 'Ctrl+Alt+D', run: function () { toggleDock(); } },
     { id: 'notifications', label: 'Notifications', def: 'Ctrl+Alt+N', run: function () { toggleNotif(document.getElementById('open-notif')); } },
     { id: 'broadcast', label: 'Broadcast to all panes', def: 'Ctrl+Alt+B', run: function () { setBroadcast(!broadcastOn); } },
     { id: 'save-layout', label: 'Save project', def: 'Ctrl+Alt+S', run: function () { saveLayoutDialog(); } },
     { id: 'load-layout', label: 'Open project', def: 'Ctrl+Alt+O', run: function () { loadLayoutDialog(); } },
-    { id: 'find', label: 'Find in terminal', def: 'Ctrl+F', run: function () { var p = paneById(activePaneId); if (p) openFind(p); } },
+    { id: 'find', label: 'Find in terminal', def: 'Ctrl+Shift+F', run: function () { var p = paneById(activePaneId); if (p) openFind(p); } },
     { id: 'copy', label: 'Copy selection', def: 'Ctrl+Shift+C', run: function () { var t = activeTerm(); if (t) copySel(t); } },
     { id: 'paste', label: 'Paste', def: 'Ctrl+Shift+V', run: function () { var t = activeTerm(); if (t) pasteInto(t); } },
     { id: 'zoom', label: 'Zoom pane', def: 'Ctrl+Shift+Enter', run: function () { var p = paneById(activePaneId); if (p) toggleZoom(p); } },
     { id: 'split-down', label: 'Split down', def: 'Ctrl+Shift+D', run: function () { var p = paneById(activePaneId); if (p) splitDown(p, startShell()); } },
-    { id: 'split-right', label: 'Split right', def: 'Ctrl+D', run: function () { var p = paneById(activePaneId); if (p) splitRight(p, startShell()); } },
+    { id: 'split-right', label: 'Split right', def: 'Ctrl+Shift+R', run: function () { var p = paneById(activePaneId); if (p) splitRight(p, startShell()); } },
     { id: 'close-pane', label: 'Close pane', def: 'Alt+Shift+W', run: function () { var p = paneById(activePaneId); if (p) askClosePane(p); } },
     { id: 'close-tab', label: 'Close tab', def: 'Alt+W', run: function () { var p = paneById(activePaneId); if (p && p.activeTermId) askCloseTerm(p, p.activeTermId); } },
     { id: 'new-tab', label: 'New tab', def: 'Alt+T', run: function () { var p = paneById(activePaneId); if (p) newTerm(p, startShell()); } },
@@ -5014,6 +5021,27 @@
     { id: 'reset-terminal', label: 'Reset terminal', def: 'Ctrl+Shift+K', run: function () { var t = activeTerm(); if (t) resetTerm(t); } },
   ];
   function actionById(id) { for (var i = 0; i < ACTIONS.length; i++) if (ACTIONS[i].id === id) return ACTIONS[i]; return null; }
+  // Chords the terminal owns outright. A shell takes EOF on Ctrl+D; vim and less
+  // page with Ctrl+F and Ctrl+B. The guard further down hands these straight to
+  // the terminal whenever a shell has focus — which is nearly always — so an
+  // action bound to one of them can never fire in the case that matters.
+  //
+  // That makes this a statement about which chords the app is CAPABLE of
+  // honouring, not a preference, and it belongs in exactly one place. All three
+  // of these were once defaults: Split right on Ctrl+D, Find on Ctrl+F, Toggle
+  // sidebar on Ctrl+B. The app printed them in the F1 sheet, offered them in the
+  // palette, and invited you to rebind them in Settings, and not one of them
+  // did anything. Worse, Ctrl+Shift+D — Split down — worked, so the two split
+  // directions sat side by side in the same menu with only one of them real,
+  // which reads as a flaky app rather than as a reserved key.
+  //
+  // So: the guard reads this list, the Rebind dialog refuses anything on it, and
+  // a hand-edited config offering one is dropped exactly like a chord the app
+  // could never match. There is no way left to put an action somewhere the
+  // terminal will eat it.
+  var TERMINAL_CHORDS = ['Ctrl+D', 'Ctrl+F', 'Ctrl+B'];
+  function terminalOwns(chord) { return TERMINAL_CHORDS.indexOf(chord) >= 0; }
+  window.__winmuxTerminalChords = function () { return TERMINAL_CHORDS.slice(); };
   // Is this a chord a keypress could ever produce? chordOf() below builds every
   // real chord the same way — modifiers in Ctrl, Alt, Shift order, single letters
   // upper-cased — so anything spelled differently can never match, however
@@ -5044,6 +5072,11 @@
     for (var id in disk) {
       if (!actionById(id)) continue;
       if (!chordLooksReal(disk[id])) continue;
+      // A chord the terminal owns is dropped for the same reason as one the app
+      // can never match: it would sit in Settings looking bound and do nothing.
+      // This also migrates anyone whose file still names an old default — the
+      // entry goes, the action falls back to a key that works.
+      if (terminalOwns(disk[id])) continue;
       valid[id] = disk[id];
     }
     for (var pass = 0; pass <= ACTIONS.length; pass++) {
@@ -5182,16 +5215,15 @@
 
     // Terminal is king. When a shell or a full-screen TUI (vim, less, a REPL) has
     // focus, the chords that mean something to a terminal belong to it, not to us.
-    // vim/less page with Ctrl+F and Ctrl+B; a shell takes EOF on Ctrl+D — intercept
-    // them here and every one is silently stolen from the terminal underneath.
     // Hand them back by falling through (no stop(), so xterm receives the key).
-    // Each action stays reachable from its pane button and the palette, so nothing
-    // is stranded. Alt/Meta chords stay ours so keyboard tab/pane nav still works.
+    // Alt/Meta chords stay ours so keyboard tab/pane nav still works.
+    //
+    // The list lives at TERMINAL_CHORDS, not here. It used to be spelled out in
+    // this condition, which is how three actions ended up defaulting to keys this
+    // very line was throwing away — nothing connected the two facts. Now the same
+    // list that silences a chord here is the one the Rebind dialog refuses.
     var termFocused = tgt && tgt.classList && tgt.classList.contains('xterm-helper-textarea');
-    if (termFocused && ctrl && !e.altKey && !e.shiftKey &&
-        (e.key === 'd' || e.key === 'D' || e.key === 'f' || e.key === 'F' || e.key === 'b' || e.key === 'B')) {
-      return;
-    }
+    if (termFocused && terminalOwns(chordOf(e))) return;
 
     // Remappable app chords: resolve the pressed chord to an action (defaults,
     // overridden by the user's keymap). This replaces the old hardcoded if-chain,
