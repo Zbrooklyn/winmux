@@ -151,10 +151,11 @@ const PORT_CWDGONE = 9965;     // AUDIT-B10: a project whose folder moved says s
 const PORT_CLICLOSE = 9966;    // AUDIT-T4: the command surface can put a layout back, not only grow it
 const PORT_SPLITFLOOR = 9944;  // AUDIT-T1: splitting has a floor, and the refusal is said out loud
 const PORT_FOLDFIT = 9969;     // AUDIT-T2: a saved layout too big for this window folds into tabs, losing nothing
-const PORT_FOLDKEEP = 9954;    // AUDIT-T2: its own number. It used to be PORT_FOLDFIT + 1, which quietly landed on exittruth's port.
-const PORT_CLIPROJ = 9952;    // AUDIT-B11: `winmux open` rejected the project file the app itself writes
+const PORT_FOLDKEEP = 9907;    // AUDIT-T2: its own number. It used to be PORT_FOLDFIT + 1, which quietly landed on exittruth's port.
+const PORT_CLIPROJ = 9905;    // AUDIT-B11: `winmux open` rejected the project file the app itself writes
 const PORT_WHOAMI = 9971;     // AUDIT-B9: four copies, and every one of them called itself "WinMux"
-const PORT_WHOAMI2 = 9953;    // AUDIT-B9: a second identity, to prove the name is derived and moves
+const PORT_WHOAMI2 = 9906;    // AUDIT-B9: a second identity, to prove the name is derived and moves
+const PORT_BCAST = 9973;      // AUDIT-P6: broadcast ships, and no check had ever touched it
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -433,6 +434,12 @@ const SHARED_ON_PURPOSE = {
   onboard: 1, profile: 1,
 };
 const PORT_OWNER = new Map();
+// Not every port in this file goes through check(). The exhaustion test binds
+// PORTS_EXHAUST itself, to prove the app gives up honestly when everything is
+// taken — and a check quietly assigned one of those numbers dies with a raw
+// EADDRINUSE from inside an unrelated check. Seed them as taken so the guard
+// sees the whole picture, not just the half that flows through check().
+PORTS_EXHAUST.forEach((p) => PORT_OWNER.set(p, 'the port-exhaustion test'));
 const check = (id, port, run, env) => {
   const owner = PORT_OWNER.get(port);
   if (owner && SHARED_ON_PURPOSE[owner] && SHARED_ON_PURPOSE[id]) {
@@ -1043,6 +1050,97 @@ const FOLD_SEED = (n) => ({
 // for you when several are live, so you could drive the wrong app and read a
 // confident report about it. The name now comes off the same instance-file the
 // identities already use to keep their state apart, so it cannot drift.
+// AUDIT-P6. Broadcast is a shipped feature — type once, every terminal gets it —
+// reachable from the command palette and Ctrl+Alt+B, and until now not one of
+// the 661 checks so much as named it. That is the gap coverage.cjs was built to
+// expose: a green run said nothing at all about this, in either direction.
+//
+// The dangerous half is not "does it send to everybody". It is the OFF switch.
+// A broadcast that silently stays on sends your next keystroke — a password, an
+// rm, a git push — into every open shell at once.
+check('bcast', PORT_BCAST, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  // Count where keystrokes actually GO, per socket. The banner is the app's
+  // claim about itself; this is the wire. Installed before the first navigation
+  // so it is in place before any terminal socket opens.
+  await page.addInitScript(() => {
+    window.__inputSends = [];
+    const send = WebSocket.prototype.send;
+    let n = 0;
+    WebSocket.prototype.send = function (data) {
+      if (!this.__id) this.__id = ++n;
+      try {
+        const m = JSON.parse(data);
+        if (m && m.t === 'i') window.__inputSends.push({ sock: this.__id, d: m.d });
+      } catch (e) {}
+      return send.apply(this, arguments);
+    };
+  });
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await appReady(page);
+  const socketsTyped = () => page.evaluate(() => {
+    const seen = new Set(window.__inputSends.map((x) => x.sock));
+    window.__inputSends = [];
+    return seen.size;
+  });
+
+  // A second terminal, so "all terminals" means more than one. Opened through
+  // the control surface, not the pane header: those buttons only appear on
+  // hover, and a check that depends on hovering is measuring the mouse.
+  await page.evaluate((u) => fetch(u + '/rpc', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cmd: 'new-tab', args: {} }),
+  }), base);
+  await page.waitForTimeout(3000);
+  const terms = await page.evaluate(() => document.querySelectorAll('.ptab').length);
+  t('a second terminal is open, so "every terminal" means more than one', terms >= 2, String(terms));
+
+  const bar = () => page.evaluate(() => {
+    const el = document.getElementById('bcast');
+    return { shown: !!el && getComputedStyle(el).display !== 'none',
+             text: (document.getElementById('bcast-text') || {}).textContent || '' };
+  });
+
+  t('nothing announces a broadcast before you ask for one', !(await bar()).shown);
+
+  await page.keyboard.press('Control+Alt+KeyB');
+  await page.waitForTimeout(600);
+  const on = await bar();
+  t('turning it on says so on screen, rather than changing where typing goes in silence',
+    on.shown, on);
+  t('and it says how many terminals are about to receive your keystrokes',
+    /\b\d+ terminals?\b/.test(on.text), on.text);
+
+  // The stop control is the whole safety story — click it, not the shortcut,
+  // because the visible button is what someone reaches for in a hurry.
+  await socketsTyped();          // clear anything the boot sequence sent
+  await page.keyboard.type('x');
+  await page.waitForTimeout(500);
+  const while_on = await socketsTyped();
+  t('with it on, one keystroke really does reach every terminal, not just the focused one',
+    while_on >= 2, { socketsThatGotIt: while_on });
+
+  await shot(page, 'bcast-on');
+  await page.click('#bcast-stop');
+  await page.waitForTimeout(600);
+  const off = await bar();
+  t('the Stop control on the banner actually turns it off', !off.shown, off);
+
+  await page.keyboard.type('x');
+  await page.waitForTimeout(500);
+  const afterStop = await socketsTyped();
+  t('and once stopped, a keystroke reaches exactly one terminal — not the room',
+    afterStop === 1, { socketsThatGotIt: afterStop });
+
+  await page.keyboard.press('Control+Alt+KeyB');
+  await page.waitForTimeout(500);
+  await page.keyboard.press('Control+Alt+KeyB');
+  await page.waitForTimeout(500);
+  const twice = await bar();
+  t('the shortcut toggles both ways, so it cannot be left stuck on',
+    !twice.shown, twice);
+});
+
 check('whoami', PORT_WHOAMI, async ({ base, t }) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'winmux-ident-'));
   const run = (instFile) => new Promise((resolve) => {
