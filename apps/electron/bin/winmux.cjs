@@ -87,6 +87,7 @@ const HELP = [
   '  list                             the open terminals (id, title, shell, cwd)',
   '  new-tab [shell]                  open a new tab in the active pane',
   '  split [right|down] [shell]       split the active pane',
+  '  close [id] [--pane]              close a tab (default: active), or its whole pane',
   '  send <text> [--id N] [--enter]   type text into a terminal (default: active)',
   '  read-screen [--id N] [--lines N] print a terminal\'s visible text',
   '  focus <id>                       focus a terminal',
@@ -176,6 +177,17 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
       const shell = (argv[1] === 'down' || argv[1] === 'right') ? argv[2] : argv[1];
       const r = await rpc('split', { dir, shell });
       return emit('split ' + dir + (r && r.id ? ' (' + r.id + ')' : ''), r);
+    }
+    // The only verb that removes anything. Everything else here creates or reads,
+    // which meant an agent could grow a layout forever and never tidy up after
+    // itself (T4).
+    if (cmd === 'close') {
+      const pane = argv.includes('--pane');
+      const target = argv.slice(1).find((a) => !a.startsWith('--'));
+      const r = await rpc('close', { target, pane });
+      return emit(r.closed === 'pane'
+        ? 'closed the pane and its ' + r.tabs + ' tab' + (r.tabs === 1 ? '' : 's') + ' — ' + r.panesLeft + ' pane' + (r.panesLeft === 1 ? '' : 's') + ' left'
+        : 'closed ' + (r.title || r.id) + ' — ' + r.tabsLeft + ' tab' + (r.tabsLeft === 1 ? '' : 's') + ' left', r);
     }
     if (cmd === 'send') {
       const text = argv[1];

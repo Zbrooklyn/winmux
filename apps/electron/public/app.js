@@ -5819,6 +5819,31 @@
       (args.dir === 'down' ? splitDown : splitRight)(sp, args.shell || startShell(), args.cwd);
       return { ok: true, dir: args.dir === 'down' ? 'down' : 'right' };
     }
+    // AUDIT-T4. The command surface had fifteen verbs and not one of them closed
+    // anything: new-tab and split created, everything else read. So an agent
+    // driving WinMux — which is what this product is for — could only ever grow
+    // the layout, and the only way back was a human reaching for a mouse. The
+    // closing itself was already written and working; it simply could not be
+    // reached from outside the window.
+    if (cmd === 'close') {
+      var tc = termByTarget(args.target);
+      if (!tc) throw new Error('no such terminal');
+      var pc = paneById(tc.paneId);
+      if (!pc) throw new Error('that tab is not in a pane');
+      if (args.pane) {
+        // closePane() returns silently when it is the last pane. Silence is fine
+        // for a click — the button is simply inert — but a command that prints
+        // "closed" when nothing closed is the exact dishonesty this project keeps
+        // finding in itself. Refuse out loud instead.
+        if (panes.length <= 1) throw new Error('that is the only pane — close its tabs instead');
+        var took = pc.terms.length;
+        closePane(pc);
+        return { closed: 'pane', tabs: took, panesLeft: panes.length };
+      }
+      var idc = tc.id, titlec = termName(tc);
+      closeTerm(pc, idc);
+      return { closed: 'tab', id: idc, title: titlec, tabsLeft: allTerms().length };
+    }
     if (cmd === 'focus') {
       var tf = termByTarget(args.target);
       if (!tf) throw new Error('no such terminal');

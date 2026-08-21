@@ -148,6 +148,7 @@ const PORT_CLIHERE  = 9963;    // AUDIT-9: the winmux CLI runs inside a WinMux t
 const PORT_KEYTRUTH = 9962;    // AUDIT-2: no shortcut is bound to a key the terminal is going to eat
 const PORT_FLEETOPEN = 9964;   // AUDIT-B6/B7: the fleet list opens, remembers, and the guide's button shows it
 const PORT_CWDGONE = 9965;     // AUDIT-B10: a project whose folder moved says so instead of opening elsewhere
+const PORT_CLICLOSE = 9966;    // AUDIT-T4: the command surface can put a layout back, not only grow it
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -958,6 +959,93 @@ check('keytruth', PORT_KEYTRUTH, async ({ browser, base, t, shot }) => {
     window.__winmuxAdoptKeymap({ find: 'Ctrl+F', 'close-tab': 'Ctrl+Alt+7' }));
   t('a config file offering a terminal key is dropped, the good entry beside it kept',
     adopted && adopted.find === undefined && adopted['close-tab'] === 'Ctrl+Alt+7', adopted);
+});
+
+// --- cliclose: the command surface can put a layout back, not only grow it --
+// AUDIT-T4. The CLI had fifteen verbs and not one of them closed anything.
+// new-tab and split created; everything else read. So an agent driving WinMux —
+// which is the thing this product exists for — could only ever ADD panes and
+// tabs, and the only way back was a person reaching for a mouse. The closing
+// code was already there and working; it just could not be reached from
+// outside the window.
+//
+// The test is the round trip, not the verb: grow a layout the way an agent
+// would, then put it back the same way. A `close` that works only from a clean
+// single-tab start would have passed a thinner check and still left the real
+// case — undoing your own mess — broken.
+check('cliclose', PORT_CLICLOSE, async ({ browser, base, t, shot }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_CLICLOSE), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => { o += d; });
+    proc.stderr.on('data', (d) => { e += d; });
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+  const parse = (s) => { try { return JSON.parse(s); } catch (e) { return null; } };
+  const count = async () => {
+    const r = parse((await winmux(['list', '--json'])).out);
+    return r && r.sessions ? r.sessions.length : -1;
+  };
+  const panes = () => page.evaluate(() => document.querySelectorAll('.pane').length);
+
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await appReady(page);
+
+  t('the help says the verb exists, so someone can find it',
+    /close \[id\]/.test((await winmux(['--help'])).out + (await winmux([])).out));
+
+  // Grow it, the way an agent building a workspace would.
+  const start = await count();
+  await winmux(['new-tab']);
+  await winmux(['split', 'right']);
+  // A second tab in the NEW pane, deliberately. A pane collapses when its last
+  // visible tab closes — correct behaviour, and it hid the pane case here: the
+  // first version of this check split once, closed that pane's only tab, and the
+  // pane went with it, so "close --pane" then had nothing to close and the
+  // last-pane refusal fired instead. Two tabs keeps the two cases separable.
+  await winmux(['new-tab']);
+  await page.waitForTimeout(2000);
+  const grown = await count(), grownPanes = await panes();
+  t('the layout grew first — otherwise closing proves nothing',
+    grown > start && grownPanes > 1, { start, grown, panes: grownPanes });
+
+  // 1. Close one tab by id, and check the count really moved.
+  const list = parse((await winmux(['list', '--json'])).out);
+  const victim = list.sessions[list.sessions.length - 1];
+  const closed = await winmux(['close', String(victim.id), '--json']);
+  await page.waitForTimeout(900);
+  const afterTab = await count();
+  t('closing a tab by id actually closes it', closed.code === 0 && afterTab === grown - 1,
+    { code: closed.code, before: grown, after: afterTab, err: closed.err });
+
+  // 2. Close the pane, which takes its tabs with it.
+  const beforePanes = await panes();
+  const cp = await winmux(['close', '--pane', '--json']);
+  await page.waitForTimeout(900);
+  const afterPanes = await panes();
+  t('closing a pane removes the pane, not just what is in it',
+    cp.code === 0 && afterPanes === beforePanes - 1, { code: cp.code, beforePanes, afterPanes, err: cp.err });
+
+  // 3. The last pane must be refused OUT LOUD. The underlying closePane() just
+  //    returns when it is the only one, which is right for a click and wrong for
+  //    a command: printing "closed" when nothing closed is the dishonesty this
+  //    project keeps catching in itself.
+  const lastly = await winmux(['close', '--pane', '--json']);
+  t('the last pane is refused, not silently reported as closed',
+    lastly.code !== 0, { code: lastly.code, out: lastly.out.slice(0, 120), err: lastly.err.slice(0, 160) });
+  t('and the refusal says why, in a sentence',
+    /only pane/.test(lastly.err + lastly.out), (lastly.err || lastly.out).slice(0, 160));
+  t('and the pane it refused to close is still there',
+    (await panes()) === afterPanes, await panes());
+
+  // 4. An id that does not exist is an error, not a shrug that closes something else.
+  const bogus = await winmux(['close', '99999', '--json']);
+  t('a bad id is an error, never a quiet close of the wrong tab',
+    bogus.code !== 0 && /no such terminal/.test(bogus.err + bogus.out), bogus.err.slice(0, 120));
+  await shot(page, 'cliclose-after');
+  await page.close();
 });
 
 // --- cwdgone: a project whose folder moved says so, on both engines ---------
