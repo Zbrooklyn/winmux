@@ -1150,6 +1150,17 @@
   // bypassing only the throttle timer, so the harness can prove a row reflects the
   // latest output deterministically.
   window.__winmuxCaptureDoing = function () { var n = 0; eachTerm(function (t) { if (captureDoing(t)) n++; }); return n; };
+  // What the tightest terminal on screen actually came out at. A check that
+  // counts panes is measuring the wrong thing — the floor is about how small a
+  // terminal got, and only the terminal knows that.
+  window.__winmuxNarrowest = function () {
+    var cols = Infinity, rows = Infinity, n = 0;
+    eachTerm(function (t) {
+      if (!t.term || !t.term.cols || !t.host || t.host.style.display === 'none') return;
+      n++; cols = Math.min(cols, t.term.cols); rows = Math.min(rows, t.term.rows);
+    });
+    return { terms: n, cols: n ? cols : 0, rows: n ? rows : 0 };
+  };
   // SP-5 observability hook: flip one terminal's status and report how long the
   // repaint work took, so the harness can prove a fleet tick costs O(row), not
   // O(sidebar), at any scale.
@@ -2949,7 +2960,56 @@
     }
     closePane(p);
   }
+  // ----------------------------------------------------------- split floor
+  // Splitting had no floor. Keep pressing and you get panes a couple of columns
+  // wide holding a shell nothing can be typed into — and no word about it.
+  //
+  // The conversion from pixels to characters is read off the LIVE terminal
+  // (its own width divided by its own column count) rather than the renderer's
+  // ideal cell size. The ideal size predicted 24 columns where the pane came
+  // out at 23; the live number is self-calibrating and errs conservative,
+  // because the count it divides by has already been floored once.
+  var MIN_COLS = 24, MIN_ROWS = 6;
+  function perChar(t) {
+    var w = t.host.clientWidth / t.term.cols;
+    var h = t.host.clientHeight / t.term.rows;
+    return { w: w > 0 ? w : 9, h: h > 0 ? h : 18 };
+  }
+  function splitRoom(p, dir) {
+    if (document.body.getAttribute('data-mode') === 'narrow') return null;
+    var t = p && activeTermOf(p);
+    if (!t || !t.term || !t.host || !t.term.cols || !t.term.rows) return null;
+    if (!p.el.clientWidth || !t.host.clientWidth) return null;
+    var cell = perChar(t);
+    if (dir === 'down') {
+      var col = p.col;
+      if (!col || !col.clientHeight || !t.host.clientHeight) return null;
+      var np = col.querySelectorAll('.pane').length;
+      var dv = col.querySelector('.wsdiv');
+      var dh = (dv && dv.getBoundingClientRect().height) || 4;
+      var chromeH = p.el.clientHeight - t.host.clientHeight;
+      var eachH = (col.clientHeight - np * dh) / (np + 1);
+      return { what: 'row', have: Math.floor((eachH - chromeH) / cell.h), need: MIN_ROWS };
+    }
+    if (!wsrow.clientWidth) return null;
+    var nc = wsrow.querySelectorAll('.wscol').length;
+    var dh2 = wsrow.querySelector(':scope > .wsdiv');
+    var dw = (dh2 && dh2.getBoundingClientRect().width) || 4;
+    var chromeW = p.el.clientWidth - t.host.clientWidth;
+    var eachW = (wsrow.clientWidth - nc * dw) / (nc + 1);
+    return { what: 'column', have: Math.floor((eachW - chromeW) / cell.w), need: MIN_COLS };
+  }
+  function splitBlocked(p, dir) {
+    var r = splitRoom(p, dir);
+    if (!r || r.have >= r.need) return '';
+    var n = Math.max(0, r.have);
+    return 'Each pane would be about ' + n + ' ' + r.what + (n === 1 ? '' : 's') +
+      ' — a terminal needs at least ' + r.need + '. Close a pane, or make the window bigger.';
+  }
+
   function splitRight(p, shellKey, cwd) {
+    var noRoom = splitBlocked(p, 'right');
+    if (noRoom) { notify('No room to split', noRoom); return null; }
     clearZoom();
     var np = makePane(makeCol());
     newTerm(np, shellKey || startShell(), cwd);
@@ -2958,6 +3018,8 @@
     return np;
   }
   function splitDown(p, shellKey, cwd) {
+    var noRoom = splitBlocked(p, 'down');
+    if (noRoom) { notify('No room to split', noRoom); return null; }
     clearZoom();
     var np = makePane(p.col, p);
     newTerm(np, shellKey || startShell(), cwd);

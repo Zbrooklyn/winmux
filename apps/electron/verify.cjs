@@ -129,6 +129,7 @@ const PORT_BASE = (() => {
 
 // #246: three ports the port check holds itself, so it can prove the
 // every-candidate-taken refusal without starving the other auto-picking checks.
+const PORT_SPLITFLOOR = 9900;  // AUDIT-T1: splitting has a floor, and the refusal is said out loud
 const PORTS_EXHAUST_RAW = [9952, 9953, 9954];
 const PORTS_EXHAUST = PORTS_EXHAUST_RAW.map((p) => p + PORT_BASE);
 const PORT_DIFF = 9956;       // ST5: git diff opens as a pane tab (leaf), not a side dock
@@ -183,6 +184,88 @@ const configFile = (port) => path.join(OUT, 'config-' + port + '.json');
 const argv = process.argv.slice(2);
 const HEADED = argv.includes('--headed');
 const ONLY = argv.filter((a) => !a.startsWith('-'));
+
+// ---- --prove: does this check actually detect the defect it claims to? ------
+// A check that passes before the fix proves nothing, and there is no way to
+// tell one apart from a real one by reading it. So the harness proves it:
+// put the product back the way it was, require RED, restore, require GREEN.
+//
+// Deliberately narrow — sensitivity and specificity, nothing else. Whether the
+// element was ever really there belongs in the assertion helpers; whether the
+// environment was clean belongs in the Tier 0 guards. Widening this verb is
+// how it would stop being buildable.
+//
+// The file set is detected, not typed. Every uncommitted change EXCEPT this
+// harness file is the product change under test — listing paths by hand is a
+// decision, and a decision is a thing to get wrong at 2am.
+if (argv.includes('--prove')) {
+  const { execFileSync, spawnSync } = require('child_process');
+  const names = ONLY;
+  if (!names.length) { console.error('\n--prove needs a check name: node verify.cjs --prove <check>\n'); process.exit(2); }
+  // git prints repo-relative paths and resolves pathspecs against cwd, so every
+  // git call here runs from the repo root. Getting that wrong made the revert a
+  // silent no-op, the "before" run kept the change, and it passed — which is
+  // precisely how a proof harness manufactures a false PROVEN. Fatal now.
+  const TOP = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: ROOT, encoding: 'utf8' }).trim();
+  const git = (args) => execFileSync('git', args, { cwd: TOP, encoding: 'utf8' });
+  const dirty = git(['status', '--porcelain', '--', ROOT])
+    .split('\n').map((l) => l.slice(3).trim()).filter(Boolean)
+    .filter((f) => !/verify\.cjs$/.test(f) && !/^"?\.?verify-out/.test(f) && !f.startsWith('coverage.cjs'));
+  if (!dirty.length) {
+    console.error('\n--prove found no uncommitted product change to attribute the pass to.');
+    console.error('Either the fix is already committed (prove it before committing), or there is no fix.\n');
+    process.exit(2);
+  }
+  const stash = path.join(os.tmpdir(), 'winmux-prove-' + process.pid);
+  fs.mkdirSync(stash, { recursive: true });
+  const run = () => {
+    const r = spawnSync(process.execPath, [__filename, ...names], { cwd: ROOT, encoding: 'utf8' });
+    const out = (r.stdout || '') + (r.stderr || '');
+    const m = out.match(/(\d+) of (\d+) checks FAILED/) || out.match(/(\d+)\/(\d+) checks passed/);
+    return { out, failed: /checks FAILED/.test(out), summary: m ? m[0] : '(no summary)' };
+  };
+  const saved = [];
+  let verdict = 1;
+  try {
+    for (const f of dirty) {
+      const abs = path.join(TOP, f);
+      const to = path.join(stash, f.replace(/[\\/]/g, '__'));
+      if (fs.existsSync(abs)) { fs.copyFileSync(abs, to); saved.push({ abs, to }); }
+    }
+    console.log('\nproving ' + names.join(', ') + ' against ' + dirty.length + ' changed file(s):');
+    dirty.forEach((f) => console.log('  ' + f));
+
+    for (const f of dirty) {
+      let tracked = true;
+      try { git(['cat-file', '-e', 'HEAD:' + f]); } catch (e) { tracked = false; }
+      // Throws on failure, deliberately. A revert that quietly does nothing
+      // leaves the change in place, the "before" run passes, and the harness
+      // reports a fix it never removed.
+      if (tracked) git(['checkout', 'HEAD', '--', f]);
+      else fs.unlinkSync(path.join(TOP, f));   // the file is new: absence is its "before"
+    }
+    console.log('\n[1/2] without the change — the check must FAIL');
+    const before = run();
+    console.log('      ' + before.summary);
+
+    saved.forEach((s) => fs.copyFileSync(s.to, s.abs));
+    console.log('\n[2/2] with the change — the check must PASS');
+    const after = run();
+    console.log('      ' + after.summary);
+
+    const ok = before.failed && !after.failed;
+    console.log('\n' + (ok
+      ? 'PROVEN — red before, green after. This check detects the defect it names.'
+      : !before.failed
+        ? 'NOT PROVEN — the check passed WITHOUT the change. It is not testing the fix.'
+        : 'NOT PROVEN — the check still fails WITH the change.'));
+    verdict = ok ? 0 : 1;
+  } finally {
+    saved.forEach((s) => { try { fs.copyFileSync(s.to, s.abs); } catch (e) {} });
+    try { fs.rmSync(stash, { recursive: true, force: true }); } catch (e) {}
+  }
+  process.exit(verdict);
+}
 // Ceiling on a single check. The slowest honest check (survive/detach, which sit out
 // real grace windows) lands well under this; anything past it is stuck, not slow.
 const CHECK_TIMEOUT = Number(process.env.WINMUX_CHECK_TIMEOUT_MS) || 300000;
@@ -5396,6 +5479,50 @@ check('doing', PORT_DOING, async ({ browser, base, t, shot }) => {
 // paste-on-phone works over the tailnet without the text ever touching disk. This
 // check drives the raw endpoint (the client only calls it when the toggle is on):
 // POST stores it, GET returns exactly it, and an oversized clip is capped.
+// AUDIT-T1. Splitting had no floor: keep pressing and you get panes a couple of
+// columns wide holding a shell you cannot type into, with no word about it.
+// This measures the tightest TERMINAL, not the pane count — the floor is about
+// how small a terminal got, and only the terminal knows that.
+check('splitfloor', PORT_SPLITFLOOR, async ({ browser, base, t, shot }) => {
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await appReady(page);
+  await page.setViewportSize({ width: 720, height: 480 });
+  await page.waitForTimeout(800);
+
+  const narrow = () => page.evaluate(() => window.__winmuxNarrowest());
+  const panes = () => page.evaluate(() => document.querySelectorAll('.workspace .pane').length);
+  const notes = async () => {
+    try { await page.click('#open-notif'); } catch (e) {}
+    await page.waitForTimeout(350);
+    const n = await page.evaluate(() => [].map.call(document.querySelectorAll('.nrow .nt'), (e) => e.textContent));
+    try { await page.keyboard.press('Escape'); } catch (e) {}
+    await page.waitForTimeout(150);
+    return n;
+  };
+
+  // Press the split until it refuses. Sixteen is far past any honest limit at
+  // this size; if it never refuses, that IS the defect.
+  let refusals = 0;
+  for (let i = 0; i < 16; i++) {
+    const before = await panes();
+    await page.keyboard.press('Control+Shift+KeyR');
+    await page.waitForTimeout(500);
+    if ((await panes()) === before) { refusals++; break; }
+  }
+
+  const end = await narrow();
+  t('the tightest terminal never falls below the floor, however hard you press',
+    end.cols >= 24 && end.rows >= 6, end);
+  t('and it stopped adding panes rather than adding useless ones',
+    refusals > 0, { refusals, panes: await panes() });
+
+  const said = await notes();
+  t('the refusal is said out loud, not swallowed',
+    said.some((x) => /No room to split/i.test(x)), said.slice(0, 3));
+  await shot(page, 'splitfloor');
+});
+
 check('clip', PORT_CLIP, async ({ base, t }) => {
   const marker = 'CLIP_SYNC_9939_hello_from_the_pc';
   const post = await fetch(base + '/api/clip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: marker }) }).then((r) => r.json()).catch((e) => ({ error: String(e) }));
