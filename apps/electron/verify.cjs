@@ -146,6 +146,7 @@ const PORT_EXITTRUTH = 9970;   // AUDIT-1: a shell that ends says so, on both en
 const PORT_CTLBACKOFF = 9961;  // AUDIT-B4: the control socket backs off instead of retrying forever
 const PORT_CLIHERE  = 9963;    // AUDIT-9: the winmux CLI runs inside a WinMux terminal, as the guide promises
 const PORT_KEYTRUTH = 9962;    // AUDIT-2: no shortcut is bound to a key the terminal is going to eat
+const PORT_FLEETOPEN = 9964;   // AUDIT-B6/B7: the fleet list opens, remembers, and the guide's button shows it
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -956,6 +957,91 @@ check('keytruth', PORT_KEYTRUTH, async ({ browser, base, t, shot }) => {
     window.__winmuxAdoptKeymap({ find: 'Ctrl+F', 'close-tab': 'Ctrl+Alt+7' }));
   t('a config file offering a terminal key is dropped, the good entry beside it kept',
     adopted && adopted.find === undefined && adopted['close-tab'] === 'Ctrl+Alt+7', adopted);
+});
+
+// --- fleetopen: the fleet list is visible, remembers, and can be shown to you
+// AUDIT-B6 + AUDIT-B7. Two defects with one shape: the sidebar's whole job is to
+// show you your sessions, and it did neither half of that.
+//
+//   B6  Every group shipped CLOSED, and which ones you opened lived only in a
+//       variable — so the fleet list, the product's core claim, opened as a rail
+//       of folder names with nothing under them, and re-closed itself on every
+//       reload. You re-opened the same group forever.
+//   B7  The agents guide's own "Show me the sidebar" button only toggled the
+//       sidebar when it was shut. It ships open. So the button that the guide
+//       sends a brand-new user to did nothing whatsoever: the overlay closed,
+//       nothing moved, and the first control they ever pressed looked broken.
+//
+// The point of testing them together is that B7's fix is only true if B6's is:
+// "show me the sidebar" has to end with sessions actually on screen.
+check('fleetopen', PORT_FLEETOPEN, async ({ browser, base, t, shot }) => {
+  const p = await desktop(browser);
+  // Read the fleet the way a person does — is there anything under the group.
+  const kids = () => p.evaluate(() => document.querySelectorAll('.skids .srow').length);
+  const caretOpen = () => p.evaluate(() =>
+    !!document.querySelector('.pexpand[data-open2]'));
+  try {
+    await p.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    await appReady(p);
+
+    // 1. Out of the box. A fresh profile is exactly what a new user has, and it
+    //    is the state the audit found shut.
+    t('the fleet list opens showing your sessions, not a shut rail of folder names',
+      (await kids()) > 0 && (await caretOpen()), { rows: await kids(), caret: await caretOpen() });
+    await shot(p, 'fleetopen-first-run');
+
+    // 2. Closing it is a choice and must stick. Testing the close direction too
+    //    matters: "always open on load" would pass an open-only assertion while
+    //    overriding the user every single time, which is the opposite bug.
+    await p.click('.pexpand');
+    await p.waitForTimeout(300);
+    t('collapsing a group really collapses it', (await kids()) === 0, await kids());
+    await p.reload({ waitUntil: 'domcontentloaded' });
+    await appReady(p);
+    t('and a reload respects that — it does not spring back open',
+      (await kids()) === 0 && !(await caretOpen()), { rows: await kids(), caret: await caretOpen() });
+
+    // 3. The other direction, which is the one B6 actually broke.
+    await p.click('.pexpand');
+    await p.waitForTimeout(300);
+    await p.reload({ waitUntil: 'domcontentloaded' });
+    await appReady(p);
+    t('re-opening it survives a reload too — the choice is remembered both ways',
+      (await kids()) > 0 && (await caretOpen()), { rows: await kids(), caret: await caretOpen() });
+
+    // 4. B7, set up in the precise state where it used to be a no-op: sidebar
+    //    already open (the shipped default) and the group closed, so the only
+    //    honest pass is the button changing something visible.
+    await p.click('.pexpand');
+    await p.waitForTimeout(300);
+    const sidebarOpen = await p.evaluate(() =>
+      document.getElementById('root').getAttribute('data-sidebar') === 'open');
+    t('the setup is the dead case: sidebar already open, nothing under the group',
+      sidebarOpen && (await kids()) === 0, { sidebarOpen, rows: await kids() });
+
+    await p.evaluate(() => {
+      const o = document.getElementById('agents-ovl');
+      if (o) { o.setAttribute('data-open', ''); o.classList.add('in'); }
+    });
+    await p.waitForTimeout(200);
+    await p.click('#wc-ag-fleet');
+    await p.waitForTimeout(500);
+    t('"Show me the sidebar" actually shows it — sessions are on screen afterwards',
+      (await kids()) > 0, await kids());
+    t('and it lands you on the Sessions rail, which is what the guide was pointing at',
+      await p.evaluate(() => {
+        const a = document.querySelector('.sessions');
+        return !a || a.getAttribute('data-sxtab') !== 'notif';
+      }));
+    t('the guide overlay closed behind it, rather than staying up over the thing it showed you',
+      await p.evaluate(() => {
+        const o = document.getElementById('agents-ovl');
+        return !o || !o.hasAttribute('data-open');
+      }));
+    await shot(p, 'fleetopen-after-guide-button');
+  } finally {
+    await p.close();
+  }
 });
 
 // --- reason: the failure block's mechanics, measured not eyeballed --------

@@ -1050,9 +1050,27 @@
     var want = null;
     try { want = parseInt(JSON.parse(localStorage.getItem('ct-groups') || '{}').active, 10); } catch (e) {}
     activeGroupId = groups.some(function (g) { return g.id === want; }) ? want : groups[0].id;
+    // Which groups are open is part of "where I left off", exactly like which
+    // group is active — but it used to live only in memory, so every reload
+    // closed the fleet list back up and you re-opened the same group forever.
+    // AUDIT: the fleet list is the product's core claim and it shipped shut.
+    var open = null;
+    try { open = JSON.parse(localStorage.getItem('ct-groups') || '{}').open; } catch (e) {}
+    if (open && typeof open === 'object') {
+      // Only for groups that still exist — a stale id would keep a row's state
+      // alive after the group it belonged to was deleted.
+      groups.forEach(function (g) { if (open[g.id]) expandedGroups[g.id] = true; });
+    } else {
+      // First run, or an install that predates this: open the group you are in.
+      // Shut is the wrong default for a list whose whole job is to show you the
+      // sessions — an empty rail of folder names says the product does nothing.
+      expandedGroups[activeGroupId] = true;
+    }
   }
   function saveGroups() {
-    try { localStorage.setItem('ct-groups', JSON.stringify({ groups: groups, active: activeGroupId })); } catch (e) {}
+    var open = {};
+    groups.forEach(function (g) { if (expandedGroups[g.id]) open[g.id] = 1; });
+    try { localStorage.setItem('ct-groups', JSON.stringify({ groups: groups, active: activeGroupId, open: open })); } catch (e) {}
   }
   function groupById(id) { for (var i = 0; i < groups.length; i++) if (groups[i].id === id) return groups[i]; return null; }
   function termsOfGroup(gid) { var out = []; eachTerm(function (t) { if (t.groupId === gid) out.push(t); }); return out; }
@@ -1272,6 +1290,7 @@
       e.stopPropagation();
       var gid = parseInt(ex.getAttribute('data-expand'), 10);
       expandedGroups[gid] = !expandedGroups[gid];
+      saveGroups();   // opening a group is a choice; it has to survive a reload
       renderSidebar();
       return;
     }
@@ -5531,7 +5550,20 @@
     if (fleetBtn) fleetBtn.addEventListener('click', function () {
       closeOvl('agents-ovl');
       var root = document.getElementById('root');
+      // AUDIT: this used to be the whole handler, and the sidebar is open by
+      // default — so the button the guide sends you to did nothing at all in
+      // the shipped state. The overlay vanished and nothing moved, which reads
+      // as a broken control at the exact moment someone is learning the app.
       if (root && root.getAttribute('data-sidebar') !== 'open') toggleSidebar();
+      // "Show me the sidebar" has to end with you looking at the thing the
+      // guide was talking about: the fleet, with its sessions visible. Opening
+      // a rail that is already open is not showing anyone anything.
+      setSidebarTab('sessions');
+      if (activeGroupId && !expandedGroups[activeGroupId]) {
+        expandedGroups[activeGroupId] = true;
+        saveGroups();
+      }
+      renderSidebar();
     });
     ovl.addEventListener('click', function (e) { if (e.target === ovl) closeOvl('agents-ovl'); });
     [closeBtn, fleetBtn].forEach(function (b) {
