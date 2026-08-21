@@ -6728,11 +6728,21 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   // pool keeps enough parallelism to stay fast while leaving headroom so no check
   // is starved. Override with WINMUX_VERIFY_CONCURRENCY (1 = fully serial).
   const cpu = (os.cpus() || []).length || 4;
-  // Cap at 3, not 4: the electron check spawns a full Electron process and, alongside
-  // three other browser-driving checks, occasionally trips its own internal timeouts
-  // under CPU saturation. 3 keeps the run fast while leaving that headroom so green is
-  // reproducible every run, not just most runs.
-  const MAX_CONCURRENCY = Math.max(1, Number(process.env.WINMUX_VERIFY_CONCURRENCY) || Math.min(3, cpu - 2));
+  // The cap used to be a flat 3 — chosen when the electron check tripped its own
+  // timeouts under saturation, and never revisited. On a 24-core machine that is
+  // three cores working and twenty-one idle, and it is the entire reason a full
+  // run "costs twelve minutes" and therefore gets deferred to the end of a
+  // batch, where it finds everything too late. Measured on this machine:
+  //
+  //   3 at a time  →  ~12 min   637/637
+  //   8 at a time  →  2m 26s    637/637, no flake
+  //
+  // A fifth of the wall clock, same answer. So: scale with the machine, still
+  // leaving two cores for the OS and this process, and keep a ceiling of 8 —
+  // past that the browser-driving checks start competing for the same GPU
+  // process and the headroom argument becomes real again.
+  // Override with WINMUX_VERIFY_CONCURRENCY (1 = fully serial).
+  const MAX_CONCURRENCY = Math.max(1, Number(process.env.WINMUX_VERIFY_CONCURRENCY) || Math.min(8, cpu - 2));
   console.log('running ' + run.length + ' checks, ' + MAX_CONCURRENCY + ' at a time');
   const queue = run.slice();
   const workers = Array.from({ length: Math.min(MAX_CONCURRENCY, queue.length) }, async () => {
