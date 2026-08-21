@@ -149,11 +149,12 @@ const PORT_KEYTRUTH = 9962;    // AUDIT-2: no shortcut is bound to a key the ter
 const PORT_FLEETOPEN = 9964;   // AUDIT-B6/B7: the fleet list opens, remembers, and the guide's button shows it
 const PORT_CWDGONE = 9965;     // AUDIT-B10: a project whose folder moved says so instead of opening elsewhere
 const PORT_CLICLOSE = 9966;    // AUDIT-T4: the command surface can put a layout back, not only grow it
-const PORT_SPLITFLOOR = 9968;  // AUDIT-T1: splitting has a floor, and the refusal is said out loud
+const PORT_SPLITFLOOR = 9944;  // AUDIT-T1: splitting has a floor, and the refusal is said out loud
 const PORT_FOLDFIT = 9969;     // AUDIT-T2: a saved layout too big for this window folds into tabs, losing nothing
-const PORT_CLIPROJ = 9970;    // AUDIT-B11: `winmux open` rejected the project file the app itself writes
+const PORT_FOLDKEEP = 9954;    // AUDIT-T2: its own number. It used to be PORT_FOLDFIT + 1, which quietly landed on exittruth's port.
+const PORT_CLIPROJ = 9952;    // AUDIT-B11: `winmux open` rejected the project file the app itself writes
 const PORT_WHOAMI = 9971;     // AUDIT-B9: four copies, and every one of them called itself "WinMux"
-const PORT_WHOAMI2 = 9972;    // AUDIT-B9: a second identity, to prove the name is derived and moves
+const PORT_WHOAMI2 = 9953;    // AUDIT-B9: a second identity, to prove the name is derived and moves
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -409,7 +410,43 @@ function serverAuto() {
 const CHECKS = [];
 // A check may carry an env override for its server (last arg) — e.g. the update
 // check forces WINMUX_FAKE_LATEST so the badge can be proven without a real release.
-const check = (id, port, run, env) => CHECKS.push({ id, port, run, env });
+// Two checks must never share a port. Servers are memoised per port, so the
+// second check to ask for a shared one silently gets the FIRST check's server,
+// configured with the first check's environment — and then grades it. That is
+// the harness doing the exact thing it exists to catch the product doing:
+// reporting confidently about something other than what it was pointed at.
+//
+// It is also invisible. The run stays green until scheduling happens to put the
+// wrong check first, and then a red appears somewhere unrelated and moves the
+// next time. Three collisions had accumulated in this file, each added by
+// someone picking "the next free number" by eye. So the numbers are no longer
+// trusted to a reader: a collision stops the run here, by name, before a single
+// check has run.
+//
+// Some checks DO share a server on purpose — they were written to cooperate on
+// one, and the refcount in `owed` exists for exactly them. Sharing is fine when
+// it is intended; the danger is sharing nobody meant. So intent has to be
+// written down here. A group not on this list is a mistake, by definition.
+const SHARED_ON_PURPOSE = {
+  brand: 1, fresh: 1, busyport: 1, launchfail: 1, reason: 1,  // all ride the PORT_BUSY server
+  electron: 1, groups: 1,
+  onboard: 1, profile: 1,
+};
+const PORT_OWNER = new Map();
+const check = (id, port, run, env) => {
+  const owner = PORT_OWNER.get(port);
+  if (owner && SHARED_ON_PURPOSE[owner] && SHARED_ON_PURPOSE[id]) {
+    CHECKS.push({ id, port, run, env });
+    return;
+  }
+  if (owner) {
+    console.error('\nverify.cjs is misconfigured: checks "' + owner + '" and "' + id + '" both claim port '
+      + port + '.\nTwo checks on one port grade each other’s server. Give one of them a free port.\n');
+    process.exit(2);
+  }
+  PORT_OWNER.set(port, id);
+  CHECKS.push({ id, port, run, env });
+};
 
 // One idiom, copy-pasted 29 times: navigate, then sleep 4500ms hoping the app
 // has booted and a shell is answering. Three of today's honest-failure bugs came
@@ -1219,7 +1256,7 @@ check('foldfit', PORT_FOLDFIT, async ({ browser, base, t, shot }) => {
 // --- foldfit-control: a layout that fits is not touched ---------------------
 // The other half of the claim, and the one that would hurt if it were wrong: a
 // fold that fires when it should not would quietly destroy layouts people meant.
-check('foldkeep', PORT_FOLDFIT + 1, async ({ browser, base, t }) => {
+check('foldkeep', PORT_FOLDKEEP, async ({ browser, base, t }) => {
   const page = await desktop(browser);
   await page.addInitScript((seed) => {
     try { localStorage.setItem('ct-live', JSON.stringify(seed)); } catch (e) {}
