@@ -151,6 +151,7 @@ const PORT_CWDGONE = 9965;     // AUDIT-B10: a project whose folder moved says s
 const PORT_CLICLOSE = 9966;    // AUDIT-T4: the command surface can put a layout back, not only grow it
 const PORT_SPLITFLOOR = 9968;  // AUDIT-T1: splitting has a floor, and the refusal is said out loud
 const PORT_FOLDFIT = 9969;     // AUDIT-T2: a saved layout too big for this window folds into tabs, losing nothing
+const PORT_CLIPROJ = 9970;    // AUDIT-B11: `winmux open` rejected the project file the app itself writes
 const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
@@ -988,6 +989,93 @@ const FOLD_SEED = (n) => ({
     active: 0,
     tabs: [{ type: 'terminal', group: 'Workspace', title: 'seed-' + (i + 1), shell: '', cwd: '' }],
   }])),
+});
+
+// AUDIT-B11. The README told you `winmux open <file.json>` opens a saved project.
+// It did not. The verb only understood workspaces-as-code — a `sessions` array —
+// so handing it the `.winmux.json` that Save project had just written died with
+// `workspace file needs a "sessions" array`. The doc was not wrong about what
+// should happen; the verb was missing half its job. Now one word opens either
+// shape, and a project rebuilds its panes the way the Projects menu does.
+check('cliproject', PORT_CLIPROJ, async ({ browser, base, t, shot }) => {
+  const winmux = (args) => new Promise((resolve) => {
+    const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'winmux.cjs'), ...args],
+      { cwd: ROOT, env: Object.assign({}, process.env, { WINMUX_PORT: String(PORT_CLIPROJ), WINMUX_HOST: '127.0.0.1' }) });
+    let o = '', e = '';
+    proc.stdout.on('data', (d) => { o += d; });
+    proc.stderr.on('data', (d) => { e += d; });
+    proc.on('exit', (code) => resolve({ code, out: o.trim(), err: e.trim() }));
+  });
+
+  const page = await desktop(browser);
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await appReady(page);
+
+  // A real project file: two columns, three terminals — a shape the sessions-array
+  // path could not express even if it had parsed, which is the point.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'winmux-proj-'));
+  const file = path.join(dir, 'client-work.winmux.json');
+  const layout = {
+    v: 4,
+    group: 'Client work',
+    cols: [
+      [{ active: 0, tabs: [{ type: 'terminal', group: 'Client work', title: 'left', shell: '', cwd: '' }] }],
+      [{ active: 0, tabs: [
+        { type: 'terminal', group: 'Client work', title: 'right-a', shell: '', cwd: '' },
+        { type: 'terminal', group: 'Client work', title: 'right-b', shell: '', cwd: '' },
+      ] }],
+    ],
+  };
+  fs.writeFileSync(file, JSON.stringify({ winmuxProject: 1, name: 'Client work', created: 1, modified: 2, layout }, null, 2));
+
+  t('the help offers one word for both file shapes, so nobody has to guess which',
+    /open <file\.json>/.test((await winmux(['--help'])).out) && /project/i.test((await winmux(['--help'])).out));
+
+  const before = await page.evaluate(() => ({
+    panes: document.querySelectorAll('.workspace .pane').length,
+    tabs: document.querySelectorAll('.workspace .ptab').length,
+  }));
+
+  const r = await winmux(['open', file]);
+  t('opening a saved project exits clean instead of refusing the app\u2019s own file format',
+    r.code === 0, { code: r.code, err: r.err.slice(0, 200) });
+  t('and it does not complain about a "sessions" array that a project never had',
+    !/sessions/i.test(r.err), r.err.slice(0, 200));
+
+  await page.waitForTimeout(2500);
+  const after = await page.evaluate(() => ({
+    panes: document.querySelectorAll('.workspace .pane').length,
+    tabs: document.querySelectorAll('.workspace .ptab').length,
+    titles: [].map.call(document.querySelectorAll('.workspace .ptab .tt'), (e) => e.textContent.trim()),
+  }));
+  t('the panes come back as the project saved them \u2014 two columns, not one flat list',
+    after.panes === 2, { before: before.panes, after: after.panes });
+  t('with all three terminals, each in the column it was saved in',
+    after.tabs === 3, { before: before.tabs, after: after.tabs });
+  t('and the saved tab names survive the trip',
+    ['left', 'right-a', 'right-b'].every((n) => after.titles.indexOf(n) >= 0), after.titles);
+
+  // The workspaces-as-code shape still works — this verb serves two callers now.
+  const wfile = path.join(dir, 'as-code.json');
+  fs.writeFileSync(wfile, JSON.stringify({ sessions: [{ cwd: dir }] }));
+  const w = await winmux(['open', wfile]);
+  t('the older workspaces-as-code file still opens through the same verb',
+    w.code === 0 && /terminal/i.test(w.out), { code: w.code, out: w.out.slice(0, 120) });
+
+  // The README told three stories about itself. Each of these is one of them,
+  // asserted against the shipped file so the doc cannot drift back.
+  const readme = fs.readFileSync(path.join(ROOT, '..', '..', 'README.md'), 'utf8');
+  t('the README does not say the app you download runs the Node engine while its own '
+    + 'download table calls Node the legacy build',
+    !/built on \*\*one\*\* Node server/.test(readme) && /download runs the Rust engine/.test(readme));
+  t('and it says where Node is actually needed, instead of demanding it on one line '
+    + 'and promising "No Node" on another',
+    /only to run from source/i.test(readme) && /No Node, no build step/.test(readme));
+  t('and the project file it tells you to open is the one the open verb accepts',
+    /winmux open <file\.json>` opens a saved project/.test(readme) && /\.winmux\.json/.test(readme));
+
+  await shot(page, 'cliproject');
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
 });
 
 check('foldfit', PORT_FOLDFIT, async ({ browser, base, t, shot }) => {

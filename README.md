@@ -6,17 +6,19 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-8a5cf5.svg)](LICENSE)
 ![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078d4.svg)
-![Node](https://img.shields.io/badge/Node-%E2%89%A518-339933.svg)
+![Node (from source)](https://img.shields.io/badge/Node%20(from%20source)-%E2%89%A518-339933.svg)
 [![CI](https://github.com/Zbrooklyn/winmux/actions/workflows/ci.yml/badge.svg)](https://github.com/Zbrooklyn/winmux/actions/workflows/ci.yml)
 
 <img src="docs/screenshots/hero.png" alt="WinMux desktop cockpit running a live PowerShell session" width="820">
 
 </div>
 
-WinMux is a terminal multiplexer for Windows built on **one** Node server (`server.cjs` — node-pty + ws)
-that spawns real PowerShell / CMD / Git Bash / WSL shells and streams them to an [xterm.js](https://xtermjs.org/)
-cockpit. That single server has **three faces**, and all of them are clients of the same in-process
-session — so what you start at your desk is the exact terminal you pick up on your phone.
+WinMux is a terminal multiplexer for Windows built on **one** server that spawns real
+PowerShell / CMD / Git Bash / WSL shells and streams them to an [xterm.js](https://xtermjs.org/)
+cockpit. The app you download runs the Rust engine; a Node engine (`server.cjs` — node-pty + ws)
+speaks the identical protocol and still ships as a fallback build. Either way it is **one** server
+with **three faces**, and all of them are clients of the same session — so what you start at your
+desk is the exact terminal you pick up on your phone.
 
 - **Desktop app** — a native, frameless Windows window (Electron).
 - **Browser** — open the served URL on this PC.
@@ -77,14 +79,16 @@ A **project** is a real file on disk — a saved working setup (its group and ta
 - **Save** the current setup from the footer's *Save project* icon (or `Ctrl+Alt+S`, or the command palette). Name it and it writes `<name>.winmux.json` into `Documents\WinMux Projects` (override with `WINMUX_PROJECTS_DIR`).
 - **Open** a past project from the *Open project* icon (`Ctrl+Alt+O`) — the Recent list shows each project's folder, tab count, and shells — or *Open project file…* to pick a `.json` from anywhere. Opening rebuilds the panes with fresh shells.
 - **Save on close.** If you've changed a workspace since it was last saved to its project file, closing the window asks first — *Save* / *Don't save* / *Cancel* — so a named project isn't silently left behind. (Your live session state is always auto-restored on next launch regardless, so nothing is truly lost; this just keeps the project file current.)
-- From the CLI: `winmux open <file.json>` opens a saved project directly.
+- From the CLI: `winmux open <file.json>` opens a saved project directly — it rebuilds the panes, splits and all.
 - **Where your stuff lives** — everything is auto-saved; press `F1` in the app for the exact paths on your machine, or open Settings → Diagnostics. In short: your live layout auto-saves to `~/.winmux/workspace.<identity>.json`, named projects live in `Documents\WinMux Projects`, recovery scrollbacks in `~/.winmux/backlog` (kept 7 days, listed under *Recent & recoverable*), settings in `~/.winmux/config.json`.
 - **Moving to another machine** — copy your project files and `~/.winmux/config.json` to the same places on the new machine; that's the whole setup. (Full detail: [state contract](apps/electron/docs/STATE.md).)
 
 ## Requirements
 
 - **Windows 10 or 11**
-- **Node.js ≥ 18** (node-pty ships prebuilt N-API binaries, so no native build step is required)
+- **Node.js ≥ 18** — **only to run from source.** The installers bundle everything they need;
+  nothing to install first. (node-pty ships prebuilt N-API binaries, so even from source there is
+  no native build step.)
 - **Tailscale** — only if you want phone access; the desktop and browser faces work without it
 
 ## Install & run
@@ -140,7 +144,8 @@ winmux browser open example.com  # open the browser panel (desktop app)
 winmux browser snapshot          # list the page's clickable elements as @refs
 winmux browser click @e1         # click one of them
 winmux markdown README.md        # open a file in the live markdown viewer
-winmux open workspace.json       # open a saved set of terminals (cwd/shell/command each)
+winmux open my-project.winmux.json # open a saved project — rebuilds its panes and splits
+winmux open workspace.json       # or a plain list of terminals (cwd/shell/command each)
 winmux agent needs-you "..."     # set this session's agent state (working|needs-you|done)
 winmux agent spawn "fix the test"# open a new session, run Claude on the task, get a job to wait on
 winmux agent wait --job <id>     # block until that session finishes; prints its result

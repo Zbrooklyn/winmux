@@ -4494,7 +4494,7 @@
   }
   document.getElementById('pj-new').addEventListener('click', newProject);
   // Open a project file by typed path — the browser cannot hand us an absolute path
-  // from a native picker, so we ask for one (the winmux CLI's `open` is the richer path).
+  // from a native picker, so we ask for one (`winmux open <file>` takes a real path).
   document.getElementById('pj-openfile').addEventListener('click', function () {
     var p = prompt('Open project file — full path to a .json:', (readCurrent() || {}).path || '');
     if (!p) return;
@@ -6070,6 +6070,24 @@
     if (cmd === 'markdown') {
       if (!args.path) throw new Error('markdown needs a file path');
       return openMarkdown(args.path);
+    }
+    // Open a saved project file (.winmux.json) the way the Projects menu does —
+    // rebuild the whole layout, splits included, and bind this window to the file.
+    // The CLI's `open` used to be documented as the way to do this while the verb
+    // only understood workspaces-as-code; this is the missing half.
+    if (cmd === 'project') {
+      if (!args.path) throw new Error('project needs a file path');
+      return Projects.read(args.path).then(function (r) {
+        if (!r || !r.layout) throw new Error((r && r.error) || 'could not read that project file');
+        closeLayoutMenu();
+        // An explicit CLI call is the confirmation — do not put a dialog in front
+        // of a scripted open; openSavedLayout's prompt exists for a stray click.
+        restoreLayout(r.layout);
+        setCurrent(args.path, r.name || args.path);
+        markProjectClean();
+        if (typeof updateProjectRow === 'function') updateProjectRow();
+        return { ok: true, name: r.name || '', tabs: allTerms().length };
+      });
     }
     throw new Error('unknown command: ' + cmd);
   }

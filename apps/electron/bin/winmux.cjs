@@ -112,8 +112,9 @@ const HELP = [
   '',
   '  image <file>                     show an image inline in the current terminal',
   '',
-  '  open <file.json>                 open a saved workspace — a set of terminals,',
-  '                                   each with its own cwd, shell, and start command',
+  '  open <file.json>                 open a saved project (.winmux.json) or a workspace —',
+  '                                   a project rebuilds its panes; a workspace file is a',
+  '                                   list of terminals, each with cwd, shell, start command',
   '',
   '  --json                           raw JSON output where relevant',
 ].join('\n');
@@ -291,9 +292,19 @@ function has(argv, name) { return argv.indexOf(name) >= 0; }
       // optional cwd / shell / start command. Open them all from one word. This is
       // pure CLI — it drives the existing new-tab + send verbs, no new server code.
       if (!argv[1]) die('open needs a workspace file, e.g. winmux open work.json');
+      const openPath = path.resolve(process.cwd(), argv[1]);
       let spec;
-      try { spec = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), argv[1]), 'utf8')); }
+      try { spec = JSON.parse(fs.readFileSync(openPath, 'utf8')); }
       catch (e) { die('cannot read workspace file: ' + (e.code === 'ENOENT' ? 'no such file' : e.message)); }
+      // Two file shapes open with one word. A saved project (.winmux.json, written
+      // by Save project) rebuilds the whole layout, splits and all — the app owns
+      // that path, so hand it over. A workspaces-as-code file is a plain list of
+      // terminals and stays pure CLI.
+      if (spec && spec.winmuxProject) {
+        const r = await rpc('project', { path: openPath });
+        return emit('opened project ' + (r && r.name ? '"' + r.name + '"' : argv[1]) +
+          (r && r.tabs ? ' (' + r.tabs + ' tab' + (r.tabs === 1 ? '' : 's') + ')' : ''), r);
+      }
       const sessions = Array.isArray(spec) ? spec : (spec && Array.isArray(spec.sessions) ? spec.sessions : null);
       if (!sessions || !sessions.length) die('workspace file needs a "sessions" array (or be an array) of { cwd?, shell?, command? }');
       const opened = [];
