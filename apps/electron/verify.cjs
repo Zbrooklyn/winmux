@@ -675,7 +675,13 @@ async function appReady(page, floorMs, capMs) {
 // than letting the silence be scored against the product.
 async function clickLive(page, hoverSel, targetSel, timeout) {
   await page.hover(hoverSel);
-  await page.waitForFunction(`(function () {
+  // Named, because the first version of this was not. When it timed out inside a
+  // full run all the log said was `page.waitForFunction: Timeout 10000ms
+  // exceeded` — and the caller has its own 10s waitForFunction, so the message
+  // could not say which of the two had failed, or whether the product was even
+  // involved. A guard that cannot name its own side is half a guard.
+  try {
+    await page.waitForFunction(`(function () {
     var el = document.querySelector(${JSON.stringify(targetSel)});
     if (!el) return false;
     var r = el.getBoundingClientRect();
@@ -683,6 +689,18 @@ async function clickLive(page, hoverSel, targetSel, timeout) {
     var top = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
     return !!top && (top === el || el.contains(top) || top.contains(el));
   })()`, null, { timeout: timeout || 10000 });
+  } catch (e) {
+    const seen = await page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return { found: false };
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+      return { found: true, w: Math.round(r.width), h: Math.round(r.height),
+        opacity: getComputedStyle(el).opacity, blockedBy: top ? (top.className || top.tagName) : null };
+    }, targetSel).catch(() => null);
+    throw new Error('HARNESS: ' + targetSel + ' never became clickable — the hover-reveal '
+      + 'never settled, so nothing here says anything about the product. ' + JSON.stringify(seen));
+  }
   await page.click(targetSel);
 }
 
@@ -3149,9 +3167,16 @@ check('orphan', PORT_ORPHAN, async ({ browser, base, t }) => {
     const tabsBefore = await page.evaluate(() => document.querySelectorAll('.ptab').length);
     await clickLive(page, '.ptab[data-active]', '.ptab[data-active] .x');
     // If the tab is still there the click did not land, and nothing below says
-    // anything about the product. Fail loudly as a harness problem instead.
+    // anything about the product. Fail loudly as a harness problem instead —
+    // and say so in words, because a bare Playwright timeout here is
+    // indistinguishable from the one inside clickLive.
     await page.waitForFunction(
-      `document.querySelectorAll('.ptab').length < ${tabsBefore}`, null, { timeout: 10000 });
+      `document.querySelectorAll('.ptab').length < ${tabsBefore}`, null, { timeout: 10000 })
+      .catch(async () => {
+        const now = await page.evaluate(() => document.querySelectorAll('.ptab').length).catch(() => '?');
+        throw new Error('HARNESS: the X was clickable and was clicked, but the tab did not close ('
+          + tabsBefore + ' before, ' + now + ' after), so the shell count below would grade nothing.');
+      });
     // Wait for the count to drop — but do NOT assert on that moment. Before the
     // fix it DID drop, and then the queued retry reattached by sid and put the
     // shell straight back: a check that graded the transient called the bug fixed.

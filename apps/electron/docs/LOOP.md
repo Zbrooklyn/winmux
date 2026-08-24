@@ -55,8 +55,29 @@ genuinely the element at its own centre, then click — and if it never becomes
 hittable, say *harness* rather than letting the silence be scored against the
 product.
 
+That helper lowered the rate and did not close the cause; `orphan` threw again
+two runs later, and the throw could not say whether it came from the helper's
+wait or the caller's, since both waited ten seconds and both reported the same
+bare Playwright timeout. Both now fail in words. **A guard that cannot name its
+own side is half a guard** — it converts one unattributable failure into a
+different unattributable failure, which reads like progress and is not.
+
 That is the general shape of everything worth keeping: **a failure mode that
 cannot tell you which side it came from is the expensive kind.**
+
+The second worked example is the pid ledger, and it is here because it cost more
+than it should have. Two `server.cjs` processes from worktrees that had already
+been deleted were squatting the ports the *next* run needed, and the next run
+reported it as a product failure — three times, deterministically. The first fix
+matched process command lines against the worktree path. Testing it showed that
+predicate was wrong in both directions: it missed `node server.cjs`, whose argv
+never names the tree it runs in, and it matched four of my own shells, which had
+the path in them only because I had typed it. Now every port-owning spawn writes
+its pid down at the moment of spawn, outside the throwaway tree, and the runner
+kills those pids and nothing else.
+
+**Ownership is recorded, not inferred.** A guard that has to guess what belongs
+to it will eventually guess wrong in the direction that costs you something.
 
 ## G2 — `node verify.cjs --prove <check>`
 
@@ -100,10 +121,18 @@ Five runs of essentially the same commit gave 637/637, 636/637, 637/637,
 636/637, 631/635. Four different checks flipped across them. `637/637` was never
 a property of the code — it was a sample, and it was reported as proof twice.
 
-Two of the four are fixed (`orphan`, `localecho`). One is a latency claim that
-belongs in the solo lane (`electron`). One (`resume`) is unexplained and is
-written down rather than chased, because chasing every instrument defect the
-moment it appears is the runaway this whole document exists to stop.
+One of the four is fixed (`localecho`). One is a latency claim that belongs in
+the solo lane (`electron`). One (`resume`) is unexplained and is written down
+rather than chased, because chasing every instrument defect the moment it
+appears is the runaway this whole document exists to stop.
+
+And one — `orphan` — was called fixed here and was not. It went 5/5 alone three
+times, so it was written up as closed; it threw inside the next full run at
+8-way. **Green alone is not green, for a check that only ever failed under
+concurrency.** The rate dropped; the cause did not close. It is back on the
+list, and the claim above is corrected rather than quietly dropped, because a
+document that only records the fixes is the same failure as a run that only
+reports its greens.
 
 **The number to trust is not the pass count. It is the pass count repeated.** A
 single green full run means the suite did not fail this time.

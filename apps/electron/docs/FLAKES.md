@@ -18,9 +18,27 @@ is a red that got fixed, which is what reds are for.
 
 | check | seen | what it looks like | best guess |
 |---|---|---|---|
+| **`orphan`** | **1 of 2 runs of `655eea1`** | `page.waitForFunction: Timeout 10000ms exceeded`, thrown after both pre-click assertions passed | **reopened.** `clickLive` reduced the rate; it did not close it |
 | `writeloud` | 1 of 3 runs of `1b46e00` | — | unexamined |
 | `recover` | 1 of 3 runs of `1b46e00` | — | unexamined |
 | `resume` | 1 of 3 runs of `3763175` | `{id}` template substitution and the cold-reopen auto-run both fail, plus a throw | unknown — not yet reproduced alone |
+
+**`orphan` was moved to Closed too early, and this is the correction.** It went
+5/5 alone, three times, which was read as fixed; it then threw inside the very
+next full run at 8-way. Alone is not the condition it fails under, and never was
+— both earlier sightings were under concurrency too.
+
+Worse, the failure could not say which half of the check broke: `clickLive`
+waits 10s for the X to become hittable, and the caller waits 10s for the tab to
+actually close, and a bare Playwright timeout from either reads identically.
+That is now fixed — each side throws in words, and the `clickLive` side reports
+the element's measured width, height, opacity and what was covering it. The next
+occurrence will say which side it came from, which is the whole reason to wait
+for one rather than guess now.
+
+Not raising the timeout until then. 10s is already enormous for a hover reveal;
+if that is genuinely the cause the message will say so, and if it is not, a
+larger number would only have hidden it for longer.
 
 ## Closed — and one wrong diagnosis worth keeping
 
@@ -58,7 +76,6 @@ evidence about what the fault is.
 
 | check | was | cause | fix |
 |---|---|---|---|
-| `orphan` | ~1 in 2, at both 3-way and 8-way | the tab close button is hover-revealed; a control mid-reveal satisfies Playwright's "visible and stable" while something else is still under the cursor, so the click missed and the shell count never moved — reported as *"closing it does not end the shell"* | `clickLive` waits until the target is genuinely the element at its own centre, and the check now asserts the tab actually closed before measuring anything downstream |
 | `localecho` | 1 in 2 at 8-way | asserts a keystroke painted within 32ms; seven sibling Electron processes are not an unloaded machine, so the paint never landed in the window (`ms:-1`) | runs alone, last |
 | `electron` | 2 of 3 at 8-way | same shape — a 100ms global-summon budget. Best-of-three lowers a flake rate; it does not make a latency claim true on a busy machine | runs alone, last |
 
