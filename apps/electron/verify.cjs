@@ -1005,6 +1005,15 @@ check('busyport', PORT_BUSY, async ({ browser, base, t, shot, skip }) => {
   // PowerShell takes longer than any interval worth guessing, and the failure
   // then lands on "a shell is alive" — a precondition, blaming the product for
   // the harness being early. `say` retries the line until its output appears.
+  // What was true at the moment `say` gave up. Twelve attempts at five seconds is
+  // sixty seconds of a shell not answering, which is far past "slow" — so when it
+  // happens the useful question is not "wait longer", it is "were the keystrokes
+  // even arriving". This check types into the terminal, then opens Settings,
+  // clicks a control, closes Settings, and types again; the first type passed and
+  // the second did not, which points at focus rather than at the shell. Recorded
+  // rather than guessed, because it has been seen exactly once and running it
+  // alone proves nothing — it only ever fails under concurrency.
+  let sayFail = null;
   const say = async (text, mark) => {
     for (let i = 0; i < 12; i++) {
       await p.locator('.xterm-helper-textarea').first().focus();
@@ -1026,6 +1035,21 @@ check('busyport', PORT_BUSY, async ({ browser, base, t, shot, skip }) => {
         return true;
       } catch (e) { /* shell not up yet — say it again */ }
     }
+    sayFail = await p.evaluate((m) => {
+      const a = document.activeElement;
+      const open = [].slice.call(document.querySelectorAll('.ovl[data-open]')).map((o) => o.id);
+      const terms = document.querySelectorAll('.xterm-rows').length;
+      const screen = [].map.call(document.querySelectorAll('.xterm-rows > div'),
+        function (d) { return d.textContent; }).join('|');
+      return {
+        mark: m,
+        focused: a ? (a.className || a.tagName) : null,
+        keysGoToTerminal: !!(a && a.classList && a.classList.contains('xterm-helper-textarea')),
+        overlaysOpen: open,
+        terminals: terms,
+        tail: screen.slice(-220),
+      };
+    }, mark).catch(() => null);
     return false;
   };
   t('a shell is alive before the flip', await say('"before " + $env:COMPUTERNAME', 'before'));
@@ -1051,7 +1075,8 @@ check('busyport', PORT_BUSY, async ({ browser, base, t, shot, skip }) => {
   const stillOpen = await p.evaluate(() =>
     [].slice.call(document.querySelectorAll('.ovl[data-open]')).map((o) => o.id).join(','));
   t('Settings actually closed, so the keys reach the terminal', !stillOpen, stillOpen);
-  t('the same terminal still runs commands', await say('"after " + $env:COMPUTERNAME', 'after'));
+  const after = await say('"after " + $env:COMPUTERNAME', 'after');
+  t('the same terminal still runs commands', after, after ? undefined : sayFail);
   await shot(p, 'busyport');
 });
 
