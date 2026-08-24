@@ -18,29 +18,47 @@ is a red that got fixed, which is what reds are for.
 
 | check | seen | what it looks like | best guess |
 |---|---|---|---|
-| **`orphan`** | **1 of 2 runs of `655eea1`** | `page.waitForFunction: Timeout 10000ms exceeded`, thrown after both pre-click assertions passed | **reopened.** `clickLive` reduced the rate; it did not close it |
 | `writeloud` | 1 of 3 runs of `1b46e00` | — | unexamined |
 | `recover` | 1 of 3 runs of `1b46e00` | — | unexamined |
 | `resume` | 1 of 3 runs of `3763175` | `{id}` template substitution and the cold-reopen auto-run both fail, plus a throw | unknown — not yet reproduced alone |
 
-**`orphan` was moved to Closed too early, and this is the correction.** It went
-5/5 alone, three times, which was read as fixed; it then threw inside the very
-next full run at 8-way. Alone is not the condition it fails under, and never was
-— both earlier sightings were under concurrency too.
+## Closed — orphan, on the third explanation
 
-Worse, the failure could not say which half of the check broke: `clickLive`
-waits 10s for the X to become hittable, and the caller waits 10s for the tab to
-actually close, and a bare Playwright timeout from either reads identically.
-That is now fixed — each side throws in words, and the `clickLive` side reports
-the element's measured width, height, opacity and what was covering it. The next
-occurrence will say which side it came from, which is the whole reason to wait
-for one rather than guess now.
+**`orphan` — found, after three wrong answers.**
 
-Not raising the timeout until then. 10s is already enormous for a hover reveal;
-if that is genuinely the cause the message will say so, and if it is not, a
-larger number would only have hidden it for longer.
+Sighting one read *"closing it does not end the shell"* and was diagnosed as the
+click missing a hover-revealed control. `clickLive` was written for it.
+
+Sighting two threw `page.waitForFunction: Timeout 10000ms exceeded` and nothing
+else — `clickLive` waits 10s for the X to become hittable and the caller waits
+10s for the tab to close, so the message could not say which had failed. Both
+were made to throw in words.
+
+Sighting three, on the very next run, said it plainly: *the X was clickable and
+was clicked, but the tab did not close (2 before, 2 after)*. That rules out the
+mouse. The app was asking.
+
+**"Confirm before closing" ships ON.** `askCloseTerm` opens a dialog for a
+terminal it still believes is open, and this check drops the websocket and clicks
+the X immediately after — so it races the state flip. Sometimes the app has
+noticed the socket is gone and closes at once; sometimes it has not, and asks
+first. Load decides. That is why it only ever failed under concurrency, and why
+running it alone kept "proving" it fixed.
+
+Probed rather than reasoned about: clicking the X on a live terminal shows
+`Close "PowerShell 7"?` with the count unmoved at 2, and clicking the dialog's
+Close takes it to 1. The check now answers the dialog, which is what a person
+who meant to close the tab does. Turning the setting off was easier and would
+have proved a configuration nobody ships with.
+
+**What this cost, and what actually fixed it:** three explanations, each
+plausible against the evidence available at the time, and only the last was the
+cause. What ended it was not thinking harder — it was making the failure say
+which side it came from. **When a flake resists, improve the evidence, not the
+guess.**
 
 ## Closed — and one wrong diagnosis worth keeping
+
 
 **`port` — 3 of 3 runs of `1b46e00`, and it was never about the solo lane.**
 
