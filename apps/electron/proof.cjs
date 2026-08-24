@@ -129,7 +129,65 @@ const rel = path.relative(TOP, ROOT).split(path.sep).join('/');
 // exactly the evidence a flake ledger needs to keep.
 const logFile = path.join(os.tmpdir(), 'winmux-proof-' + sha + '-' + process.pid + '.log');
 
+// Kill the servers a run left behind, by the pids that run wrote down.
+//
+// This exists because two `server.cjs` processes from worktrees that had ALREADY
+// been deleted were found squatting 9911 and 9912 — and the auto-picking servers
+// choose from server.cjs's SHIPPED candidate list, which is not namespaced. So a
+// leak from one run breaks the NEXT run's `port` check, on any port base, and it
+// reports as a deterministic product failure. It cost three runs and a wrong
+// entry in FLAKES.md blaming an unrelated change.
+//
+// verify.cjs has a reaper, but it runs at the END of the suite, so a run killed
+// mid-flight — which is how this happened — never reaches it. The pid ledger is
+// written at spawn time, lives in the REAL repo's verify-out (not the throwaway
+// tree, which is exactly what disappears), and is the authority here.
+//
+// The first version of this matched process command lines against the tree path
+// instead, and was wrong in both directions: `node server.cjs` is spawned with a
+// cwd, so its argv never names the tree and it was missed; while four of my own
+// shells matched, because I had typed the path into them. A recorded pid cannot
+// be wrong about what it owns — it can only be stale, which the liveness probe
+// below settles.
+// One ledger per run, named by pid, so two runs at different port bases never
+// reap each other's live servers.
+const PIDDIR = path.join(ROOT, 'verify-out');
+const PIDFILE = path.join(PIDDIR, 'spawned-pids-' + process.pid + '.txt');
+try { fs.mkdirSync(PIDDIR, { recursive: true }); } catch (e) {}
+
+const killRecorded = (file, label) => {
+  let pids;
+  try {
+    pids = [...new Set(fs.readFileSync(file, 'utf8').split('\n')
+      .map((s) => Number(s.trim())).filter((n) => n > 0))];
+  } catch (e) { return; }
+  const killed = [];
+  for (const pid of pids) {
+    // Signal 0 asks "is this pid alive" without touching it. Almost all of them
+    // are long gone — those cost nothing and are skipped.
+    try { process.kill(pid, 0); } catch (e) { continue; }
+    try {
+      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+      killed.push(pid);
+    } catch (e) {}
+  }
+  try { fs.unlinkSync(file); } catch (e) {}
+  if (killed.length) console.log('reaped ' + killed.length + ' ' + label + ': ' + killed.join(', '));
+};
+
+// Every ledger but this run's own — i.e. what earlier runs left behind.
+const sweepPids = () => {
+  let names;
+  try { names = fs.readdirSync(PIDDIR); } catch (e) { return; }
+  for (const name of names) {
+    if (!/^spawned-pids-\d+\.txt$/.test(name)) continue;
+    const file = path.join(PIDDIR, name);
+    if (file !== PIDFILE) killRecorded(file, 'leaked server(s) from an earlier run');
+  }
+};
+
 const cleanup = () => {
+  killRecorded(PIDFILE, 'server(s) this run left running');
   try { execFileSync('git', ['worktree', 'remove', '--force', tree], { cwd: TOP, stdio: 'ignore' }); } catch (e) {}
   try { fs.rmSync(tree, { recursive: true, force: true }); } catch (e) {}
 };
@@ -140,6 +198,10 @@ process.on('SIGINT', () => { cleanup(); process.exit(130); });
 // junction is unlinked first (never followed; the real node_modules is on the
 // other side of it), then whatever is left.
 const sweep = () => {
+  // Before the directories, the processes: a live child holds its tree open, and
+  // that is why the husks would not delete — Remove-Item answered "used by
+  // another process" and the tree stayed on disk holding a port.
+  sweepPids();
   try { execFileSync('git', ['worktree', 'prune'], { cwd: TOP, stdio: 'ignore' }); } catch (e) {}
   for (const name of fs.readdirSync(os.tmpdir())) {
     if (!/^winmux-proof-.*-\d+$/.test(name)) continue;
@@ -184,7 +246,11 @@ const sweep = () => {
     const log = fs.createWriteStream(logFile);
     const code = await new Promise((resolve) => {
       const p = spawn(process.execPath, ['verify.cjs', ...only], {
-        cwd, env: Object.assign({}, process.env, { WINMUX_VERIFY_PORT_BASE: String(BASE) }),
+        // The pid ledger is deliberately OUTSIDE the worktree. Inside it, it
+        // would be deleted by the very cleanup whose failure it exists to cover.
+        cwd, env: Object.assign({}, process.env, {
+          WINMUX_VERIFY_PORT_BASE: String(BASE), WINMUX_VERIFY_PIDFILE: PIDFILE,
+        }),
       });
       p.stdout.on('data', (d) => log.write(d));
       p.stderr.on('data', (d) => log.write(d));

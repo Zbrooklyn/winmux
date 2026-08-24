@@ -459,6 +459,22 @@ function whoHas(port) {
   } catch (e) { return ''; }
 }
 
+// Every port-owning process this run spawns, written down at the moment it is
+// spawned. reapAutoServers() covers the ordinary exit; this file covers the case
+// it structurally cannot — a run killed mid-flight never reaches its own cleanup,
+// and the server it leaves behind squats a port the NEXT run needs.
+//
+// Ownership is recorded, not inferred. The first attempt at this matched process
+// command lines against the worktree path, and was wrong in both directions: it
+// missed `node server.cjs` (spawned with cwd, so its argv never names the tree)
+// and it matched four of my own shells, which had the path in their command line
+// only because I had typed it. A pid we wrote down is not a guess.
+const PIDFILE = process.env.WINMUX_VERIFY_PIDFILE || path.join(OUT, 'spawned-pids.txt');
+const noteSpawn = (proc) => {
+  try { if (proc && proc.pid) fs.appendFileSync(PIDFILE, proc.pid + '\n'); } catch (e) {}
+  return proc;
+};
+
 async function server(port, extraEnv) {
   // Anything already on this port is NOT ours. Borrowing it used to be silent,
   // which meant a stray process could become the system under test: the check's
@@ -480,7 +496,7 @@ async function server(port, extraEnv) {
       stop() {},
     };
   }
-  const proc = RUST_CORE
+  const proc = noteSpawn(RUST_CORE
     ? spawn(RUST_CORE, [], {
         cwd: ROOT,
         // WINMUX_CLI_DIR / WINMUX_APP_EXE mirror what the Electron shell hands the
@@ -496,7 +512,7 @@ async function server(port, extraEnv) {
         cwd: ROOT,
         env: Object.assign({}, process.env, { PORT: String(port), WINMUX_TRUST_FILE: trustFile(port), WINMUX_CONFIG_FILE: configFile(port), WINMUX_NO_INSTANCE: '1' }, extraEnv || {}),
         stdio: 'ignore',
-      });
+      }));
   await waitUp(port, 15000);
   return { port, borrowed: false, stop() { try { proc.kill(); } catch (e) {} } };
 }
@@ -534,9 +550,9 @@ function serverAuto() {
   return new Promise((resolve, reject) => {
     const env = Object.assign({}, process.env, { WINMUX_TRUST_FILE: trustFile('auto'), WINMUX_NO_INSTANCE: '1' });
     delete env.PORT;
-    const proc = spawn(process.execPath, ['server.cjs'], {
+    const proc = noteSpawn(spawn(process.execPath, ['server.cjs'], {
       cwd: ROOT, env, stdio: ['ignore', 'pipe', 'ignore'],
-    });
+    }));
     // Registered before anything can go wrong, so the end-of-run reap covers
     // the paths a `finally` cannot: a check that throws before it, a timeout
     // that rejects, or a spawn whose announcement never arrives.
@@ -794,11 +810,11 @@ check('port', PORT_FREE, async ({ t }) => {
   const victim = [...tun2][0];
   if (victim) {
     const res = await new Promise((resolve) => {
-      const proc = spawn(process.execPath, ['server.cjs'], {
+      const proc = noteSpawn(spawn(process.execPath, ['server.cjs'], {
         cwd: ROOT,
         env: Object.assign({}, process.env, { PORT: String(victim), WINMUX_TRUST_FILE: trustFile('refusal') }),
         stdio: ['ignore', 'ignore', 'pipe'],
-      });
+      }));
       let err = '';
       proc.stderr.on('data', (d) => { err += d.toString(); });
       proc.on('exit', (code) => resolve({ code, err }));
@@ -828,7 +844,7 @@ check('port', PORT_FREE, async ({ t }) => {
   }
   try {
     const res = await new Promise((resolve) => {
-      const proc = spawn(process.execPath, ['server.cjs'], {
+      const proc = noteSpawn(spawn(process.execPath, ['server.cjs'], {
         cwd: ROOT,
         env: Object.assign({}, process.env, {
           PORT: '',
@@ -836,7 +852,7 @@ check('port', PORT_FREE, async ({ t }) => {
           WINMUX_TRUST_FILE: trustFile('exhaust'),
         }),
         stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      }));
       let all = '';
       proc.stdout.on('data', (d) => { all += d.toString(); });
       proc.stderr.on('data', (d) => { all += d.toString(); });
@@ -3836,11 +3852,11 @@ check('electron', PORT_GROUPS, async ({ t }) => {
   const wsFile = path.join(OUT, 'electron-workspace.json');
   try { fs.unlinkSync(wsFile); } catch (e) { /* fresh */ }
   const res = await new Promise((resolve) => {
-    const proc = spawn(electronPath, [main], {
+    const proc = noteSpawn(spawn(electronPath, [main], {
       cwd: ROOT,
       env: Object.assign({}, process.env, { WINMUX_SMOKE: '1', WINMUX_SMOKE_OUT: outFile, WINMUX_FORCE_DOM: '1', WINMUX_WORKSPACE_FILE: wsFile }),
       stdio: 'ignore',
-    });
+    }));
     const timer = setTimeout(() => {
       try { proc.kill(); } catch (e) {}
       resolve({ code: null, timedOut: true });
@@ -4214,14 +4230,14 @@ check('tunnel-override', PORT_TUNOVR, async ({ base, t }) => {
   // server must refuse (exit 2) purely from the override — no tailscale call needed.
   const forced = P(9951);
   const refused = await new Promise((resolve) => {
-    const proc = spawn(process.execPath, ['server.cjs'], {
+    const proc = noteSpawn(spawn(process.execPath, ['server.cjs'], {
       cwd: ROOT,
       env: Object.assign({}, process.env, {
         PORT: String(forced), WINMUX_TUNNELLED_PORTS: String(forced),
         WINMUX_TRUST_FILE: trustFile('tunovr'), WINMUX_NO_INSTANCE: '1',
       }),
       stdio: ['ignore', 'ignore', 'pipe'],
-    });
+    }));
     let err = '';
     proc.stderr.on('data', (d) => { err += d.toString(); });
     proc.on('exit', (code) => resolve({ code, err }));
@@ -5288,7 +5304,7 @@ check('nostrand', PORT_NOSTRAND, async ({ t }) => {
     // take it with it on the way out.
     // The rival must be the engine actually under test — otherwise WINMUX_CORE=rust
     // would prove the Node rule twice and the Rust rule never.
-    const rival = RUST_CORE
+    const rival = noteSpawn(RUST_CORE
       ? spawn(RUST_CORE, [], {
           cwd: ROOT, stdio: 'ignore',
           env: Object.assign({}, process.env, {
@@ -5303,7 +5319,7 @@ check('nostrand', PORT_NOSTRAND, async ({ t }) => {
             PORT: '0', WINMUX_INSTANCE_FILE: instanceFile,
             WINMUX_TRUST_FILE: path.join(scratch, 'devices.json'),
           }),
-        });
+        }));
     await new Promise((r) => setTimeout(r, 4000));
     const during = JSON.parse(fs.readFileSync(instanceFile, 'utf8'));
     t('a second engine refuses to claim a file a live engine owns',
@@ -5326,7 +5342,7 @@ check('nostrand', PORT_NOSTRAND, async ({ t }) => {
     fs.writeFileSync(succFile, JSON.stringify({
       port: succPort, host: '127.0.0.1', pid: holder.pid, started: Date.now() - 60000,
     }));
-    const heir = RUST_CORE
+    const heir = noteSpawn(RUST_CORE
       ? spawn(RUST_CORE, [], { cwd: ROOT, stdio: 'ignore', env: Object.assign({}, process.env, {
           WINMUX_PORT: String(succPort), WINMUX_INSTANCE_FILE: succFile,
           WINMUX_TRUST_FILE: path.join(scratch, 'devices.json'),
@@ -5334,7 +5350,7 @@ check('nostrand', PORT_NOSTRAND, async ({ t }) => {
       : spawn(process.execPath, [path.join(ROOT, 'server.cjs')], {
           cwd: ROOT, stdio: 'ignore', env: Object.assign({}, process.env, {
             PORT: String(succPort), WINMUX_INSTANCE_FILE: succFile,
-            WINMUX_TRUST_FILE: path.join(scratch, 'devices.json') }) });
+            WINMUX_TRUST_FILE: path.join(scratch, 'devices.json') }) }));
     await new Promise((r) => setTimeout(r, 4000));
     const claimed = JSON.parse(fs.readFileSync(succFile, 'utf8'));
     t('but a restart on the same port DOES claim the file — succession, not rivalry',
