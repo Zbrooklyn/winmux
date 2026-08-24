@@ -677,6 +677,27 @@ async function appReady(page, floorMs, capMs) {
 //
 // If it never becomes hittable, that is a HARNESS problem and it says so, rather
 // than letting the silence be scored against the product.
+// Wait for a condition, and treat "it never came true" as information rather
+// than an error — the assertion that follows reads the real value and fails with
+// it, which is more use than a bare timeout.
+//
+// The `only` in "only timeouts" is load-bearing, and I learned it the expensive
+// way inside this file: a predicate with a stray newline in it is a SyntaxError,
+// which rejects instantly, and a bare `.catch(() => {})` swallows that exactly
+// like a timeout. The wait silently does nothing, the check reads the screen too
+// early, and the product takes the blame for a typo in the harness. Anything
+// that is not a timeout is a bug in this file and is now loud.
+async function settle(page, expr, timeout) {
+  try {
+    await page.waitForFunction(expr, null, { timeout: timeout || 15000 });
+    return true;
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (/Timeout .* exceeded/.test(msg)) return false;
+    throw new Error('HARNESS: a wait predicate is broken, so nothing was actually waited for — ' + msg);
+  }
+}
+
 async function clickLive(page, hoverSel, targetSel, timeout) {
   await page.hover(hoverSel);
   // Named, because the first version of this was not. When it timed out inside a
@@ -2644,9 +2665,12 @@ check('recover', PORT_RECOVER, async ({ browser, base, t, shot }) => {
   const page = await desktop(browser);
   try {
     await page.goto(base, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(3500);
+    // Every wait in this check used to be a flat sleep — a bet on how fast the
+    // machine is. At 8-way concurrency the bet loses and a working feature reads
+    // as broken. Each one now waits for the thing it was actually waiting for.
+    await appReady(page);
     await page.click('#open-load');
-    await page.waitForTimeout(800);
+    await settle(page, "document.querySelectorAll('#sm-recover .pjrow').length >= 2", 20000);
     const rows = await page.evaluate(() => ({
       shown: getComputedStyle(document.getElementById('sm-recover')).display !== 'none',
       n: document.querySelectorAll('#sm-recover .pjrow').length,
@@ -2659,7 +2683,10 @@ check('recover', PORT_RECOVER, async ({ browser, base, t, shot }) => {
     // Restore the newest (row 0 — the list sorts newest first): a dead session
     // replays its saved output into a fresh tab and consumes the file.
     await page.click('#sm-recover .pjrow[data-ri="0"]');
-    await page.waitForTimeout(4000);
+    // .some(), not .join() — the joined form needed a newline inside a string
+    // literal, and building that string is exactly what broke this wait.
+    await settle(page, "[].some.call(document.querySelectorAll('.xterm-rows'), "
+      + "function (r) { return r.innerText.indexOf('RECOVER_PAYLOAD_ALPHA') >= 0; })", 30000);
     // Read every terminal's rows — the restored tab is the second one; grabbing
     // only the first would read the original shell and miss the replay.
     const screen = await page.evaluate(() =>
@@ -2672,11 +2699,11 @@ check('recover', PORT_RECOVER, async ({ browser, base, t, shot }) => {
 
     // Dismiss the other one from the reopened list.
     await page.click('#open-load');
-    await page.waitForTimeout(800);
+    await settle(page, "document.querySelectorAll('#sm-recover .pjrow').length === 1", 20000);
     const left = await page.evaluate(() => document.querySelectorAll('#sm-recover .pjrow').length);
     t('the restored entry is gone from the list, the other remains', left === 1, { left });
     await page.click('#sm-recover .pjrow-del[data-rdel="0"]');
-    await page.waitForTimeout(500);
+    await settle(page, "document.getElementById('dlg-ovl').hasAttribute('data-open')", 20000);
     // Dismiss is irreversible, so it must ask first (PT-7, Q9): confirm dialog
     // up, then its Dismiss button actually deletes.
     const askFirst = await page.evaluate(() => {
@@ -2685,7 +2712,7 @@ check('recover', PORT_RECOVER, async ({ browser, base, t, shot }) => {
     });
     t('dismiss asks before deleting for good', askFirst);
     await page.click('#dlg-body [data-ok]');
-    await page.waitForTimeout(800);
+    await settle(page, "document.querySelectorAll('#sm-recover .pjrow').length === 0", 20000);
     const afterDismiss = await page.evaluate(() => ({
       n: document.querySelectorAll('#sm-recover .pjrow').length,
       shown: getComputedStyle(document.getElementById('sm-recover')).display !== 'none',
@@ -3197,30 +3224,47 @@ check('writeloud', PORT_WRITELOUD, async ({ browser, base, t }) => {
     const notifCount = () => page.evaluate(() => (window.__winmuxWriteState ? 0 : 0) ||
       document.querySelectorAll('#npanel .nrow, #npanel .notif, #npanel [data-nid]').length);
     const down = () => page.evaluate(() => !!window.__winmuxWriteState().config);
+    const badge = () => page.evaluate(() => document.getElementById('notif-badge').textContent.trim());
+    // Wait for the STATE, not for a length of time. Every assertion below used to
+    // sit behind a flat 700ms, which is a bet that the app finishes inside 700ms —
+    // true on an idle machine and false at 8-way concurrency, where this check
+    // reported a working feature as broken. Zeroing those sleeps reproduced it on
+    // demand, which is how the guess became a measurement. The catch is
+    // deliberate: on timeout the assertion below still runs and fails with the
+    // real value, so a genuine product break still reads as a product break.
+    const settles = (want) => settle(page,
+      '!!window.__winmuxWriteState().config === ' + (want ? 'true' : 'false'), 15000);
 
     t('nothing is reported while the write is working', (await down()) === false, await down());
 
     // Cut the settings write off at the network — the engine is fine, the write isn't.
     await page.route('**/api/config', (route) => route.abort());
     await page.evaluate(() => window.__winmuxSetKeymap('help', 'Ctrl+Alt+8'));
-    await page.waitForTimeout(700);
+    await settles(true);
     t('a failed settings write is noticed', (await down()) === true, await down());
-    const first = await page.evaluate(() => document.getElementById('notif-badge').textContent.trim());
+    await settle(page, 'document.getElementById("notif-badge").textContent.trim() !== ""', 15000);
+    const first = await badge();
     t('and it reaches the notification badge', first !== '' && first !== '0', first);
 
     // Two more failures must NOT stack up two more notifications.
     await page.evaluate(() => { window.__winmuxSetKeymap('help', 'Ctrl+Alt+7'); window.__winmuxSetKeymap('help', 'Ctrl+Alt+6'); });
-    await page.waitForTimeout(700);
-    const second = await page.evaluate(() => document.getElementById('notif-badge').textContent.trim());
+    // The one place a wait on the clock is the honest tool: this asserts that
+    // something does NOT happen, and there is no event for the absence of a
+    // notification. So give both attempts room to have failed and been swallowed
+    // — generously, since being slow here costs a second and being hasty proves
+    // nothing.
+    await page.waitForTimeout(2500);
+    const second = await badge();
     t('repeated failures are reported once, not once per attempt', second === first, { first, second });
 
     // Let the write through again: recovery is worth saying, because silence after
     // a warning reads as "still broken".
     await page.unroute('**/api/config');
     await page.evaluate(() => window.__winmuxSetKeymap('help', null));
-    await page.waitForTimeout(700);
+    await settles(false);
     t('the app stops considering the write broken', (await down()) === false, await down());
-    const third = await page.evaluate(() => document.getElementById('notif-badge').textContent.trim());
+    await settle(page, 'document.getElementById("notif-badge").textContent.trim() !== ' + JSON.stringify(second), 15000);
+    const third = await badge();
     t('and says it is working again', third !== second, { second, third });
   } finally {
     await page.close();
@@ -6707,7 +6751,19 @@ check('resume', PORT_RESUME, async ({ browser, base, t, shot }) => {
     // shell spawns, and the armed resume command runs in it, carrying the id.
     await page.evaluate(() => { window.__winmuxActiveTerm().sid = 'deadbeefdeadbeefdeadbeefdeadbeef'; });
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(5000);
+    // Five seconds used to have to cover a page load, a failed reattach, a fresh
+    // shell spawning, the resume command being typed into it, and the echo coming
+    // back painted. That is a lot to bet on one number, and at 8-way concurrency
+    // the bet loses — which is how this check reported the auto-run as broken when
+    // it was merely late. Wait for the sentinel itself.
+    await appReady(page);
+    await settle(page, '(function () {'
+      + ' var at = window.__winmuxActiveTerm && window.__winmuxActiveTerm();'
+      + ' if (!at || !at.term) return false;'
+      + ' var b = at.term.buffer.active, out = "";'
+      + ' for (var i = 0; i < b.length; i++) { var ln = b.getLine(i); if (ln) out += ln.translateToString(true); }'
+      + ' return out.indexOf(' + JSON.stringify(RESUME_SENTINEL) + ') >= 0;'
+      + '})()', 30000);
     const cold = await readScreen();
     t('a cold reopen auto-runs the resume command in the fresh shell',
       cold.indexOf(RESUME_SENTINEL) >= 0, { tail: cold.slice(-200) });
