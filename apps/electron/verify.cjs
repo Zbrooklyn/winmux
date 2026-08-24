@@ -28,6 +28,80 @@ const { chromium } = require('playwright');
 const ROOT = __dirname;
 const OUT = path.join(ROOT, 'verify-out');
 
+// A second copy of the suite cannot run beside the first, because these numbers
+// are machine-global — worktree isolation stops a run reading a mutating tree,
+// but it does nothing at all about contention. WINMUX_VERIFY_PORT_BASE shifts
+// this suite's whole namespace so a pinned full run and live targeted runs can
+// coexist.
+//
+// Every port below is declared THROUGH P(). That is the whole design. Shifting
+// the namespace at the registration choke point looked right and was wrong:
+// fifteen checks hand their raw constant to the winmux CLI as WINMUX_PORT, so
+// under a base the server moved and the CLI did not, and thirty-five checks
+// failed in a way the default run — base 0, where raw and shifted are the same
+// number — can never show. A half-applied namespace is worse than none: it is
+// green exactly where it is not being used. Declared already-shifted, a raw
+// number has nowhere to leak from.
+const PORT_BASE = (() => {
+  const n = Number(process.env.WINMUX_VERIFY_PORT_BASE) || 0;
+  if (!n) return 0;
+  if (n % 100 !== 0 || n < -400 || n > 400) {
+    console.error('\nWINMUX_VERIFY_PORT_BASE must be a multiple of 100 between -400 and 400 (got ' + n + ').\n');
+    process.exit(2);
+  }
+  return n;
+})();
+const P = (n) => n + PORT_BASE;
+
+// …and the rule is enforced on the file itself, because the last one wasn't.
+// The namespace was applied at the registration choke point and I believed it
+// held — right up to the first pinned full run, where thirty-five checks went
+// red because they had passed a raw constant to the CLI. Nothing about that was
+// visible at base 0. So this reads its own source, comments stripped, and
+// refuses to start if a 99xx literal appears anywhere that is not wrapped in
+// P(). It costs about a millisecond and it is the only thing here that can see
+// the mistake before a twelve-minute run does.
+(() => {
+  const src = require('fs').readFileSync(__filename, 'utf8').split('\n');
+  const stray = [];
+  src.forEach((line, i) => {
+    if (/PORTS_EXHAUST_RAW\s*=/.test(line)) return;   // raw on purpose; mapped through P below
+    const code = line.split('//')[0];
+    let m;
+    // No hyphen in the lookbehind, deliberately. The first version excluded it
+    // to avoid false positives and so walked straight past
+    // 'workspace-9978.json' — a port baked into a FILENAME, where the check
+    // asserted on the shifted name and told the engine to write the unshifted
+    // one. A port is a port wherever it is spelled.
+    const re = /(?<![\w.])99[0-9][0-9](?![\w])/g;
+    while ((m = re.exec(code))) {
+      if (code.slice(Math.max(0, m.index - 2), m.index) !== 'P(') stray.push((i + 1) + ': ' + line.trim());
+    }
+  });
+  if (stray.length) {
+    console.error('\nverify.cjs has ' + stray.length + ' raw port literal(s) that skip the namespace:\n');
+    stray.forEach((l) => console.error('  ' + l));
+    console.error('\nWrap each one in P(…). A port that skips P() is correct at base 0 and wrong'
+      + '\neverywhere else, which is the failure mode that hid thirty-five red checks.\n');
+    process.exit(2);
+  }
+})();
+
+// Same idea, different lie. `node verify.cjs` does not compile anything, but
+// five checks load dist-electron/*.js and fail in zero seconds without it — as
+// five red PRODUCT checks, which is the worst possible way to report a missing
+// build step. The project's real entry point is `npm run verify` (build, then
+// verify); running the file bare in a tree that has never been built produced a
+// whole afternoon of green targeted runs sitting on top of it.
+(() => {
+  if (require('fs').existsSync(require('path').join(__dirname, 'dist-electron', 'main.js'))) return;
+  console.error('\nverify.cjs: dist-electron is missing — this tree has never been compiled.'
+    + '\nFive checks load it directly and would report the missing build as product failures.'
+    + '\n\n  npm run build:electron     (then re-run)'
+    + '\n  npm run verify             (builds first — the entry point that cannot get this wrong)\n');
+  process.exit(2);
+})();
+
 // Two ports on purpose. The busy one is where we prove that a phone flip which
 // cannot bind MUST fail politely instead of taking the app down with it.
 // It used to be 8799, borrowed from tailscaled's accidental hold on that port —
@@ -36,126 +110,127 @@ const OUT = path.join(ROOT, 'verify-out');
 // collision itself (holdTailnet below), so the check runs everywhere Tailscale
 // runs. 9914 is deliberately outside PORT_CANDIDATES and outside the serve
 // rules on this machine.
-const PORT_BUSY = 9914;
-const PORT_FREE = 9912;
+const PORT_BUSY = P(9914);
+const PORT_FREE = P(9912);
 // The remote group opens the phone door for real, so it gets its own port —
 // sharing PORT_FREE would have two groups fighting over one phone switch.
-const PORT_REMOTE = 9911;
+const PORT_REMOTE = P(9911);
 // The trust group needs a guest list nobody else is writing to, and a fresh one
 // — "the switch is off on a fresh install" is only provable from empty.
-const PORT_TRUST = 9915;
+const PORT_TRUST = P(9915);
 // The phone group opens and closes the door for real, so it must never borrow
 // @edward's live WinMux — that would flip his own switch mid-run, and when his
 // door is already open on 9912 the group used to skip instead. A skip is not a
 // pass, so it gets a port of its own.
-const PORT_PHONE = 9913;
+const PORT_PHONE = P(9913);
 // The survival group counts running shells, so it must be the only thing
 // talking to its server — borrowing @edward's would count his terminals as
 // leaks and kill a tab he is using.
-const PORT_SURVIVE = 9916;
+const PORT_SURVIVE = P(9916);
 // The drop group makes twin folders on disk and asks the server to tell them
 // apart, so it wants a server whose answers nobody else is racing.
-const PORT_DROP = 9917;
+const PORT_DROP = P(9917);
 // The colour group types into a real shell and reads the painted result back,
 // so it needs a server whose terminals nobody else is writing to.
-const PORT_COLOUR = 9918;
-const PORT_GROUPS = 9919;
+const PORT_COLOUR = P(9918);
+const PORT_GROUPS = P(9919);
 // Reopening the page must reattach to the running shell, not orphan it.
 // NOT 9920: that is the installed WinMux Rust engine's standing port — the
 // harness would borrow the LIVE engine and type into Edward's real workspace.
-const PORT_RELOAD = 9985;
+const PORT_RELOAD = P(9985);
 // A full reboot kills the server; its scrollback must survive on disk and replay.
-const PORT_RESTART = 9960;
+const PORT_RESTART = P(9960);
 // The CLI check needs its own server + a connected app, on a port nobody else
 // is driving, so `winmux new-tab` counts don't race another group's terminals.
 // NOT 9921: that is the installed WinMux Tauri engine's standing port — a
 // running Tauri app kept /control connected and made "no app connected"
 // impossible (the old documented gotcha; the port move retires it).
-const PORT_CLI = 9986;
+const PORT_CLI = P(9986);
 // The markdown check opens a viewer surface and edits the file under it, so it
 // needs a server whose /api/md nobody else is racing and a /control of its own.
-const PORT_MD = 9922;
+const PORT_MD = P(9922);
 // The paste check fires real paste events at a live terminal and reads whether
 // the multi-line guard stopped to ask, so it wants a shell nobody else touches.
-const PORT_PASTE = 9923;
+const PORT_PASTE = P(9923);
 // The migrate check seeds a saved layout from a hypothetical future WinMux and
 // proves the app still boots to a working terminal, so it needs its own server.
-const PORT_MIGRATE = 9924;
+const PORT_MIGRATE = P(9924);
 // The onboarding check loads with a virgin localStorage to prove the first-run
 // welcome appears, dismisses, and stays gone. Its own server, its own state.
-const PORT_ONBOARD = 9925;
-const PORT_APPROVE = 9926;
-const PORT_PWSH = 9927;
-const PORT_FOOTER = 9928;
-const PORT_UPDATE = 9929;
-const PORT_GPU = 9930;
-const PORT_FONT = 9931;
-const PORT_INSTANT = 9932;
-const PORT_SURVIVE2 = 9933;   // registered port (runner boots a throwaway here)
-const PORT_PARITY = 9934;     // terminal-parity addons (web-links, unicode11)
-const PORT_NOTIFY = 9935;     // attention bus: `winmux notify` flips a session to needs-you
-const PORT_OSNOTIFY = 9936;   // attention bus: OS notification fires only when unfocused
-const PORT_MCP = 9937;        // winmux-mcp: an MCP client drives the live app over stdio
-const PORT_DOING = 9938;      // cockpit: a session row shows a live "what's it doing" line
-const PORT_CLIP = 9939;       // cockpit: cross-device clipboard round-trips through /api/clip
-const PORT_CONFIG = 9940;     // config: durable on-disk settings via /api/config
-const PORT_THEME = 9941;      // theme import: a Windows Terminal scheme recolours the terminal
-const PORT_KEYS = 9942;       // custom keybindings: a remapped chord runs the action, the old one doesn't
-const PORT_MDRICH = 9943;     // markdown richness: tables, task-list checkboxes, images render in the viewer
-const PORT_MARKS = 9945;      // terminal command-marks jump + reset (browser verbs ride the electron smoke)
-const PORT_CMDTAG = 9975;     // Phase 4: command-blocks status tag (✓/✗ + time) renders on OSC-133 D-marks
-const PORT_APPROVECARD = 9976;// Phase 8: the phone approval card's Approve button actually sends Enter to the shell
-const PORT_AGENTENV = 9946;   // agent: every shell exports WINMUX_SID/WINMUX_PORT
-const PORT_AGENTSTATE = 9947; // agent: winmux agent <state> flips the session's cockpit status
-const PORT_AGENTHOOKS = 9948; // agent: the Claude Code hooks preset drives live state
-const PORT_WINGET = 9949;     // distribution: the winget manifest generator emits valid manifests
-const PORT_TUNOVR = 9950;     // #246: the WINMUX_TUNNELLED_PORTS override is honored (no fail-open under load)
-const PORT_LIG = 9955;        // #238: the ligature switch really shapes glyphs, and pays for it in renderer
-const PORT_RESUME = 9951;     // #240: an armed tab auto-runs its resume command on a cold reopen, not on a warm reattach
+const PORT_ONBOARD = P(9925);
+const PORT_APPROVE = P(9926);
+const PORT_PWSH = P(9927);
+const PORT_FOOTER = P(9928);
+const PORT_UPDATE = P(9929);
+const PORT_GPU = P(9930);
+const PORT_FONT = P(9931);
+const PORT_INSTANT = P(9932);
+const PORT_SURVIVE2 = P(9933);   // registered port (runner boots a throwaway here)
+const PORT_PARITY = P(9934);     // terminal-parity addons (web-links, unicode11)
+const PORT_NOTIFY = P(9935);     // attention bus: `winmux notify` flips a session to needs-you
+const PORT_OSNOTIFY = P(9936);   // attention bus: OS notification fires only when unfocused
+const PORT_MCP = P(9937);        // winmux-mcp: an MCP client drives the live app over stdio
+const PORT_DOING = P(9938);      // cockpit: a session row shows a live "what's it doing" line
+const PORT_CLIP = P(9939);       // cockpit: cross-device clipboard round-trips through /api/clip
+const PORT_CONFIG = P(9940);     // config: durable on-disk settings via /api/config
+const PORT_THEME = P(9941);      // theme import: a Windows Terminal scheme recolours the terminal
+const PORT_KEYS = P(9942);       // custom keybindings: a remapped chord runs the action, the old one doesn't
+const PORT_MDRICH = P(9943);     // markdown richness: tables, task-list checkboxes, images render in the viewer
+const PORT_MARKS = P(9945);      // terminal command-marks jump + reset (browser verbs ride the electron smoke)
+const PORT_CMDTAG = P(9975);     // Phase 4: command-blocks status tag (✓/✗ + time) renders on OSC-133 D-marks
+const PORT_APPROVECARD = P(9976);// Phase 8: the phone approval card's Approve button actually sends Enter to the shell
+const PORT_AGENTENV = P(9946);   // agent: every shell exports WINMUX_SID/WINMUX_PORT
+const PORT_AGENTSTATE = P(9947); // agent: winmux agent <state> flips the session's cockpit status
+const PORT_AGENTHOOKS = P(9948); // agent: the Claude Code hooks preset drives live state
+const PORT_WINGET = P(9949);     // distribution: the winget manifest generator emits valid manifests
+const PORT_TUNOVR = P(9950);     // #246: the WINMUX_TUNNELLED_PORTS override is honored (no fail-open under load)
+const PORT_LIG = P(9955);        // #238: the ligature switch really shapes glyphs, and pays for it in renderer
+const PORT_RESUME = P(9951);     // #240: an armed tab auto-runs its resume command on a cold reopen, not on a warm reattach
 // #246: three ports the port check holds itself, so it can prove the
 // every-candidate-taken refusal without starving the other auto-picking checks.
-const PORTS_EXHAUST = [9952, 9953, 9954];
-const PORT_DIFF = 9956;       // ST5: git diff opens as a pane tab (leaf), not a side dock
-const PORT_LEAFPERSIST = 9957; // ST6: non-terminal leaves survive a page reload
-const PORT_PREDICT = 9958;    // Phase 2: pwsh PSReadLine inline history prediction + RightArrow accept
-const PORT_IMAGES = 9959;     // Phase 3: inline images (addon-image) + `winmux image` verb
-const PORT_DPRFIX = 9977;     // MR-1: a devicePixelRatio-stuck WebGL canvas is resynced (prompt-float fix)
-const PORT_AGENTJOB = 9968;   // Stage 3: server-side agent-job store (spawn/wait/result), no browser needed
-const PORT_WORKSPACE = 9978;  // PT-3: the engine-owned workspace file survives a wiped browser profile
-const PORT_RECOVER = 9979;    // PT-4: Recent & recoverable — saved scrollbacks are listed, restorable, dismissable
-const PORT_CLOSEVERB = 9980;  // PT-5: Close project = unbind with three honest outcomes; Delete is real and confirmed
-const PORT_SOT = 9981;        // PT-6: the engine's config.json is the settings authority; localStorage is only a cache
-const PORT_LOCALECHO = 9982;  // SP-1: predictive local echo — instant paint, honest reconcile, no secret leak
-const PORT_SIDEBAR = 9983;    // SB: Obsidian-style sidebar tabs — switch, persist, notif-in-rail, drag-resize
-const PORT_SPLITCLOSE = 9984; // FB: closing a split's last visible tab collapses the split, even across groups
-const PORT_WINCTL = 9987;     // AUDIT-1: the window's close button survives every pane layout at every size
-const PORT_DELHONEST = 9988;  // AUDIT-2: a delete that didn't happen never reports "file removed"
-const PORT_KEYMAPGUARD = 9989; // AUDIT-3: a hand-edited keymap is checked, so nothing shows as bound and stays dead
-const PORT_CHORDTRUTH = 9990;  // AUDIT-4: every surface that advertises a shortcut shows the key actually bound
-const PORT_WRITELOUD = 9991;   // AUDIT-5: an engine write that failed says so — once per outage, and again on recovery
-const PORT_SLASHFAST = 9992;   // AUDIT-6: `winmux slash` refuses a non-Claude tab fast instead of hanging 90s
-const PORT_SHIPPED05 = 9993;   // AUDIT-7: the four features that were broken only in the engine we ship
-const PORT_UPDFEED = 9994;     // AUDIT-7's own stand-in release feed, so the update path is proven for real
-const PORT_NOCLOBBER = 9997;   // AUDIT-8: saving a project never writes over a different project
-const PORT_KEYBACK = 9996;     // AUDIT-9: a dialog that took the keyboard gives it back however it is dismissed
-const PORT_CFGSAFE = 9998;     // AUDIT-10: a damaged settings file is kept and reported, never quietly replaced
-const PORT_BUSYBAR = 9995;     // the busy underline actually paints, and grows, while a shell works
-const PORT_ORPHAN = 9974;      // AUDIT-8: closing a tab whose socket is down still ends its shell
-const PORT_NOSTRAND = 9972;    // AUDIT-4: a slow answer never strands a live engine and its shells
-const PORT_EXITTRUTH = 9970;   // AUDIT-1: a shell that ends says so, on both engines
-const PORT_CTLBACKOFF = 9961;  // AUDIT-B4: the control socket backs off instead of retrying forever
-const PORT_CLIHERE  = 9963;    // AUDIT-9: the winmux CLI runs inside a WinMux terminal, as the guide promises
-const PORT_KEYTRUTH = 9962;    // AUDIT-2: no shortcut is bound to a key the terminal is going to eat
-const PORT_FLEETOPEN = 9964;   // AUDIT-B6/B7: the fleet list opens, remembers, and the guide's button shows it
-const PORT_CWDGONE = 9965;     // AUDIT-B10: a project whose folder moved says so instead of opening elsewhere
-const PORT_CLICLOSE = 9966;    // AUDIT-T4: the command surface can put a layout back, not only grow it
-const PORT_SPLITFLOOR = 9944;  // AUDIT-T1: splitting has a floor, and the refusal is said out loud
-const PORT_FOLDFIT = 9969;     // AUDIT-T2: a saved layout too big for this window folds into tabs, losing nothing
-const PORT_FOLDKEEP = 9954;    // AUDIT-T2: its own number. It used to be PORT_FOLDFIT + 1, which quietly landed on exittruth's port.
-const PORT_CLIPROJ = 9952;    // AUDIT-B11: `winmux open` rejected the project file the app itself writes
-const PORT_WHOAMI = 9971;     // AUDIT-B9: four copies, and every one of them called itself "WinMux"
-const PORT_WHOAMI2 = 9953;    // AUDIT-B9: a second identity, to prove the name is derived and moves
-const PORT_AGENTSPAWN = 9967; // Stage 3: spawn a real session, it self-reports, a wait gets its result
+const PORT_SPLITFLOOR = P(9900);  // AUDIT-T1: splitting has a floor, and the refusal is said out loud
+const PORT_FOLDFIT = P(9901);     // AUDIT-T2: a saved layout too big for this window folds into tabs, losing nothing
+const PORTS_EXHAUST_RAW = [9952, 9953, 9954];
+const PORTS_EXHAUST = PORTS_EXHAUST_RAW.map(P);
+const PORT_DIFF = P(9956);       // ST5: git diff opens as a pane tab (leaf), not a side dock
+const PORT_LEAFPERSIST = P(9957); // ST6: non-terminal leaves survive a page reload
+const PORT_PREDICT = P(9958);    // Phase 2: pwsh PSReadLine inline history prediction + RightArrow accept
+const PORT_IMAGES = P(9959);     // Phase 3: inline images (addon-image) + `winmux image` verb
+const PORT_DPRFIX = P(9977);     // MR-1: a devicePixelRatio-stuck WebGL canvas is resynced (prompt-float fix)
+const PORT_AGENTJOB = P(9968);   // Stage 3: server-side agent-job store (spawn/wait/result), no browser needed
+const PORT_WORKSPACE = P(9978);  // PT-3: the engine-owned workspace file survives a wiped browser profile
+const PORT_RECOVER = P(9979);    // PT-4: Recent & recoverable — saved scrollbacks are listed, restorable, dismissable
+const PORT_CLOSEVERB = P(9980);  // PT-5: Close project = unbind with three honest outcomes; Delete is real and confirmed
+const PORT_SOT = P(9981);        // PT-6: the engine's config.json is the settings authority; localStorage is only a cache
+const PORT_LOCALECHO = P(9982);  // SP-1: predictive local echo — instant paint, honest reconcile, no secret leak
+const PORT_SIDEBAR = P(9983);    // SB: Obsidian-style sidebar tabs — switch, persist, notif-in-rail, drag-resize
+const PORT_SPLITCLOSE = P(9984); // FB: closing a split's last visible tab collapses the split, even across groups
+const PORT_WINCTL = P(9987);     // AUDIT-1: the window's close button survives every pane layout at every size
+const PORT_DELHONEST = P(9988);  // AUDIT-2: a delete that didn't happen never reports "file removed"
+const PORT_KEYMAPGUARD = P(9989); // AUDIT-3: a hand-edited keymap is checked, so nothing shows as bound and stays dead
+const PORT_CHORDTRUTH = P(9990);  // AUDIT-4: every surface that advertises a shortcut shows the key actually bound
+const PORT_WRITELOUD = P(9991);   // AUDIT-5: an engine write that failed says so — once per outage, and again on recovery
+const PORT_SLASHFAST = P(9992);   // AUDIT-6: `winmux slash` refuses a non-Claude tab fast instead of hanging 90s
+const PORT_SHIPPED05 = P(9993);   // AUDIT-7: the four features that were broken only in the engine we ship
+const PORT_UPDFEED = P(9994);     // AUDIT-7's own stand-in release feed, so the update path is proven for real
+const PORT_NOCLOBBER = P(9997);   // AUDIT-8: saving a project never writes over a different project
+const PORT_KEYBACK = P(9996);     // AUDIT-9: a dialog that took the keyboard gives it back however it is dismissed
+const PORT_CFGSAFE = P(9998);     // AUDIT-10: a damaged settings file is kept and reported, never quietly replaced
+const PORT_BUSYBAR = P(9995);     // the busy underline actually paints, and grows, while a shell works
+const PORT_ORPHAN = P(9974);      // AUDIT-8: closing a tab whose socket is down still ends its shell
+const PORT_NOSTRAND = P(9972);    // AUDIT-4: a slow answer never strands a live engine and its shells
+const PORT_EXITTRUTH = P(9970);   // AUDIT-1: a shell that ends says so, on both engines
+const PORT_CTLBACKOFF = P(9961);  // AUDIT-B4: the control socket backs off instead of retrying forever
+const PORT_CLIHERE  = P(9963);    // AUDIT-9: the winmux CLI runs inside a WinMux terminal, as the guide promises
+const PORT_KEYTRUTH = P(9962);    // AUDIT-2: no shortcut is bound to a key the terminal is going to eat
+const PORT_FLEETOPEN = P(9964);   // AUDIT-B6/B7: the fleet list opens, remembers, and the guide's button shows it
+const PORT_CWDGONE = P(9965);     // AUDIT-B10: a project whose folder moved says so instead of opening elsewhere
+const PORT_CLICLOSE = P(9966);    // AUDIT-T4: the command surface can put a layout back, not only grow it
+const PORT_AGENTSPAWN = P(9967); // Stage 3: spawn a real session, it self-reports, a wait gets its result
+const PORT_FOLDKEEP = P(9902);   // AUDIT-T2: its own number. It used to be PORT_FOLDFIT + 1, which quietly landed on exittruth's port.
+const PORT_CLIPROJ = P(9903);    // AUDIT-B11: `winmux open` rejected the project file the app itself writes
+const PORT_WHOAMI = P(9904);     // AUDIT-B9: four copies, and every one of them called itself "WinMux"
+const PORT_WHOAMI2 = P(9905);    // AUDIT-B9: a second identity, to prove the name is derived and moves
 const CONFIG_TMP = path.join(os.tmpdir(), 'winmux-verify-config.json');
 // Save-on-close writes real project files; point them at a scratch dir so a test
 // never drops a "Verify Project.winmux.json" into the real Documents\WinMux Projects.
@@ -173,6 +248,88 @@ const configFile = (port) => path.join(OUT, 'config-' + port + '.json');
 const argv = process.argv.slice(2);
 const HEADED = argv.includes('--headed');
 const ONLY = argv.filter((a) => !a.startsWith('-'));
+
+// ---- --prove: does this check actually detect the defect it claims to? ------
+// A check that passes before the fix proves nothing, and there is no way to
+// tell one apart from a real one by reading it. So the harness proves it:
+// put the product back the way it was, require RED, restore, require GREEN.
+//
+// Deliberately narrow — sensitivity and specificity, nothing else. Whether the
+// element was ever really there belongs in the assertion helpers; whether the
+// environment was clean belongs in the Tier 0 guards. Widening this verb is
+// how it would stop being buildable.
+//
+// The file set is detected, not typed. Every uncommitted change EXCEPT this
+// harness file is the product change under test — listing paths by hand is a
+// decision, and a decision is a thing to get wrong at 2am.
+if (argv.includes('--prove')) {
+  const { execFileSync, spawnSync } = require('child_process');
+  const names = ONLY;
+  if (!names.length) { console.error('\n--prove needs a check name: node verify.cjs --prove <check>\n'); process.exit(2); }
+  // git prints repo-relative paths and resolves pathspecs against cwd, so every
+  // git call here runs from the repo root. Getting that wrong made the revert a
+  // silent no-op, the "before" run kept the change, and it passed — which is
+  // precisely how a proof harness manufactures a false PROVEN. Fatal now.
+  const TOP = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: ROOT, encoding: 'utf8' }).trim();
+  const git = (args) => execFileSync('git', args, { cwd: TOP, encoding: 'utf8' });
+  const dirty = git(['status', '--porcelain', '--', ROOT])
+    .split('\n').map((l) => l.slice(3).trim()).filter(Boolean)
+    .filter((f) => !/verify\.cjs$/.test(f) && !/^"?\.?verify-out/.test(f) && !f.startsWith('coverage.cjs'));
+  if (!dirty.length) {
+    console.error('\n--prove found no uncommitted product change to attribute the pass to.');
+    console.error('Either the fix is already committed (prove it before committing), or there is no fix.\n');
+    process.exit(2);
+  }
+  const stash = path.join(os.tmpdir(), 'winmux-prove-' + process.pid);
+  fs.mkdirSync(stash, { recursive: true });
+  const run = () => {
+    const r = spawnSync(process.execPath, [__filename, ...names], { cwd: ROOT, encoding: 'utf8' });
+    const out = (r.stdout || '') + (r.stderr || '');
+    const m = out.match(/(\d+) of (\d+) checks FAILED/) || out.match(/(\d+)\/(\d+) checks passed/);
+    return { out, failed: /checks FAILED/.test(out), summary: m ? m[0] : '(no summary)' };
+  };
+  const saved = [];
+  let verdict = 1;
+  try {
+    for (const f of dirty) {
+      const abs = path.join(TOP, f);
+      const to = path.join(stash, f.replace(/[\\/]/g, '__'));
+      if (fs.existsSync(abs)) { fs.copyFileSync(abs, to); saved.push({ abs, to }); }
+    }
+    console.log('\nproving ' + names.join(', ') + ' against ' + dirty.length + ' changed file(s):');
+    dirty.forEach((f) => console.log('  ' + f));
+
+    for (const f of dirty) {
+      let tracked = true;
+      try { git(['cat-file', '-e', 'HEAD:' + f]); } catch (e) { tracked = false; }
+      // Throws on failure, deliberately. A revert that quietly does nothing
+      // leaves the change in place, the "before" run passes, and the harness
+      // reports a fix it never removed.
+      if (tracked) git(['checkout', 'HEAD', '--', f]);
+      else fs.unlinkSync(path.join(TOP, f));   // the file is new: absence is its "before"
+    }
+    console.log('\n[1/2] without the change — the check must FAIL');
+    const before = run();
+    console.log('      ' + before.summary);
+
+    saved.forEach((s) => fs.copyFileSync(s.to, s.abs));
+    console.log('\n[2/2] with the change — the check must PASS');
+    const after = run();
+    console.log('      ' + after.summary);
+
+    const ok = before.failed && !after.failed;
+    console.log('\n' + (ok
+      ? 'PROVEN — red before, green after. This check detects the defect it names.'
+      : !before.failed
+        ? 'NOT PROVEN — the check passed WITHOUT the change. It is not testing the fix.'
+        : 'NOT PROVEN — the check still fails WITH the change.'));
+    verdict = ok ? 0 : 1;
+  } finally {
+    saved.forEach((s) => { try { fs.copyFileSync(s.to, s.abs); } catch (e) {} });
+    try { fs.rmSync(stash, { recursive: true, force: true }); } catch (e) {}
+  }
+  process.exit(verdict);
+}
 // Ceiling on a single check. The slowest honest check (survive/detach, which sit out
 // real grace windows) lands well under this; anything past it is stuck, not slow.
 const CHECK_TIMEOUT = Number(process.env.WINMUX_CHECK_TIMEOUT_MS) || 300000;
@@ -306,6 +463,22 @@ function whoHas(port) {
   } catch (e) { return ''; }
 }
 
+// Every port-owning process this run spawns, written down at the moment it is
+// spawned. reapAutoServers() covers the ordinary exit; this file covers the case
+// it structurally cannot — a run killed mid-flight never reaches its own cleanup,
+// and the server it leaves behind squats a port the NEXT run needs.
+//
+// Ownership is recorded, not inferred. The first attempt at this matched process
+// command lines against the worktree path, and was wrong in both directions: it
+// missed `node server.cjs` (spawned with cwd, so its argv never names the tree)
+// and it matched four of my own shells, which had the path in their command line
+// only because I had typed it. A pid we wrote down is not a guess.
+const PIDFILE = process.env.WINMUX_VERIFY_PIDFILE || path.join(OUT, 'spawned-pids.txt');
+const noteSpawn = (proc) => {
+  try { if (proc && proc.pid) fs.appendFileSync(PIDFILE, proc.pid + '\n'); } catch (e) {}
+  return proc;
+};
+
 async function server(port, extraEnv) {
   // Anything already on this port is NOT ours. Borrowing it used to be silent,
   // which meant a stray process could become the system under test: the check's
@@ -327,7 +500,7 @@ async function server(port, extraEnv) {
       stop() {},
     };
   }
-  const proc = RUST_CORE
+  const proc = noteSpawn(RUST_CORE
     ? spawn(RUST_CORE, [], {
         cwd: ROOT,
         // WINMUX_CLI_DIR / WINMUX_APP_EXE mirror what the Electron shell hands the
@@ -343,7 +516,7 @@ async function server(port, extraEnv) {
         cwd: ROOT,
         env: Object.assign({}, process.env, { PORT: String(port), WINMUX_TRUST_FILE: trustFile(port), WINMUX_CONFIG_FILE: configFile(port), WINMUX_NO_INSTANCE: '1' }, extraEnv || {}),
         stdio: 'ignore',
-      });
+      }));
   await waitUp(port, 15000);
   return { port, borrowed: false, stop() { try { proc.kill(); } catch (e) {} } };
 }
@@ -381,9 +554,9 @@ function serverAuto() {
   return new Promise((resolve, reject) => {
     const env = Object.assign({}, process.env, { WINMUX_TRUST_FILE: trustFile('auto'), WINMUX_NO_INSTANCE: '1' });
     delete env.PORT;
-    const proc = spawn(process.execPath, ['server.cjs'], {
+    const proc = noteSpawn(spawn(process.execPath, ['server.cjs'], {
       cwd: ROOT, env, stdio: ['ignore', 'pipe', 'ignore'],
-    });
+    }));
     // Registered before anything can go wrong, so the end-of-run reap covers
     // the paths a `finally` cannot: a check that throws before it, a timeout
     // that rejects, or a spawn whose announcement never arrives.
@@ -408,40 +581,60 @@ function serverAuto() {
 // server is already running. `port` says which of the two it needs.
 
 const CHECKS = [];
-// A check may carry an env override for its server (last arg) — e.g. the update
-// check forces WINMUX_FAKE_LATEST so the badge can be proven without a real release.
-// Two checks must never share a port. Servers are memoised per port, so the
-// second check to ask for a shared one silently gets the FIRST check's server,
-// configured with the first check's environment — and then grades it. That is
-// the harness doing the exact thing it exists to catch the product doing:
-// reporting confidently about something other than what it was pointed at.
+
+// ---- Tier 0: the ports are not trusted to a reader -------------------------
+// Servers are memoised per port, so two checks on one port means the second one
+// silently receives the FIRST one's server, built for the first one's
+// conditions, and grades that. The harness doing the exact thing it exists to
+// catch the product doing. It is also invisible: the run stays green until
+// scheduling puts the wrong check first, then a red appears somewhere unrelated
+// and moves the next time.
 //
-// It is also invisible. The run stays green until scheduling happens to put the
-// wrong check first, and then a red appears somewhere unrelated and moves the
-// next time. Three collisions had accumulated in this file, each added by
-// someone picking "the next free number" by eye. So the numbers are no longer
-// trusted to a reader: a collision stops the run here, by name, before a single
-// check has run.
-//
-// Some checks DO share a server on purpose — they were written to cooperate on
-// one, and the refcount in `owed` exists for exactly them. Sharing is fine when
-// it is intended; the danger is sharing nobody meant. So intent has to be
-// written down here. A group not on this list is a mistake, by definition.
+// Some checks DO share a server on purpose and the refcount in `owed` exists for
+// them. Sharing is fine when intended; the danger is sharing nobody meant. So
+// intent is written down here, and a pair not on this list is a mistake by
+// definition.
 const SHARED_ON_PURPOSE = {
   brand: 1, fresh: 1, busyport: 1, launchfail: 1, reason: 1,  // all ride the PORT_BUSY server
   electron: 1, groups: 1,
   onboard: 1, profile: 1,
 };
+// Not every port in this file flows through check(). The exhaustion test binds
+// PORTS_EXHAUST itself; a check quietly assigned one of those numbers dies with
+// a raw EADDRINUSE from inside an unrelated check. Seed them so the guard sees
+// the whole picture, not the half that happens to be registered.
 const PORT_OWNER = new Map();
+PORTS_EXHAUST.forEach((p) => PORT_OWNER.set(p, 'the port-exhaustion test'));
+
+// Chromium refuses to navigate to a short list of ports (kRestrictedPorts) and
+// says so as ERR_UNSAFE_PORT, which arrives looking like a product failure. A
+// port being free is not the same as a port being usable: 10080 is free on this
+// machine and the browser will not go there. Nothing in this file can land on
+// one at base 0 — closeverb is 9980 — so it took a shifted run to find it, three
+// checks from the end of twelve minutes. Cheaper to know at startup.
+const BROWSER_REFUSES = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79,
+  87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137,
+  139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532,
+  540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723,
+  2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669,
+  6679, 6697, 10080,
+]);
+
+// A check may carry an env override for its server (last arg) — e.g. the update
+// check forces WINMUX_FAKE_LATEST so the badge can be proven without a real release.
 const check = (id, port, run, env) => {
-  const owner = PORT_OWNER.get(port);
-  if (owner && SHARED_ON_PURPOSE[owner] && SHARED_ON_PURPOSE[id]) {
-    CHECKS.push({ id, port, run, env });
-    return;
+  if (BROWSER_REFUSES.has(port)) {
+    console.error('\n"' + id + '" would run on port ' + port + ', which the browser refuses to open'
+      + ' (ERR_UNSAFE_PORT).' + (PORT_BASE ? '\nWINMUX_VERIFY_PORT_BASE=' + PORT_BASE + ' put it there; '
+        + (port - PORT_BASE) + ' is fine unshifted.' : '')
+      + '\nUse a different base, or move the check.\n');
+    process.exit(2);
   }
-  if (owner) {
-    console.error('\nverify.cjs is misconfigured: checks "' + owner + '" and "' + id + '" both claim port '
-      + port + '.\nTwo checks on one port grade each other’s server. Give one of them a free port.\n');
+  const owner = PORT_OWNER.get(port);
+  if (owner && !(SHARED_ON_PURPOSE[owner] && SHARED_ON_PURPOSE[id])) {
+    console.error('\nverify.cjs is misconfigured: "' + owner + '" and "' + id + '" both claim port ' + port
+      + '.\nTwo checks on one port grade each other’s server. Give one of them a free port.\n');
     process.exit(2);
   }
   PORT_OWNER.set(port, id);
@@ -468,6 +661,51 @@ async function appReady(page, floorMs, capMs) {
   })()`, null, { timeout: capMs || 30000 }).catch(() => {});
   const left = floor - (Date.now() - started);
   if (left > 0) await page.waitForTimeout(left);
+}
+
+// clickLive — click a control that only exists once something is hovered.
+//
+// Twice now a check has been defeated by this and reported it as the product's
+// fault: `.pc-split` timed out for thirty seconds against a hover-revealed pane
+// control, and `orphan` clicked a tab's close button, saw the shell count never
+// move, and called it a failure to end the shell. Playwright's actionability
+// check says "visible and stable", which a control halfway through a reveal
+// transition can satisfy while something else is still the thing under the
+// cursor. So: hover the parent, then wait until the target is genuinely the
+// element at its own centre — the same elementFromPoint idiom the window-control
+// check uses — and only then click.
+//
+// If it never becomes hittable, that is a HARNESS problem and it says so, rather
+// than letting the silence be scored against the product.
+async function clickLive(page, hoverSel, targetSel, timeout) {
+  await page.hover(hoverSel);
+  // Named, because the first version of this was not. When it timed out inside a
+  // full run all the log said was `page.waitForFunction: Timeout 10000ms
+  // exceeded` — and the caller has its own 10s waitForFunction, so the message
+  // could not say which of the two had failed, or whether the product was even
+  // involved. A guard that cannot name its own side is half a guard.
+  try {
+    await page.waitForFunction(`(function () {
+    var el = document.querySelector(${JSON.stringify(targetSel)});
+    if (!el) return false;
+    var r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return false;
+    var top = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    return !!top && (top === el || el.contains(top) || top.contains(el));
+  })()`, null, { timeout: timeout || 10000 });
+  } catch (e) {
+    const seen = await page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return { found: false };
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+      return { found: true, w: Math.round(r.width), h: Math.round(r.height),
+        opacity: getComputedStyle(el).opacity, blockedBy: top ? (top.className || top.tagName) : null };
+    }, targetSel).catch(() => null);
+    throw new Error('HARNESS: ' + targetSel + ' never became clickable — the hover-reveal '
+      + 'never settled, so nothing here says anything about the product. ' + JSON.stringify(seen));
+  }
+  await page.click(targetSel);
 }
 
 const desktop = async (browser, extraSettings) => {
@@ -594,11 +832,11 @@ check('port', PORT_FREE, async ({ t, engine }) => {
   const victim = [...tun2][0];
   if (victim) {
     const res = await new Promise((resolve) => {
-      const proc = spawn(process.execPath, ['server.cjs'], {
+      const proc = noteSpawn(spawn(process.execPath, ['server.cjs'], {
         cwd: ROOT,
         env: Object.assign({}, process.env, { PORT: String(victim), WINMUX_TRUST_FILE: trustFile('refusal') }),
         stdio: ['ignore', 'ignore', 'pipe'],
-      });
+      }));
       let err = '';
       proc.stderr.on('data', (d) => { err += d.toString(); });
       proc.on('exit', (code) => resolve({ code, err }));
@@ -628,7 +866,7 @@ check('port', PORT_FREE, async ({ t, engine }) => {
   }
   try {
     const res = await new Promise((resolve) => {
-      const proc = spawn(process.execPath, ['server.cjs'], {
+      const proc = noteSpawn(spawn(process.execPath, ['server.cjs'], {
         cwd: ROOT,
         env: Object.assign({}, process.env, {
           PORT: '',
@@ -636,7 +874,7 @@ check('port', PORT_FREE, async ({ t, engine }) => {
           WINMUX_TRUST_FILE: trustFile('exhaust'),
         }),
         stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      }));
       let all = '';
       proc.stdout.on('data', (d) => { all += d.toString(); });
       proc.stderr.on('data', (d) => { all += d.toString(); });
@@ -1225,6 +1463,9 @@ check('foldfit', PORT_FOLDFIT, async ({ browser, base, t, shot }) => {
     after.panes > 0 && after.panes < 8, after.panes);
   t('and what is on screen is a usable terminal, not a sliver',
     after.narrow.cols >= 24, after.narrow);
+  // Both halves of the floor, not just the one folding usually hits. A stack
+  // that folds on rows fails this and passes the columns check above.
+  t('and tall enough to read, not only wide enough', after.narrow.rows >= 6, after.narrow);
 
   // Saying nothing would be its own defect: panes the user arranged are not
   // where they left them, and they are entitled to know why and that the work
@@ -2368,7 +2609,7 @@ check('workspace', PORT_WORKSPACE, async ({ browser, base, t, shot }) => {
   } finally {
     await pageB.close();
   }
-}, { WINMUX_WORKSPACE_FILE: path.join(OUT, 'workspace-9978.json') });
+}, { WINMUX_WORKSPACE_FILE: path.join(OUT, 'workspace-' + PORT_WORKSPACE + '.json') });
 
 // PT-4: saved scrollbacks are a visible list, not 235 invisible files. The engine
 // lists every backlog entry with its expiry (STATE.md: silent expiry is a contract
@@ -3279,10 +3520,25 @@ check('orphan', PORT_ORPHAN, async ({ browser, base, t }) => {
     });
     t('the tab has a shell id and its socket is down', !!dropped && !!dropped.sid, dropped);
 
-    // The close control is hover-reveal, so hover first — that is the real path a
-    // user takes, and clicking straight at a hidden control just waits forever.
-    await page.hover('.ptab[data-active]');
-    await page.click('.ptab[data-active] .x', { timeout: 10000 });
+    // The close control is hover-reveal. Hovering first is not enough on a loaded
+    // machine: the reveal transition can still be running when the click fires,
+    // the click lands on the tab instead of its X, and the shell count never
+    // moves — which this check then reported as "closing it does not end the
+    // shell". It failed that way at 3-way concurrency and again at 8-way.
+    // clickLive waits until the X is actually the element at its own centre.
+    const tabsBefore = await page.evaluate(() => document.querySelectorAll('.ptab').length);
+    await clickLive(page, '.ptab[data-active]', '.ptab[data-active] .x');
+    // If the tab is still there the click did not land, and nothing below says
+    // anything about the product. Fail loudly as a harness problem instead —
+    // and say so in words, because a bare Playwright timeout here is
+    // indistinguishable from the one inside clickLive.
+    await page.waitForFunction(
+      `document.querySelectorAll('.ptab').length < ${tabsBefore}`, null, { timeout: 10000 })
+      .catch(async () => {
+        const now = await page.evaluate(() => document.querySelectorAll('.ptab').length).catch(() => '?');
+        throw new Error('HARNESS: the X was clickable and was clicked, but the tab did not close ('
+          + tabsBefore + ' before, ' + now + ' after), so the shell count below would grade nothing.');
+      });
     // Wait for the count to drop — but do NOT assert on that moment. Before the
     // fix it DID drop, and then the queued retry reattached by sid and put the
     // shell straight back: a check that graded the transient called the bug fixed.
@@ -3572,7 +3828,10 @@ check('drop', PORT_DROP, async ({ browser, base, t }) => {
   t('contents decide it when two folders share a name',
     picked.length && picked[0].path.toLowerCase() === right.toLowerCase(), picked[0]);
 
-  const none = await find('no-folder-is-called-this-9917', ['a', 'b']);
+  // The suffix used to be -9917, which is port-shaped. It was never a port, but
+  // the raw-literal scan cannot know that, and an exemption list is how a guard
+  // starts dying. Cheaper to pick a string that is obviously not a port.
+  const none = await find('no-folder-is-called-this-zzq', ['a', 'b']);
   t('a folder that is not on this machine comes back empty, not wrong', none.length === 0, none);
 
   const page = await desktop(browser);
@@ -3980,11 +4239,11 @@ check('electron', PORT_GROUPS, async ({ t }) => {
   const wsFile = path.join(OUT, 'electron-workspace.json');
   try { fs.unlinkSync(wsFile); } catch (e) { /* fresh */ }
   const res = await new Promise((resolve) => {
-    const proc = spawn(electronPath, [main], {
+    const proc = noteSpawn(spawn(electronPath, [main], {
       cwd: ROOT,
       env: Object.assign({}, process.env, { WINMUX_SMOKE: '1', WINMUX_SMOKE_OUT: outFile, WINMUX_FORCE_DOM: '1', WINMUX_WORKSPACE_FILE: wsFile }),
       stdio: 'ignore',
-    });
+    }));
     const timer = setTimeout(() => {
       try { proc.kill(); } catch (e) {}
       resolve({ code: null, timedOut: true });
@@ -4356,16 +4615,16 @@ check('tunnel-override', PORT_TUNOVR, async ({ base, t }) => {
 
   // Refusal: force a port AND mark that same port tunnelled via the override. The
   // server must refuse (exit 2) purely from the override — no tailscale call needed.
-  const forced = 9951;
+  const forced = P(9951);
   const refused = await new Promise((resolve) => {
-    const proc = spawn(process.execPath, ['server.cjs'], {
+    const proc = noteSpawn(spawn(process.execPath, ['server.cjs'], {
       cwd: ROOT,
       env: Object.assign({}, process.env, {
         PORT: String(forced), WINMUX_TUNNELLED_PORTS: String(forced),
         WINMUX_TRUST_FILE: trustFile('tunovr'), WINMUX_NO_INSTANCE: '1',
       }),
       stdio: ['ignore', 'ignore', 'pipe'],
-    });
+    }));
     let err = '';
     proc.stderr.on('data', (d) => { err += d.toString(); });
     proc.on('exit', (code) => resolve({ code, err }));
@@ -4644,20 +4903,24 @@ check('winctl', PORT_WINCTL, async ({ browser, base, t, shot }) => {
     await allUsable('at ' + w + 'x' + h + ' with one pane');
   }
 
-  // This used to split three times AT 720x480, which AUDIT-T1 now correctly
-  // refuses: three panes in a 720px window is a terminal too narrow to use, and
-  // the app says so instead of making it. The subject of this check was never
-  // the splitting — it is whether the close button survives many panes in a tiny
-  // window, and that state is still perfectly reachable: split where there is
-  // room, then drag the window down onto the panes you already have. Which is
-  // also the more honest reproduction of what Edward actually did.
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.waitForTimeout(700);
+  // This check is about the window controls surviving a LAYOUT, not about how
+  // many panes fit. It used to split three times at 720x480 and assert three,
+  // then four panes — which stopped being true the moment splitting got a floor:
+  // at that size two panes is the honest maximum and the third split is refused
+  // on purpose. Asserting it anyway was asserting the absence of the fix.
+  //
+  // So reach each layout at a size where it is legal, then drag down to the
+  // floor and look. Same coverage, no longer coupled to the split rule.
   for (let i = 1; i <= 3; i++) {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(600);
     await winmux(['split', 'right']);
     await page.waitForTimeout(2200);
     const panes = await page.evaluate(() => document.querySelectorAll('.workspace .pane').length);
-    t('split ' + i + ' produced ' + (i + 1) + ' panes where there is room for them', panes === i + 1, String(panes));
+    t('split ' + i + ' produced ' + (i + 1) + ' panes at a size that allows it', panes === i + 1, String(panes));
+    await page.setViewportSize({ width: 720, height: 480 });
+    await page.waitForTimeout(900);
+    await allUsable('with ' + (i + 1) + ' panes dragged down to 720x480');
   }
   await page.setViewportSize({ width: 720, height: 480 });
   await page.waitForTimeout(900);
@@ -5433,7 +5696,7 @@ check('nostrand', PORT_NOSTRAND, async ({ t }) => {
     // take it with it on the way out.
     // The rival must be the engine actually under test — otherwise WINMUX_CORE=rust
     // would prove the Node rule twice and the Rust rule never.
-    const rival = RUST_CORE
+    const rival = noteSpawn(RUST_CORE
       ? spawn(RUST_CORE, [], {
           cwd: ROOT, stdio: 'ignore',
           env: Object.assign({}, process.env, {
@@ -5448,7 +5711,7 @@ check('nostrand', PORT_NOSTRAND, async ({ t }) => {
             PORT: '0', WINMUX_INSTANCE_FILE: instanceFile,
             WINMUX_TRUST_FILE: path.join(scratch, 'devices.json'),
           }),
-        });
+        }));
     await new Promise((r) => setTimeout(r, 4000));
     const during = JSON.parse(fs.readFileSync(instanceFile, 'utf8'));
     t('a second engine refuses to claim a file a live engine owns',
@@ -5467,11 +5730,11 @@ check('nostrand', PORT_NOSTRAND, async ({ t }) => {
     // as a rival, the restarted engine becomes undiscoverable, which is how this
     // fix first showed up as two unrelated Rust failures in the full run.
     const succFile = path.join(scratch, 'succession.json');
-    const succPort = 9971;
+    const succPort = P(9971);
     fs.writeFileSync(succFile, JSON.stringify({
       port: succPort, host: '127.0.0.1', pid: holder.pid, started: Date.now() - 60000,
     }));
-    const heir = RUST_CORE
+    const heir = noteSpawn(RUST_CORE
       ? spawn(RUST_CORE, [], { cwd: ROOT, stdio: 'ignore', env: Object.assign({}, process.env, {
           WINMUX_PORT: String(succPort), WINMUX_INSTANCE_FILE: succFile,
           WINMUX_TRUST_FILE: path.join(scratch, 'devices.json'),
@@ -5479,7 +5742,7 @@ check('nostrand', PORT_NOSTRAND, async ({ t }) => {
       : spawn(process.execPath, [path.join(ROOT, 'server.cjs')], {
           cwd: ROOT, stdio: 'ignore', env: Object.assign({}, process.env, {
             PORT: String(succPort), WINMUX_INSTANCE_FILE: succFile,
-            WINMUX_TRUST_FILE: path.join(scratch, 'devices.json') }) });
+            WINMUX_TRUST_FILE: path.join(scratch, 'devices.json') }) }));
     await new Promise((r) => setTimeout(r, 4000));
     const claimed = JSON.parse(fs.readFileSync(succFile, 'utf8'));
     t('but a restart on the same port DOES claim the file — succession, not rivalry',
@@ -5754,6 +6017,10 @@ check('doing', PORT_DOING, async ({ browser, base, t, shot }) => {
 // paste-on-phone works over the tailnet without the text ever touching disk. This
 // check drives the raw endpoint (the client only calls it when the toggle is on):
 // POST stores it, GET returns exactly it, and an oversized clip is capped.
+// AUDIT-T1. Splitting had no floor: keep pressing and you get panes a couple of
+// columns wide holding a shell you cannot type into, with no word about it.
+// This measures the tightest TERMINAL, not the pane count — the floor is about
+// how small a terminal got, and only the terminal knows that.
 check('clip', PORT_CLIP, async ({ base, t }) => {
   const marker = 'CLIP_SYNC_9939_hello_from_the_pc';
   const post = await fetch(base + '/api/clip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: marker }) }).then((r) => r.json()).catch((e) => ({ error: String(e) }));
@@ -6854,17 +7121,45 @@ check('approvecard', PORT_APPROVECARD, async ({ browser, base, t, shot }) => {
   // pool keeps enough parallelism to stay fast while leaving headroom so no check
   // is starved. Override with WINMUX_VERIFY_CONCURRENCY (1 = fully serial).
   const cpu = (os.cpus() || []).length || 4;
-  // Cap at 3, not 4: the electron check spawns a full Electron process and, alongside
-  // three other browser-driving checks, occasionally trips its own internal timeouts
-  // under CPU saturation. 3 keeps the run fast while leaving that headroom so green is
-  // reproducible every run, not just most runs.
-  const MAX_CONCURRENCY = Math.max(1, Number(process.env.WINMUX_VERIFY_CONCURRENCY) || Math.min(3, cpu - 2));
-  console.log('running ' + run.length + ' checks, ' + MAX_CONCURRENCY + ' at a time');
-  const queue = run.slice();
+  // The cap used to be a flat 3 — chosen when the electron check tripped its own
+  // timeouts under saturation, and never revisited. On a 24-core machine that is
+  // three cores working and twenty-one idle, and it is the entire reason a full
+  // run "costs twelve minutes" and therefore gets deferred to the end of a
+  // batch, where it finds everything too late. Measured on this machine:
+  //
+  //   3 at a time  →  ~12 min   637/637
+  //   8 at a time  →  2m 26s    637/637, no flake
+  //
+  // A fifth of the wall clock, same answer. So: scale with the machine, still
+  // leaving two cores for the OS and this process, and keep a ceiling of 8 —
+  // past that the browser-driving checks start competing for the same GPU
+  // process and the headroom argument becomes real again.
+  // Override with WINMUX_VERIFY_CONCURRENCY (1 = fully serial).
+  const MAX_CONCURRENCY = Math.max(1, Number(process.env.WINMUX_VERIFY_CONCURRENCY) || Math.min(8, cpu - 2));
+  // localecho asserts a LATENCY, not a behaviour: a keystroke painted within
+  // 32ms of the keypress. That is a claim about the app on an unloaded machine,
+  // and seven other Electron processes are not an unloaded machine — at 8-way it
+  // measured -1 (the paint never landed in the window) and reported it as a
+  // product regression. That is what the old flat cap of 3 was really protecting,
+  // and throttling all 86 checks to protect one of them cost ten minutes a run.
+  //
+  // So it runs alone, last. Everything else keeps the full width.
+  //
+  // `electron` joins it: its global-summon budget is also 100ms, and I argued
+  // that best-of-three would carry it through a loaded machine. Two runs out of
+  // three at 8-way say otherwise. Best-of-three lowers the flake rate; it does
+  // not make a latency claim true on a machine that is busy. Any check asserting
+  // a WALL-CLOCK budget belongs here — that is the rule, not the list.
+  const SOLO = { localecho: 1, electron: 1 };
+  const queue = run.filter((c) => !SOLO[c.id]);
+  const solo = run.filter((c) => SOLO[c.id]);
+  console.log('running ' + queue.length + ' checks, ' + MAX_CONCURRENCY + ' at a time'
+    + (solo.length ? ', then ' + solo.length + ' timing-sensitive alone' : ''));
   const workers = Array.from({ length: Math.min(MAX_CONCURRENCY, queue.length) }, async () => {
     while (queue.length) { await runOne(queue.shift()); }
   });
   await Promise.all(workers);
+  for (const c of solo) await runOne(c);
 
   await browser.close();
   if (busyHold) busyHold.stop();
