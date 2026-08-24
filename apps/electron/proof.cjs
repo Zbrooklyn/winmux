@@ -175,6 +175,44 @@ const killRecorded = (file, label) => {
   if (killed.length) console.log('reaped ' + killed.length + ' ' + label + ': ' + killed.join(', '));
 };
 
+// The servers the ledger CANNOT see, because the harness never spawned them.
+//
+// Session survival is a real product feature: the app starts a server that
+// outlives it, detached on purpose, and `detach`/`survive` prove exactly that by
+// asking server-host.js to do it. resolveServer() hands back {port, host,
+// attached} and no pid, and the checks stop it over HTTP — a request, not a
+// guarantee, and one a check that threw earlier never gets to make. Four of them
+// were found alive across four different runs, each holding its own worktree
+// open, which is why the husks would not delete.
+//
+// So this matches on the command line after all — but narrowly, and only for the
+// case the ledger structurally cannot cover. The earlier broad version was wrong
+// because "contains the tree path" also matches a shell someone typed the path
+// into. `node.exe` running `server.cjs` out of a winmux-proof- tree is not
+// something a shell can be: the image name, the script and the location all have
+// to agree.
+const killDetachedFromTrees = () => {
+  if (process.platform !== 'win32') return;
+  const ps = "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' "
+    + "-and $_.CommandLine -like '*winmux-proof-*' -and $_.CommandLine -like '*server.cjs*' } "
+    + '| ForEach-Object { $_.ProcessId }';
+  let out = '';
+  try {
+    out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps],
+      { encoding: 'utf8', timeout: 30000 });
+  } catch (e) { return; }
+  const pids = out.split('\n').map((s) => Number(s.trim())).filter((n) => n > 0);
+  for (const pid of pids) {
+    // /T matters more than it looks. Each of these servers has real pwsh shells
+    // under it, started through node-pty, and a shell holds its worktree as its
+    // working directory — which is what actually stopped the husks deleting, not
+    // the server. Killing the server alone orphans the shells and the directory
+    // stays. Sixteen of them were found holding five trees open.
+    try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }); } catch (e) {}
+  }
+  if (pids.length) console.log('reaped ' + pids.length + ' detached server(s) left in throwaway trees: ' + pids.join(', '));
+};
+
 // Every ledger but this run's own — i.e. what earlier runs left behind.
 const sweepPids = () => {
   let names;
@@ -188,6 +226,7 @@ const sweepPids = () => {
 
 const cleanup = () => {
   killRecorded(PIDFILE, 'server(s) this run left running');
+  killDetachedFromTrees();
   try { execFileSync('git', ['worktree', 'remove', '--force', tree], { cwd: TOP, stdio: 'ignore' }); } catch (e) {}
   try { fs.rmSync(tree, { recursive: true, force: true }); } catch (e) {}
 };
@@ -202,6 +241,7 @@ const sweep = () => {
   // that is why the husks would not delete — Remove-Item answered "used by
   // another process" and the tree stayed on disk holding a port.
   sweepPids();
+  killDetachedFromTrees();
   try { execFileSync('git', ['worktree', 'prune'], { cwd: TOP, stdio: 'ignore' }); } catch (e) {}
   for (const name of fs.readdirSync(os.tmpdir())) {
     if (!/^winmux-proof-.*-\d+$/.test(name)) continue;
