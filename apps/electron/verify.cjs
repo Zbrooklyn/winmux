@@ -3528,6 +3528,18 @@ check('orphan', PORT_ORPHAN, async ({ browser, base, t }) => {
     // clickLive waits until the X is actually the element at its own centre.
     const tabsBefore = await page.evaluate(() => document.querySelectorAll('.ptab').length);
     await clickLive(page, '.ptab[data-active]', '.ptab[data-active] .x');
+    // "Confirm before closing" is ON by default, and it fires for a terminal the
+    // app still believes is open. This check drops the socket and clicks the X
+    // immediately after, so it RACES the state flip: sometimes the app has
+    // noticed and closes straight away, sometimes it has not and asks first —
+    // which is a coin flip, and is what made this check flake for weeks.
+    //
+    // The answer is to answer it. Turning the setting off would prove a
+    // configuration nobody ships with; a person who means to close the tab
+    // presses Close, so the check does too. Both paths now end in the same
+    // place, whichever way the race lands.
+    const asked = await page.$('#dlg-ovl[data-open] [data-ok]');
+    if (asked) { await asked.click(); await page.waitForTimeout(300); }
     // If the tab is still there the click did not land, and nothing below says
     // anything about the product. Fail loudly as a harness problem instead —
     // and say so in words, because a bare Playwright timeout here is
@@ -3537,7 +3549,8 @@ check('orphan', PORT_ORPHAN, async ({ browser, base, t }) => {
       .catch(async () => {
         const now = await page.evaluate(() => document.querySelectorAll('.ptab').length).catch(() => '?');
         throw new Error('HARNESS: the X was clickable and was clicked, but the tab did not close ('
-          + tabsBefore + ' before, ' + now + ' after), so the shell count below would grade nothing.');
+          + tabsBefore + ' before, ' + now + ' after; confirm dialog seen: ' + !!asked
+          + '), so the shell count below would grade nothing.');
       });
     // Wait for the count to drop — but do NOT assert on that moment. Before the
     // fix it DID drop, and then the queued retry reattached by sid and put the
