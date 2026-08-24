@@ -97,6 +97,28 @@ evidence about what the fault is.
 | `localecho` | 1 in 2 at 8-way | asserts a keystroke painted within 32ms; seven sibling Electron processes are not an unloaded machine, so the paint never landed in the window (`ms:-1`) | runs alone, last |
 | `electron` | 2 of 3 at 8-way | same shape — a 100ms global-summon budget. Best-of-three lowers a flake rate; it does not make a latency claim true on a busy machine | runs alone, last |
 
+## Known residue — one empty directory per run
+
+Each proof run leaves an empty `%TEMP%\winmux-proof-<sha>-<pid>pps\electron`
+behind. Not a flake and not a port problem: the tree is empty, the worktree is
+deregistered, and nothing squats a port.
+
+The cause is measured, not guessed. A pwsh shell started through node-pty holds
+its worktree as its working directory, and Windows will not delete a directory
+someone is sitting in. Servers the sweep kills are killed with `/T`, so they take
+their shells with them — but a server that exited *normally* first leaves its
+shells orphaned with no parent left to kill. Killing the sixteen orphans found
+holding five old trees released all five immediately, which is what confirms it.
+
+The real fix is to stop the harness's servers gracefully (the product already has
+a shutdown path that ends its shells) rather than with `proc.kill()`, which on
+Windows terminates the parent and nothing under it. That is its own unit of work
+and it is deliberately not being done inside another one.
+
+Cost of leaving it: one empty directory per run. Cost of the thing already fixed:
+runs failing on ports another run was squatting. Those are not the same size, and
+the second one is closed.
+
 ## The rule that generalises
 
 **Any check asserting a wall-clock budget runs in the solo lane.** That is the
