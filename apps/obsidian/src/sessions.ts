@@ -11,6 +11,7 @@ interface Row { sid: string; shell: string; cwd: string; live: boolean; view?: T
 export class SessionsView extends ItemView {
   listEl!: HTMLElement;
   timer: number | null = null;
+  warnEl!: HTMLElement;
   constructor(leaf: WorkspaceLeaf, private plugin: WinMuxPlugin) { super(leaf); }
   getViewType() { return VIEW_SESSIONS; }
   getIcon() { return 'terminal-square'; }
@@ -24,6 +25,7 @@ export class SessionsView extends ItemView {
     proj.onclick = () => (this.plugin as any).openProjects();
     const add = head.createEl('button', { text: '+ New' });
     add.onclick = (e) => this.plugin.newSessionMenu(e);
+    this.warnEl = this.contentEl.createDiv({ cls: 'wm-warn' });
     this.listEl = this.contentEl.createDiv({ cls: 'wm-list' });
     await this.refresh();
     this.timer = window.setInterval(() => this.refresh(), 2000);
@@ -35,6 +37,14 @@ export class SessionsView extends ItemView {
 
   async refresh() {
     const core = this.plugin.core;
+    if (this.warnEl) {
+      this.warnEl.empty();
+      if (core.inst && this.plugin.engineInfo && !this.plugin.backgroundMode) {
+        this.warnEl.createSpan({ text: `Shells end ${this.plugin.engineInfo.detachGraceSecs ?? 30} s after Obsidian closes. ` });
+        const a = this.warnEl.createEl('a', { text: 'Switch to background mode' });
+        a.onclick = () => this.plugin.restartEngineBackground();
+      }
+    }
     const open = this.plugin.terminalViews();
     const rows: Row[] = [];
     const seen = new Set<string>();

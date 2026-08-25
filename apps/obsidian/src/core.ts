@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 import { requestUrl } from 'obsidian';
 
 export interface Instance { port: number; host: string; pid: number; started?: number }
-export interface Info { version: string; port: number; pid: number; sessions: number; detached: number; recoverable: number }
+export interface Info { version: string; port: number; pid: number; sessions: number; detached: number; recoverable: number; detachGraceSecs?: number }
 export interface BacklogEntry { id: string; shell: string; cwd: string; savedAt?: number; dev?: string }
 
 const instanceFile = () => process.env.WINMUX_INSTANCE_FILE || join(homedir(), '.winmux', 'instance.json');

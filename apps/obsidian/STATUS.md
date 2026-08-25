@@ -25,9 +25,14 @@ Plan: PLAN.md v0.3 (approved 2026-08-25, full standalone replacement). Branch `f
 - [x] P5 Claude session resume from sidebar (/api/claude-sessions) — Implemented; menu not exercised
 - [x] P5 Workspace save/load — provided by Obsidian's own workspace (tabs restore with sid); WinMux workspace.json not used
 - [x] P6 Release zip (`C:/Users/EDWAR/AppData/Local/winmux/releases/winmux-obsidian-0.1.0.zip`, 1.49 MB, outside Dropbox on purpose) + README — Verified
+- [x] Background mode (Edward 8/25: "if I x out I lose everything"): engine reads `WINMUX_DETACH_GRACE_SECS` (0 = never reap; default 30 unchanged), `/api/info.detachGraceSecs`; plugin spawns with 0 (setting "Keep shells running when Obsidian is closed"), warns + offers "Restart engine in background mode" when attached to an old-mode engine. Proof (scratch engines): env=0 → shell alive after 45 s detach, resumed:true, tick 50; no env → reaped, lost:true. **Core edit** (main.rs: 12 lines, additive) — the one engine change in this project.
+- [ ] Edward: click "Restart engine in background mode" once (ends the current shells) — or it happens automatically the first time the engine is started by the plugin after this build
 - [ ] Edward: full workday with the WinMux app closed → Accepted
 - [ ] Edward (one click each, Settings → WinMux → Agent tools): Register MCP server · Install Claude hooks
 - [ ] Community submission — gated (D3c)
+
+## Engine build
+`cargo build --release -p winmux-core --target-dir C:/dev/winmux-target` (Dropbox target dir is locked by running engines); copy to `binaries/`. Running engine 85212 is still the OLD binary until restarted.
 
 ## Accepted gaps (G1)
 Quake drop-down window; start-at-login for the Obsidian window. Agents overlay = replaced by sidebar needs-you rows + cheat sheet text. `browser` verb only supports open (web viewer); others need the desktop app.

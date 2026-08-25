@@ -72,3 +72,6 @@ body.winmux-broadcasting .winmux-terminal-view { box-shadow: inset 0 0 0 2px col
 table.winmux-diag { width: 100%; font-size: var(--font-ui-small); border-collapse: collapse; }
 table.winmux-diag td { padding: 4px 8px 4px 0; vertical-align: top; border-bottom: 1px solid var(--background-modifier-border); }
 table.winmux-diag td:first-child { color: var(--text-muted); white-space: nowrap; width: 38%; }
+
+.winmux-sessions .wm-warn:not(:empty) { margin: 0 6px 8px; padding: 6px 8px; border-radius: var(--radius-s); background: color-mix(in srgb, var(--color-orange) 12%, transparent); color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.winmux-sessions .wm-warn a { color: var(--text-accent); cursor: pointer; }

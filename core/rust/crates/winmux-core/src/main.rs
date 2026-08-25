@@ -40,7 +40,18 @@ mod phonedoor;
 
 static SID_COUNTER: AtomicU64 = AtomicU64::new(1);
 const SCROLLBACK_CAP: usize = 256 * 1024; // bytes of backlog replayed on reattach
-const GRACE: Duration = Duration::from_secs(30); // a detached shell survives this long
+const GRACE: Duration = Duration::from_secs(30); // a detached shell survives this long (default)
+
+// WINMUX_DETACH_GRACE_SECS overrides the grace: 0 = never reap a detached shell (tmux
+// semantics — a UI that closes and reopens hours later finds its shells still running;
+// only an explicit end or engine shutdown kills them). Unset/invalid = the 30 s default.
+fn detach_grace() -> Option<Duration> {
+    match std::env::var("WINMUX_DETACH_GRACE_SECS").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+        Some(0) => None,
+        Some(n) => Some(Duration::from_secs(n)),
+        None => Some(GRACE),
+    }
+}
 
 // A live terminal that outlives any single socket. The reader thread runs for the
 // session's whole life, appending to `scrollback` and forwarding to the attached sink.
@@ -883,10 +894,11 @@ async fn handle_pty(
         state.sessions.lock().unwrap().remove(&sid);
         return;
     }
+    let grace = match detach_grace() { Some(g) => g, None => return }; // background mode: keep it
     let state2 = state.clone();
     let session2 = session.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(GRACE).await;
+        tokio::time::sleep(grace).await;
         // Reaped only if no attach/detach happened since (epoch unchanged) and still detached.
         if session2.detach_epoch.load(Ordering::Relaxed) == epoch
             && session2.inner.lock().unwrap().attached.is_none()
@@ -1140,6 +1152,8 @@ async fn api_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "pid": std::process::id(),
         "sessions": total,
         "detached": detached,
+        // Seconds a detached shell survives; 0 = kept until ended (background mode).
+        "detachGraceSecs": detach_grace().map(|d| d.as_secs()).unwrap_or(0),
         // Saved scrollbacks with no live session behind them — the honest count
         // beside `detached` (PT-4). A live session's own current backlog file
         // isn't "recoverable", it's running.
