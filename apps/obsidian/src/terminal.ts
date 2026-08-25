@@ -1,5 +1,7 @@
 // One Obsidian tab = one WinMux terminal session over /pty.
-import { ItemView, WorkspaceLeaf, Scope } from 'obsidian';
+import { ItemView, WorkspaceLeaf, Scope, Menu, Notice } from 'obsidian';
+import { RenameModal } from './modals';
+import { Predictor } from './predictor';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -22,6 +24,8 @@ export class TerminalView extends ItemView {
   host!: HTMLElement;
   reconnectTimer: number | null = null;
   exitEl: HTMLElement | null = null;
+  pred: Predictor | null = null;
+  shellKey = '';
 
   constructor(leaf: WorkspaceLeaf, private plugin: WinMuxPlugin) { super(leaf); }
 
@@ -29,16 +33,20 @@ export class TerminalView extends ItemView {
   getIcon() { return 'terminal'; }
   getDisplayText() { return this.state.title || this.autoTitle(); }
 
+  autoLabel = '';
+
   autoTitle(): string {
     const cwd = (this.state.cwd || '').replace(/[\\/]+$/, '');
     const folder = cwd.split(/[\\/]/).pop() || cwd || 'terminal';
     const shell = this.state.shell || '';
+    if (this.autoLabel && this.autoLabel !== shell) return `${folder} · ${this.autoLabel}`;
     return shell ? `${folder} · ${shell}` : folder;
   }
 
-  getState(): Record<string, unknown> { return { ...this.state }; }
+  getState(): Record<string, unknown> { return { ...this.state, shellKey: this.shellKey }; }
   async setState(state: any, result: any) {
     this.state = { sid: state?.sid, shell: state?.shell, cwd: state?.cwd, title: state?.title };
+    if (state?.shellKey) this.shellKey = state.shellKey;
     await super.setState(state, result);
     if (this.term) { this.connect(); this.refreshTitle(); }
   }
@@ -65,9 +73,22 @@ export class TerminalView extends ItemView {
     this.term.loadAddon(this.fit);
     this.term.loadAddon(new WebLinksAddon());
     this.term.open(this.host);
-    this.term.onData(d => { if (this.status === 'closed') { if (d === '\r') this.restart(); return; } this.send({ t: 'i', d }); });
+    this.term.onData(d => {
+      if (this.status === 'closed') { if (d === '\r') this.restart(); return; }
+      this.pred?.key(d);
+      if (this.plugin.broadcast) { this.plugin.broadcastInput(d); return; }
+      this.send({ t: 'i', d });
+    });
+    this.term.onTitleChange(title => {
+      // OSC 0/2 from the shell — ignore bare exe paths, honour manual renames.
+      if (!title || /\.exe$/i.test(title.trim()) || this.state.title) return;
+      this.autoLabel = title.trim();
+      this.refreshTitle();
+    });
+    this.pred = new Predictor(this.term, this.host, () => this.term.options.theme?.foreground || '#888');
+    this.pred.enabled = this.plugin.settings.localEcho;
     this.term.onResize(({ cols, rows }) => this.send({ t: 'r', c: cols, r: rows }));
-    this.term.onBell(() => { if (!this.isFocused()) this.setStatus('needsyou'); });
+    this.term.onBell(() => { if (!this.isFocused()) { this.setStatus('needsyou'); this.plugin.notify(this, 'Terminal needs attention'); } });
     this.term.textarea?.addEventListener('focus', () => { if (this.status === 'needsyou') this.setStatus('idle'); });
 
     // Keys Obsidian would otherwise swallow while a terminal is focused. A scope
@@ -94,6 +115,25 @@ export class TerminalView extends ItemView {
     setTimeout(() => this.refit(), 150);
     setTimeout(() => this.refit(), 600);
     if (this.state.shell || this.state.sid) this.connect();
+  }
+
+  onPaneMenu(menu: Menu, source: string) {
+    super.onPaneMenu(menu, source);
+    menu.addSeparator();
+    menu.addItem(i => i.setSection('winmux').setTitle('Rename terminal').setIcon('pencil').onClick(() => this.promptRename()));
+    menu.addItem(i => i.setSection('winmux').setTitle('Duplicate here').setIcon('copy').onClick(() => this.plugin.openSession(undefined, this.shellKey || this.state.shell, this.state.cwd)));
+    menu.addItem(i => i.setSection('winmux').setTitle('Clear scrollback').setIcon('eraser').onClick(() => this.term.clear()));
+    menu.addItem(i => i.setSection('winmux').setTitle('Restart shell').setIcon('rotate-ccw').onClick(() => { this.disconnect(true); this.restart(); }));
+    menu.addItem(i => i.setSection('winmux').setTitle('End session').setIcon('trash').onClick(() => { this.disconnect(true); this.leaf.detach(); }));
+  }
+
+  promptRename() {
+    new RenameModal(this.app, this.state.title || this.autoTitle(), (name) => {
+      this.state.title = name.trim() || undefined;
+      this.app.workspace.requestSaveLayout();
+      this.refreshTitle();
+      this.plugin.sessionsChanged();
+    }).open();
   }
 
   /** Translate a blocked hotkey into what the shell expects. */
@@ -193,7 +233,8 @@ export class TerminalView extends ItemView {
     this.disconnect(false);
     const core = this.plugin.core;
     if (!core.inst) { this.term.writeln('\x1b[33mWinMux engine not connected.\x1b[0m'); return; }
-    const url = core.ptyUrl({ shell: this.state.shell || this.plugin.settings.defaultShell, cwd: this.state.cwd, sid: this.state.sid });
+    const key = this.shellKey || this.plugin.shellKeyFor(this.state.shell) || this.plugin.settings.defaultShell;
+    const url = core.ptyUrl({ shell: key, cwd: this.state.cwd, sid: this.state.sid });
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
@@ -202,10 +243,10 @@ export class TerminalView extends ItemView {
       if (typeof ev.data === 'string') {
         let m: any = null; try { m = JSON.parse(ev.data); } catch { /* raw text */ }
         if (m && m.type === 'meta') return this.onMeta(m);
-        this.term.write(ev.data); this.markWorking();
+        this.pred?.data(ev.data); this.term.write(ev.data); this.markWorking();
         return;
       }
-      this.term.write(new Uint8Array(ev.data)); this.markWorking();
+      const bytes = new Uint8Array(ev.data); this.pred?.data(bytes); this.term.write(bytes); this.markWorking();
     };
     ws.onclose = () => { if (this.ws === ws) { this.ws = null; if (this.status !== 'closed') this.scheduleReconnect(); } };
     ws.onerror = () => { /* onclose follows */ };
@@ -299,6 +340,11 @@ export class TerminalView extends ItemView {
     (this.leaf as any).updateHeader?.();
   }
 
+  respond(approve: boolean) {
+    this.send({ t: 'i', d: approve ? '\r' : '\x1b' });
+    if (this.status === 'needsyou') this.setStatus('idle');
+  }
+
   focusTerm() { this.term?.focus(); }
 
   serialize(lines = 0): string {
@@ -311,6 +357,7 @@ export class TerminalView extends ItemView {
 
   async onClose() {
     this.ro?.disconnect();
+    this.pred?.dispose();
     this.disconnect(false);
     this.term?.dispose();
     this.plugin.sessionsChanged();

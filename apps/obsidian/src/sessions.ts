@@ -35,6 +35,7 @@ export class SessionsView extends ItemView {
     const open = this.plugin.terminalViews();
     const rows: Row[] = [];
     const seen = new Set<string>();
+    open.sort((a, b) => (b.status === 'needsyou' ? 1 : 0) - (a.status === 'needsyou' ? 1 : 0));
     for (const v of open) {
       const sid = v.state.sid || ('pending:' + (v.leaf as any).id);
       seen.add(sid);
@@ -56,12 +57,12 @@ export class SessionsView extends ItemView {
     this.listEl.empty();
     if (!rows.length) { this.listEl.createDiv({ cls: 'wm-empty', text: this.plugin.core.inst ? 'No sessions yet. Click + New.' : 'Engine not connected.' }); return; }
     for (const r of rows) {
-      const row = this.listEl.createDiv({ cls: 'wm-row' + (r.view ? ' is-open' : '') });
+      const row = this.listEl.createDiv({ cls: 'wm-row' + (r.view ? ' is-open' : '') + (r.view?.status === 'needsyou' ? ' is-needsyou' : '') });
       const dot = row.createDiv({ cls: 'wm-dot' });
       if (r.view) dot.addClass(r.view.status === 'working' ? 'working' : r.view.status === 'needsyou' ? 'needsyou' : r.view.status === 'closed' ? 'ended' : 'open');
       else if (r.live) dot.addClass('open');
       const txt = row.createDiv({ cls: 'wm-txt' });
-      txt.createDiv({ cls: 'wm-title', text: (r.view?.state.title) || `${this.folderOf(r.cwd)} · ${r.shell || 'shell'}` });
+      txt.createDiv({ cls: 'wm-title', text: r.view ? r.view.getDisplayText() : `${this.folderOf(r.cwd)} · ${r.shell || 'shell'}` });
       txt.createDiv({ cls: 'wm-sub', text: r.view ? (r.view.status === 'working' ? 'Working' : r.view.status === 'needsyou' ? 'Needs you' : r.view.status === 'closed' ? 'Ended' : r.cwd) : (r.live ? 'Live in another window' : 'Recoverable · ' + r.cwd) });
       row.setAttr('title', r.cwd);
       row.onclick = () => this.plugin.openSession(r.sid.startsWith('pending:') ? undefined : r.sid, r.shell, r.cwd, r.view);
@@ -69,6 +70,12 @@ export class SessionsView extends ItemView {
         e.preventDefault();
         const m = new Menu();
         m.addItem(i => i.setTitle('Open in new tab').setIcon('plus').onClick(() => this.plugin.openSession(r.sid, r.shell, r.cwd)));
+        if (r.view && r.view.status === 'needsyou') {
+          m.addItem(i => i.setTitle('Approve (Enter)').setIcon('check').onClick(() => r.view!.respond(true)));
+          m.addItem(i => i.setTitle('Deny (Esc)').setIcon('x-circle').onClick(() => r.view!.respond(false)));
+          m.addSeparator();
+        }
+        if (r.view) m.addItem(i => i.setTitle('Rename').setIcon('pencil').onClick(() => r.view!.promptRename()));
         if (r.view) m.addItem(i => i.setTitle('Close tab (keep session 30 s)').setIcon('x').onClick(() => r.view!.leaf.detach()));
         m.addItem(i => i.setTitle('End session').setIcon('trash').onClick(async () => {
           if (r.view) { r.view.disconnect(true); r.view.leaf.detach(); }
