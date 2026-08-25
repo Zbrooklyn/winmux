@@ -1,0 +1,14 @@
+{
+  "//": "WinMux agent integration — merge this `hooks` block into your Claude Code settings (~/.claude/settings.json or a project .claude/settings.json). Each command calls `winmux agent`, which addresses the terminal it runs in via $WINMUX_SID and no-ops silently outside a WinMux session. See docs/agent-integration.md.",
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "winmux agent working" } ] }
+    ],
+    "Notification": [
+      { "hooks": [ { "type": "command", "command": "winmux agent needs-you \"Claude needs your input\"" } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "winmux agent done" } ] }
+    ]
+  }
+}

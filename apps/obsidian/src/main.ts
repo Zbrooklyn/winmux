@@ -4,6 +4,10 @@ import { CoreClient } from './core';
 import { TerminalView, VIEW_TERMINAL } from './terminal';
 import { SessionsView, VIEW_SESSIONS } from './sessions';
 import { ProjectsModal, DiagnosticsModal, CheatModal, renderPhonePane } from './surfaces';
+import { ControlClient } from './control';
+import { BIN_DIR, toolsInstalled, installTools, uninstallTools, mcpRegistered, registerMcp, unregisterMcp, hooksInstalled, installHooks, uninstallHooks, notifyList } from './tools';
+import { existsSync } from 'node:fs';
+import { relative, isAbsolute, resolve as resolvePath } from 'node:path';
 
 declare const __XTERM_CSS__: string;
 
@@ -52,6 +56,19 @@ export default class WinMuxPlugin extends Plugin {
   shells: { key: string; label: string }[] = [];
   broadcast = false;
   currentProject: { name: string; path: string } | null = null;
+  control!: ControlClient;
+  tidSeq = 0;
+
+  nextTid(): number { const used = this.terminalViews().map(v => v.tid); this.tidSeq = Math.max(this.tidSeq, ...used, 0) + 1; return this.tidSeq; }
+
+  /** Absolute path → vault-relative (forward slashes) or null when outside the vault. */
+  vaultRelative(p: string): string | null {
+    const basePath = (this.app.vault.adapter as FileSystemAdapter).getBasePath();
+    const abs = isAbsolute(p) ? p : resolvePath(basePath, p);
+    const rel = relative(basePath, abs);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
+    return rel.split('\\').join('/');
+  }
   statusEl: HTMLElement | null = null;
 
   shellKeyFor(labelOrKey?: string): string {
@@ -87,7 +104,13 @@ export default class WinMuxPlugin extends Plugin {
     document.head.appendChild(this.styleEl);
 
     const exe = join(this.pluginDir(), 'binaries', 'winmux-core.exe');
-    this.core = new CoreClient(exe);
+    this.core = new CoreClient(exe, () => {
+      // Shells the engine spawns get `winmux` on PATH and a Node runtime (Obsidian's Electron) for the shims.
+      const env: Record<string, string> = { WINMUX_APP_EXE: process.execPath };
+      if (existsSync(join(BIN_DIR, 'winmux.cmd'))) env.WINMUX_CLI_DIR = BIN_DIR;
+      return env;
+    });
+    this.control = new ControlClient(this);
 
     this.registerView(VIEW_TERMINAL, leaf => new TerminalView(leaf, this));
     this.registerView(VIEW_SESSIONS, leaf => new SessionsView(leaf, this));
@@ -111,6 +134,8 @@ export default class WinMuxPlugin extends Plugin {
     this.addCommand({ id: 'diagnostics', name: 'Diagnostics', callback: () => new DiagnosticsModal(this.app, this).open() });
     this.addCommand({ id: 'cheat-sheet', name: 'Cheat sheet (shortcuts & words)', hotkeys: [{ modifiers: ['Mod', 'Shift'], key: '/' }], callback: () => new CheatModal(this.app, this).open() });
     this.addCommand({ id: 'phone-settings', name: 'Phone access…', callback: () => { (this.app as any).setting.open(); (this.app as any).setting.openTabById('winmux'); } });
+    this.addCommand({ id: 'install-tools', name: 'Install WinMux tools (winmux CLI, MCP server, skill)', callback: () => { try { notifyList(installTools(this)); } catch (e: any) { new Notice('Install failed: ' + e.message); } } });
+    this.addCommand({ id: 'reclaim-control', name: 'Reclaim agent control (answer winmux commands in this window)', callback: () => { this.control.stop(); this.control.connect(); new Notice('This window now answers agent commands'); } });
     this.addCommand({ id: 'engine-info', name: 'Engine status', callback: async () => {
       const i = await this.core.info();
       new Notice(i ? `WinMux engine v${i.version} on :${i.port} (pid ${i.pid}) — ${i.sessions} live, ${i.recoverable} recoverable` : 'Engine not reachable');
@@ -130,6 +155,7 @@ export default class WinMuxPlugin extends Plugin {
         // Views restored by Obsidian's workspace connect themselves once the engine is up.
         for (const v of this.terminalViews()) if (!v.ws) v.connect();
         this.sessionsChanged();
+        this.control.connect();
       } catch (e: any) {
         console.error('[winmux]', e);
         new Notice('WinMux: ' + e.message, 8000);
@@ -138,6 +164,7 @@ export default class WinMuxPlugin extends Plugin {
   }
 
   onunload() {
+    this.control?.stop();
     this.styleEl?.remove();
     // Engine intentionally left running — sessions survive plugin reloads.
   }
@@ -271,6 +298,15 @@ class WinMuxSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Phone').setHeading();
     const phoneEl = containerEl.createDiv({ cls: 'winmux-phone-pane' });
     renderPhonePane(this.plugin, phoneEl);
+    new Setting(containerEl).setName('Agent tools').setHeading();
+    const tools = new Setting(containerEl).setName('winmux command line + MCP server').setDesc(toolsInstalled() ? `Installed in ${BIN_DIR} and on your PATH.` : 'Lets Claude and scripts drive these terminals: `winmux list`, `winmux send`, agent jobs…');
+    tools.addButton(b => b.setButtonText(toolsInstalled() ? 'Reinstall' : 'Install').setCta().onClick(() => { try { notifyList(installTools(this.plugin)); } catch (e: any) { new Notice('Install failed: ' + e.message); } this.display(); }));
+    if (toolsInstalled()) tools.addButton(b => b.setButtonText('Remove from PATH').onClick(() => { notifyList(uninstallTools()); this.display(); }));
+    const mcp = new Setting(containerEl).setName('Claude Code MCP server').setDesc(mcpRegistered() ? 'Registered (user scope). Claude gets winmux_list / winmux_send / winmux_agent_spawn… tools.' : 'Register so Claude Code can use the winmux_* tools in every project.');
+    mcp.addButton(b => b.setButtonText(mcpRegistered() ? 'Unregister' : 'Register').onClick(() => { if (!toolsInstalled()) { new Notice('Install the tools first'); return; } new Notice(mcpRegistered() ? unregisterMcp() : registerMcp()); this.display(); }));
+    const hooks = new Setting(containerEl).setName('Claude Code hooks').setDesc(hooksInstalled() ? 'Installed: tabs turn orange while Claude works, red when it needs you, clear when done.' : 'Adds three hooks to ~/.claude/settings.json (UserPromptSubmit / Notification / Stop) that call `winmux agent …`. Your other hooks are left alone.');
+    hooks.addButton(b => b.setButtonText(hooksInstalled() ? 'Remove hooks' : 'Install hooks').onClick(() => { if (!toolsInstalled()) { new Notice('Install the tools first'); return; } new Notice(hooksInstalled() ? uninstallHooks() : installHooks(this.plugin)); this.display(); }));
+    new Setting(containerEl).setName('Agent control').setDesc(this.plugin.control?.connected ? 'This window answers winmux commands.' : 'Not connected — another WinMux window may own control.').addButton(b => b.setButtonText('Reclaim').onClick(() => { this.plugin.control.stop(); this.plugin.control.connect(); setTimeout(() => this.display(), 500); }));
     new Setting(containerEl).setName('About').setHeading();
     new Setting(containerEl).setName('WinMux for Obsidian ' + this.plugin.manifest.version).addButton(b => b.setButtonText('Diagnostics').onClick(() => new DiagnosticsModal(this.app, this.plugin).open())).addButton(b => b.setButtonText('Cheat sheet').onClick(() => new CheatModal(this.app, this.plugin).open()));
     new Setting(containerEl).setName('Engine').setDesc('Bundled winmux-core.exe. Shared with the WinMux app if both are installed.').addButton(b => b.setButtonText('Status').onClick(async () => {

@@ -21,7 +21,7 @@ function pidAlive(pid: number): boolean {
 export class CoreClient {
   inst: Instance | null = null;
   spawnedPid: number | null = null;
-  constructor(private exePath: string) {}
+  constructor(private exePath: string, private extraEnv: () => Record<string, string> = () => ({})) {}
 
   get base(): string { return `http://${this.inst?.host || '127.0.0.1'}:${this.inst?.port}`; }
   get wsBase(): string { return `ws://${this.inst?.host || '127.0.0.1'}:${this.inst?.port}`; }
@@ -59,7 +59,7 @@ export class CoreClient {
     }
     if (this.readInstance()) throw new Error('an engine is registered in ~/.winmux/instance.json but not answering');
     if (!existsSync(this.exePath)) throw new Error('bundled engine missing: ' + this.exePath);
-    const child = spawn(this.exePath, [], { detached: true, stdio: 'ignore', windowsHide: true, env: { ...process.env } });
+    const child = spawn(this.exePath, [], { detached: true, stdio: 'ignore', windowsHide: true, env: { ...process.env, ...this.extraEnv() } });
     child.unref();
     this.spawnedPid = child.pid ?? null;
     for (let i = 0; i < 40; i++) {

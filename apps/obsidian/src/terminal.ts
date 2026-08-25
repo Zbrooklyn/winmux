@@ -26,6 +26,9 @@ export class TerminalView extends ItemView {
   exitEl: HTMLElement | null = null;
   pred: Predictor | null = null;
   shellKey = '';
+  tid = 0;
+  lastLine = '';
+  hold: number | null = null;
 
   constructor(leaf: WorkspaceLeaf, private plugin: WinMuxPlugin) { super(leaf); }
 
@@ -43,10 +46,11 @@ export class TerminalView extends ItemView {
     return shell ? `${folder} · ${shell}` : folder;
   }
 
-  getState(): Record<string, unknown> { return { ...this.state, shellKey: this.shellKey }; }
+  getState(): Record<string, unknown> { return { ...this.state, shellKey: this.shellKey, tid: this.tid }; }
   async setState(state: any, result: any) {
     this.state = { sid: state?.sid, shell: state?.shell, cwd: state?.cwd, title: state?.title };
     if (state?.shellKey) this.shellKey = state.shellKey;
+    this.tid = Number(state?.tid) || this.tid || this.plugin.nextTid();
     await super.setState(state, result);
     if (this.term) { this.connect(); this.refreshTitle(); }
   }
@@ -286,14 +290,18 @@ export class TerminalView extends ItemView {
     if (m.error) this.term.writeln(`\r\n\x1b[31m[${m.error}]\x1b[0m`);
   }
 
+  /** `agent working` from a hook: stay working until told otherwise (output silence must not flip it idle). */
+  holdWorking() { if (this.hold) window.clearTimeout(this.hold); this.hold = window.setTimeout(() => { this.hold = null; }, 10 * 60 * 1000); }
+
   markWorking() {
     if (this.status === 'closed') return;
     if (this.status !== 'needsyou') this.setStatus('working');
     if (this.busy) window.clearTimeout(this.busy);
-    this.busy = window.setTimeout(() => { this.busy = null; if (this.status === 'working') this.setStatus('idle'); }, IDLE_MS);
+    this.busy = window.setTimeout(() => { this.busy = null; if (this.status === 'working' && !this.hold) this.setStatus('idle'); }, IDLE_MS);
   }
 
   setStatus(s: TermStatus) {
+    if (s !== 'working' && this.hold) { window.clearTimeout(this.hold); this.hold = null; }
     if (this.status === s) return;
     this.status = s;
     this.updateTabStatus();
@@ -358,12 +366,13 @@ export class TerminalView extends ItemView {
 
   focusTerm() { this.term?.focus(); }
 
+  /** Screen text like app.js serializeTerm: drop trailing blank lines, then keep the last N. */
   serialize(lines = 0): string {
     const b = this.term.buffer.active;
     const out: string[] = [];
-    const start = lines > 0 ? Math.max(0, b.length - lines) : 0;
-    for (let i = start; i < b.length; i++) out.push(b.getLine(i)?.translateToString(true) ?? '');
-    return out.join('\n').replace(/\n+$/, '');
+    for (let i = 0; i < b.length; i++) out.push(b.getLine(i)?.translateToString(true) ?? '');
+    while (out.length && !out[out.length - 1].trim()) out.pop();
+    return (lines > 0 ? out.slice(-lines) : out).join('\n');
   }
 
   async onClose() {
