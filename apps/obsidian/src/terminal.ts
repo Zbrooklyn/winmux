@@ -170,7 +170,7 @@ export class TerminalView extends ItemView {
       this.state.sid = m.sid; this.state.shell = m.shell || this.state.shell; this.state.cwd = m.cwd || this.state.cwd;
       if (changed) { this.app.workspace.requestSaveLayout(); (this.leaf as any).updateHeader?.(); }
       if (m.lost) this.term.writeln('\r\n\x1b[33m[session was lost — started fresh]\x1b[0m');
-      if (m.cwdLost) this.term.writeln(`[33m[folder not found: ${m.cwdLost} — opened in ${m.cwd}][0m`);
+      if (m.cwdLost) this.term.writeln(`\x1b[33m[folder not found: ${m.cwdLost} — opened in ${m.cwd}]\x1b[0m`);
       this.plugin.sessionsChanged();
     }
     if (m.exited) {
