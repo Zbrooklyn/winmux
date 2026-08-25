@@ -2,6 +2,7 @@
 import { ItemView, WorkspaceLeaf, Menu, setIcon } from 'obsidian';
 import type WinMuxPlugin from './main';
 import { TerminalView } from './terminal';
+import { resumeClaudeMenu } from './surfaces';
 
 export const VIEW_SESSIONS = 'winmux-sessions';
 
@@ -19,6 +20,8 @@ export class SessionsView extends ItemView {
     this.contentEl.addClass('winmux-sessions');
     const head = this.contentEl.createDiv({ cls: 'wm-head' });
     head.createSpan({ text: 'Sessions' });
+    const proj = head.createEl('button', { text: 'Projects' });
+    proj.onclick = () => (this.plugin as any).openProjects();
     const add = head.createEl('button', { text: '+ New' });
     add.onclick = (e) => this.plugin.newSessionMenu(e);
     this.listEl = this.contentEl.createDiv({ cls: 'wm-list' });
@@ -77,6 +80,7 @@ export class SessionsView extends ItemView {
         }
         if (r.view) m.addItem(i => i.setTitle('Rename').setIcon('pencil').onClick(() => r.view!.promptRename()));
         if (r.view) m.addItem(i => i.setTitle('Close tab (keep session 30 s)').setIcon('x').onClick(() => r.view!.leaf.detach()));
+        if (r.cwd) m.addItem(i => i.setTitle('Resume Claude session…').setIcon('history').onClick((ev) => resumeClaudeMenu(this.plugin, ev as MouseEvent, r.cwd, r.view)));
         m.addItem(i => i.setTitle('End session').setIcon('trash').onClick(async () => {
           if (r.view) { r.view.disconnect(true); r.view.leaf.detach(); }
           if (!r.sid.startsWith('pending:')) { try { await this.plugin.core.deleteSession(r.sid); } catch { /* ignore */ } }

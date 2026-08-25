@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { CoreClient } from './core';
 import { TerminalView, VIEW_TERMINAL } from './terminal';
 import { SessionsView, VIEW_SESSIONS } from './sessions';
+import { ProjectsModal, DiagnosticsModal, CheatModal, renderPhonePane } from './surfaces';
 
 declare const __XTERM_CSS__: string;
 
@@ -14,6 +15,14 @@ export interface WinMuxSettings {
   passthroughKeys: string[];
   restoreOnStart: boolean;
   localEcho: boolean;
+  scrollback: number;
+  cursorStyle: 'bar' | 'block' | 'underline';
+  cursorBlink: boolean;
+  copyOnSelect: boolean;
+  rightClickPaste: boolean;
+  confirmClose: boolean;
+  osNotify: boolean;
+  resumeCommand: string;
 }
 
 const DEFAULTS: WinMuxSettings = {
@@ -24,6 +33,14 @@ const DEFAULTS: WinMuxSettings = {
   passthroughKeys: ['Ctrl+C', 'Ctrl+V', 'Ctrl+W', 'Ctrl+Tab', 'Ctrl+Shift+Tab', 'Ctrl+L', 'Ctrl+D', 'Ctrl+P', 'Ctrl+E', 'Ctrl+K', 'Ctrl+F'],
   restoreOnStart: true,
   localEcho: true,
+  scrollback: 5000,
+  cursorStyle: 'bar',
+  cursorBlink: true,
+  copyOnSelect: false,
+  rightClickPaste: false,
+  confirmClose: true,
+  osNotify: true,
+  resumeCommand: 'claude --resume {id} --dangerously-skip-permissions',
 };
 
 const FALLBACK_SHELLS = [{ key: 'pwsh', label: 'PowerShell 7' }, { key: 'powershell', label: 'Windows PowerShell' }, { key: 'cmd', label: 'Command Prompt' }, { key: 'bash', label: 'Git Bash' }, { key: 'wsl', label: 'WSL' }];
@@ -34,6 +51,7 @@ export default class WinMuxPlugin extends Plugin {
   styleEl: HTMLStyleElement | null = null;
   shells: { key: string; label: string }[] = [];
   broadcast = false;
+  currentProject: { name: string; path: string } | null = null;
   statusEl: HTMLElement | null = null;
 
   shellKeyFor(labelOrKey?: string): string {
@@ -89,6 +107,10 @@ export default class WinMuxPlugin extends Plugin {
     this.addCommand({ id: 'deny', name: 'Deny (send Escape to the terminal that needs you)', checkCallback: (chk) => { const v = this.terminalViews().find(t => t.status === 'needsyou') || this.activeTerminal(); if (!v) return false; if (!chk) v.respond(false); return true; } });
     this.addCommand({ id: 'focus-next-terminal', name: 'Focus next terminal', hotkeys: [{ modifiers: ['Mod', 'Alt'], key: 'ArrowRight' }], callback: () => this.cycleTerminal(1) });
     this.addCommand({ id: 'focus-prev-terminal', name: 'Focus previous terminal', hotkeys: [{ modifiers: ['Mod', 'Alt'], key: 'ArrowLeft' }], callback: () => this.cycleTerminal(-1) });
+    this.addCommand({ id: 'projects', name: 'Projects…', hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'O' }], callback: () => new ProjectsModal(this.app, this).open() });
+    this.addCommand({ id: 'diagnostics', name: 'Diagnostics', callback: () => new DiagnosticsModal(this.app, this).open() });
+    this.addCommand({ id: 'cheat-sheet', name: 'Cheat sheet (shortcuts & words)', hotkeys: [{ modifiers: ['Mod', 'Shift'], key: '/' }], callback: () => new CheatModal(this.app, this).open() });
+    this.addCommand({ id: 'phone-settings', name: 'Phone access…', callback: () => { (this.app as any).setting.open(); (this.app as any).setting.openTabById('winmux'); } });
     this.addCommand({ id: 'engine-info', name: 'Engine status', callback: async () => {
       const i = await this.core.info();
       new Notice(i ? `WinMux engine v${i.version} on :${i.port} (pid ${i.pid}) — ${i.sessions} live, ${i.recoverable} recoverable` : 'Engine not reachable');
@@ -145,6 +167,12 @@ export default class WinMuxPlugin extends Plugin {
   /** Obsidian Notice + tab/sidebar attention for something a terminal wants. */
   notify(v: TerminalView | null, text: string) {
     new Notice((v ? v.getDisplayText() + ' — ' : '') + text, 6000);
+    if (this.settings.osNotify && !document.hasFocus() && typeof Notification !== 'undefined') {
+      try {
+        const n = new Notification(v ? v.getDisplayText() : 'WinMux', { body: text, tag: 'winmux-' + (v?.state.sid || 'x') });
+        n.onclick = () => { window.focus(); if (v) { this.app.workspace.setActiveLeaf(v.leaf, { focus: true }); v.focusTerm(); } };
+      } catch { /* denied */ }
+    }
   }
 
   terminalViews(): TerminalView[] {
@@ -189,12 +217,34 @@ export default class WinMuxPlugin extends Plugin {
     return v;
   }
 
+  openProjects() { new ProjectsModal(this.app, this).open(); }
+
+  applyTermOptions() {
+    for (const v of this.terminalViews()) {
+      v.term.options.scrollback = this.settings.scrollback;
+      v.term.options.cursorStyle = this.settings.cursorStyle;
+      v.term.options.cursorBlink = this.settings.cursorBlink;
+      v.term.options.fontSize = this.settings.fontSize;
+      v.applyTheme(); v.refit();
+    }
+  }
+
   async loadSettings() { this.settings = Object.assign({}, DEFAULTS, await this.loadData()); }
   async saveSettings() { await this.saveData(this.settings); }
 }
 
 class WinMuxSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: WinMuxPlugin) { super(app, plugin); }
+
+  async renderEngineToggles(containerEl: HTMLElement) {
+    const box = containerEl.createDiv();
+    try {
+      const a = await this.plugin.core.json('/api/autostart');
+      new Setting(box).setName('Start the engine at login').setDesc('Keeps sessions alive before Obsidian opens.').addToggle(t => t.setValue(!!a.on).onChange(async v => { try { await this.plugin.core.json('/api/autostart', { method: 'POST', body: JSON.stringify({ on: v }) }); } catch (e: any) { new Notice(e.message); } }));
+      const h = await this.plugin.core.json('/api/history');
+      new Setting(box).setName('Save terminal history').setDesc('Scrollback of ended sessions is kept for recovery. Off wipes it.').addToggle(t => t.setValue(h.persist !== false).onChange(async v => { try { await this.plugin.core.json('/api/history', { method: 'POST', body: JSON.stringify({ persist: v }) }); } catch (e: any) { new Notice(e.message); } }));
+    } catch { /* engine away */ }
+  }
   display() {
     const { containerEl } = this;
     containerEl.empty();
@@ -205,9 +255,24 @@ class WinMuxSettingTab extends PluginSettingTab {
     });
     new Setting(containerEl).setName('Default folder').setDesc('Blank = your home folder.').addText(t => t.setValue(this.plugin.settings.defaultCwd).onChange(async v => { this.plugin.settings.defaultCwd = v.trim(); await this.plugin.saveSettings(); }));
     new Setting(containerEl).setName('Instant typing').setDesc('Show keystrokes immediately while the shell catches up (Mosh-style prediction). Off for passwords and full-screen apps automatically.').addToggle(t => t.setValue(this.plugin.settings.localEcho).onChange(async v => { this.plugin.settings.localEcho = v; await this.plugin.saveSettings(); for (const tv of this.plugin.terminalViews()) if (tv.pred) tv.pred.enabled = v; }));
-    new Setting(containerEl).setName('Font size').addSlider(s => s.setLimits(10, 20, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async v => { this.plugin.settings.fontSize = v; await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName('Font size').addSlider(s => s.setLimits(10, 20, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async v => { this.plugin.settings.fontSize = v; await this.plugin.saveSettings(); this.plugin.applyTermOptions(); }));
     new Setting(containerEl).setName('Font family').setDesc("Blank = Obsidian's monospace font (Settings → Appearance).").addText(t => t.setValue(this.plugin.settings.fontFamily).onChange(async v => { this.plugin.settings.fontFamily = v; await this.plugin.saveSettings(); }));
     new Setting(containerEl).setName('Keys the terminal keeps').setDesc('Comma-separated. While a terminal is focused these go to the shell instead of Obsidian.').addTextArea(t => t.setValue(this.plugin.settings.passthroughKeys.join(', ')).onChange(async v => { this.plugin.settings.passthroughKeys = v.split(',').map(s => s.trim()).filter(Boolean); await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName('Scrollback lines').addSlider(sl => sl.setLimits(1000, 50000, 1000).setValue(this.plugin.settings.scrollback).setDynamicTooltip().onChange(async v => { this.plugin.settings.scrollback = v; await this.plugin.saveSettings(); this.plugin.applyTermOptions(); }));
+    new Setting(containerEl).setName('Cursor').addDropdown(d => d.addOptions({ bar: 'Bar', block: 'Block', underline: 'Underline' }).setValue(this.plugin.settings.cursorStyle).onChange(async v => { this.plugin.settings.cursorStyle = v as any; await this.plugin.saveSettings(); this.plugin.applyTermOptions(); }))
+      .addToggle(t => t.setTooltip('Blink').setValue(this.plugin.settings.cursorBlink).onChange(async v => { this.plugin.settings.cursorBlink = v; await this.plugin.saveSettings(); this.plugin.applyTermOptions(); }));
+    new Setting(containerEl).setName('Copy on select').addToggle(t => t.setValue(this.plugin.settings.copyOnSelect).onChange(async v => { this.plugin.settings.copyOnSelect = v; await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName('Right-click pastes').setDesc('Off = right-click opens the menu.').addToggle(t => t.setValue(this.plugin.settings.rightClickPaste).onChange(async v => { this.plugin.settings.rightClickPaste = v; await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName('Behaviour').setHeading();
+    new Setting(containerEl).setName('Confirm before ending running terminals').setDesc('When opening a project.').addToggle(t => t.setValue(this.plugin.settings.confirmClose).onChange(async v => { this.plugin.settings.confirmClose = v; await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName('System notifications').setDesc('When Obsidian is in the background and a terminal needs you.').addToggle(t => t.setValue(this.plugin.settings.osNotify).onChange(async v => { this.plugin.settings.osNotify = v; await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName('Claude resume command').setDesc('Must contain {id}. Used by "Resume Claude session" in the sidebar.').addText(t => { t.setValue(this.plugin.settings.resumeCommand).onChange(async v => { if (v.includes('{id}')) { this.plugin.settings.resumeCommand = v; await this.plugin.saveSettings(); } }); t.inputEl.style.width = '320px'; });
+    this.renderEngineToggles(containerEl);
+    new Setting(containerEl).setName('Phone').setHeading();
+    const phoneEl = containerEl.createDiv({ cls: 'winmux-phone-pane' });
+    renderPhonePane(this.plugin, phoneEl);
+    new Setting(containerEl).setName('About').setHeading();
+    new Setting(containerEl).setName('WinMux for Obsidian ' + this.plugin.manifest.version).addButton(b => b.setButtonText('Diagnostics').onClick(() => new DiagnosticsModal(this.app, this.plugin).open())).addButton(b => b.setButtonText('Cheat sheet').onClick(() => new CheatModal(this.app, this.plugin).open()));
     new Setting(containerEl).setName('Engine').setDesc('Bundled winmux-core.exe. Shared with the WinMux app if both are installed.').addButton(b => b.setButtonText('Status').onClick(async () => {
       const i = await this.plugin.core.info();
       new Notice(i ? `v${i.version} on :${i.port} (pid ${i.pid}) — ${i.sessions} live, ${i.recoverable} recoverable` : 'Not reachable');

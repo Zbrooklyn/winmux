@@ -56,15 +56,15 @@ export class TerminalView extends ItemView {
     this.host = this.contentEl.createDiv({ cls: 'winmux-term' });
     const s = this.plugin.settings;
     this.term = new Terminal({
-      cursorBlink: true,
       allowProposedApi: true,
       fontSize: s.fontSize,
       fontFamily: this.fontFamily(),
       lineHeight: 1.25,
       letterSpacing: 0,
-      cursorStyle: 'bar',
+      cursorStyle: s.cursorStyle,
+      cursorBlink: s.cursorBlink,
       cursorWidth: 2,
-      scrollback: 10000,
+      scrollback: s.scrollback,
       minimumContrastRatio: 3,
       theme: this.theme(),
       windowsPty: { backend: 'conpty' },
@@ -88,6 +88,18 @@ export class TerminalView extends ItemView {
     this.pred = new Predictor(this.term, this.host, () => this.term.options.theme?.foreground || '#888');
     this.pred.enabled = this.plugin.settings.localEcho;
     this.term.onResize(({ cols, rows }) => this.send({ t: 'r', c: cols, r: rows }));
+    this.term.onSelectionChange(() => { if (this.plugin.settings.copyOnSelect && this.term.hasSelection()) navigator.clipboard.writeText(this.term.getSelection()); });
+    this.host.addEventListener('contextmenu', (e) => {
+      if (this.plugin.settings.rightClickPaste) { e.preventDefault(); navigator.clipboard.readText().then(t => { if (t) this.term.paste(t); }); return; }
+      e.preventDefault();
+      const m = new Menu();
+      if (this.term.hasSelection()) m.addItem(i => i.setTitle('Copy').setIcon('copy').onClick(() => navigator.clipboard.writeText(this.term.getSelection())));
+      m.addItem(i => i.setTitle('Paste').setIcon('clipboard').onClick(() => navigator.clipboard.readText().then(t => { if (t) this.term.paste(t); })));
+      m.addItem(i => i.setTitle('Select all').setIcon('text-select').onClick(() => this.term.selectAll()));
+      m.addSeparator();
+      this.onPaneMenu(m, 'context');
+      m.showAtMouseEvent(e);
+    });
     this.term.onBell(() => { if (!this.isFocused()) { this.setStatus('needsyou'); this.plugin.notify(this, 'Terminal needs attention'); } });
     this.term.textarea?.addEventListener('focus', () => { if (this.status === 'needsyou') this.setStatus('idle'); });
 
@@ -118,8 +130,7 @@ export class TerminalView extends ItemView {
   }
 
   onPaneMenu(menu: Menu, source: string) {
-    super.onPaneMenu(menu, source);
-    menu.addSeparator();
+    if (source !== 'context') { super.onPaneMenu(menu, source); menu.addSeparator(); }
     menu.addItem(i => i.setSection('winmux').setTitle('Rename terminal').setIcon('pencil').onClick(() => this.promptRename()));
     menu.addItem(i => i.setSection('winmux').setTitle('Duplicate here').setIcon('copy').onClick(() => this.plugin.openSession(undefined, this.shellKey || this.state.shell, this.state.cwd)));
     menu.addItem(i => i.setSection('winmux').setTitle('Clear scrollback').setIcon('eraser').onClick(() => this.term.clear()));
