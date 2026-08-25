@@ -1,0 +1,19 @@
+/* WinMux for Obsidian */
+.winmux-terminal-view { padding: 0; overflow: hidden; background: var(--background-primary); }
+.winmux-terminal-view .winmux-term { width: 100%; height: 100%; }
+.winmux-terminal-view .xterm { height: 100%; padding: 4px 0 0 6px; }
+.winmux-sessions { padding: 6px 4px; }
+.winmux-sessions .wm-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 6px 8px; color: var(--text-muted); font-size: var(--font-ui-smaller); text-transform: uppercase; letter-spacing: .04em; }
+.winmux-sessions .wm-head button { font-size: var(--font-ui-small); padding: 2px 8px; }
+.winmux-sessions .wm-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--radius-s); cursor: pointer; min-height: 30px; }
+.winmux-sessions .wm-row:hover { background: var(--background-modifier-hover); }
+.winmux-sessions .wm-row.is-open { background: var(--background-secondary-alt); }
+.winmux-sessions .wm-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--text-faint); }
+.winmux-sessions .wm-dot.working { background: var(--color-orange); }
+.winmux-sessions .wm-dot.needsyou { background: var(--color-red); }
+.winmux-sessions .wm-dot.open { background: var(--color-green); }
+.winmux-sessions .wm-txt { min-width: 0; flex: 1; }
+.winmux-sessions .wm-title { font-size: var(--font-ui-small); color: var(--text-normal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.winmux-sessions .wm-sub { font-size: var(--font-ui-smaller); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.winmux-sessions .wm-empty { color: var(--text-faint); padding: 8px; font-size: var(--font-ui-small); }
+.winmux-terminal-view .xterm, .winmux-terminal-view .xterm-viewport, .winmux-terminal-view .xterm-screen { background: var(--background-primary) !important; }

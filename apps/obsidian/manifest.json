@@ -1,0 +1,9 @@
+{
+  "id": "winmux",
+  "name": "WinMux",
+  "version": "0.1.0",
+  "minAppVersion": "1.12.0",
+  "description": "WinMux terminal sessions inside Obsidian: sidebar of sessions, one terminal per tab, agent control plane.",
+  "author": "Zbrooklyn",
+  "isDesktopOnly": true
+}
