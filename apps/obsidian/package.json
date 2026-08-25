@@ -9,6 +9,7 @@
     "dev": "node esbuild.config.mjs --watch",
     "bundle-engine": "node scripts/bundle-engine.mjs",
     "bundle-tools": "node scripts/bundle-tools.mjs",
+    "build-tray": "node scripts/build-tray.mjs",
     "sync": "node scripts/sync.mjs",
     "release": "node scripts/release.mjs"
   },

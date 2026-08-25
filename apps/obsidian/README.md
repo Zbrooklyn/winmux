@@ -6,6 +6,7 @@ WinMux terminals inside Obsidian — a complete, standalone WinMux: the engine i
 - **One terminal per tab** — Obsidian's tabs, splits, stacking, command palette and hotkeys do the layout. Tab dot: orange = working, red = needs you.
 - **Sessions survive** — close a tab and the shell lives 30 s; reload Obsidian and tabs reconnect; a shell that ends leaves its scrollback recoverable.
 - **Instant typing, broadcast, projects, phone access, Claude resume**, plus every setting the WinMux app has.
+- **Runs in the background** — close Obsidian and every shell keeps running; a tray icon by the clock shows how many, opens Obsidian, or stops the engine. Reopen Obsidian and the tabs reconnect.
 - **Agents** — `winmux` CLI, the Claude Code MCP server and the orchestrate skill work against these tabs (`Install WinMux tools` in settings or the command palette).
 
 ## Install
@@ -34,6 +35,7 @@ npm install
 npm run bundle-engine      # copies core/rust/target/release/winmux-core.exe → binaries/
 npm run bundle-tools       # copies the CLI / MCP / skill / hooks → tools/
 npm run build              # → main.js
+npm run build-tray         # → binaries/winmux-tray.exe (uses Windows' built-in csc)
 node scripts/sync.mjs "<vault path>"   # copy into a vault for testing
 npm run release            # → release/winmux-obsidian-<version>.zip
 ```

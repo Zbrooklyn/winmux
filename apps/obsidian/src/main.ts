@@ -7,6 +7,8 @@ import { ProjectsModal, DiagnosticsModal, CheatModal, renderPhonePane } from './
 import { ControlClient } from './control';
 import { BIN_DIR, toolsInstalled, installTools, uninstallTools, mcpRegistered, registerMcp, unregisterMcp, hooksInstalled, installHooks, uninstallHooks, notifyList } from './tools';
 import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { homedir } from 'node:os';
 import { relative, isAbsolute, resolve as resolvePath } from 'node:path';
 
 declare const __XTERM_CSS__: string;
@@ -28,6 +30,7 @@ export interface WinMuxSettings {
   osNotify: boolean;
   resumeCommand: string;
   keepSessions: boolean;
+  trayIcon: boolean;
 }
 
 const DEFAULTS: WinMuxSettings = {
@@ -47,6 +50,7 @@ const DEFAULTS: WinMuxSettings = {
   osNotify: true,
   resumeCommand: 'claude --resume {id} --dangerously-skip-permissions',
   keepSessions: true,
+  trayIcon: true,
 };
 
 const FALLBACK_SHELLS = [{ key: 'pwsh', label: 'PowerShell 7' }, { key: 'powershell', label: 'Windows PowerShell' }, { key: 'cmd', label: 'Command Prompt' }, { key: 'bash', label: 'Git Bash' }, { key: 'wsl', label: 'WSL' }];
@@ -170,6 +174,7 @@ export default class WinMuxPlugin extends Plugin {
         for (const v of this.terminalViews()) if (!v.ws) v.connect();
         this.sessionsChanged();
         this.control.connect();
+        this.startTray();
       } catch (e: any) {
         console.error('[winmux]', e);
         new Notice('WinMux: ' + e.message, 8000);
@@ -258,6 +263,15 @@ export default class WinMuxPlugin extends Plugin {
     return v;
   }
 
+  /** Tray icon next to the clock: visible while the engine is alive, even with Obsidian closed. Single-instance (mutex). */
+  startTray() {
+    if (!this.settings.trayIcon) return;
+    const exe = join(this.pluginDir(), 'binaries', 'winmux-tray.exe');
+    if (!existsSync(exe)) return;
+    const inst = process.env.WINMUX_INSTANCE_FILE || join(homedir(), '.winmux', 'instance.json');
+    try { const c = spawn(exe, [inst, process.execPath], { detached: true, stdio: 'ignore', windowsHide: true }); c.unref(); } catch (e) { console.warn('[winmux] tray', e); }
+  }
+
   async restartEngineBackground() {
     const live = this.terminalViews().length;
     const { confirm } = await import('./surfaces');
@@ -270,6 +284,7 @@ export default class WinMuxPlugin extends Plugin {
       const info = await this.core.ensure();
       this.engineInfo = info;
       this.control.stop(); this.control.connect();
+      this.startTray();
       for (const v of this.terminalViews()) { v.state.sid = undefined; v.term.reset(); v.connect(); }
       new Notice(info.detachGraceSecs === 0 ? 'Engine restarted in background mode — shells now survive closing Obsidian.' : 'Engine restarted, but it is not in background mode (old engine binary?).', 8000);
       this.sessionsChanged();
@@ -326,6 +341,7 @@ class WinMuxSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Keep shells running when Obsidian is closed').setDesc(this.plugin.backgroundMode ? 'On — the engine is in background mode. Closing Obsidian leaves every terminal running; reopen and the tabs reconnect. End sessions from the sidebar, or "Stop engine" to shut everything down.' : 'Applies to the engine this plugin starts. The current engine is NOT in background mode — use "Restart engine in background mode".')
       .addToggle(t => t.setValue(this.plugin.settings.keepSessions).onChange(async v => { this.plugin.settings.keepSessions = v; await this.plugin.saveSettings(); }))
       .addButton(b => b.setButtonText('Restart engine now').onClick(() => this.plugin.restartEngineBackground()));
+    new Setting(containerEl).setName('Tray icon').setDesc('Icon by the clock while the engine runs: shows how many shells are alive, opens Obsidian, stops the engine. Stays after Obsidian closes.').addToggle(t => t.setValue(this.plugin.settings.trayIcon).onChange(async v => { this.plugin.settings.trayIcon = v; await this.plugin.saveSettings(); if (v) this.plugin.startTray(); }));
     new Setting(containerEl).setName('Confirm before ending running terminals').setDesc('When opening a project.').addToggle(t => t.setValue(this.plugin.settings.confirmClose).onChange(async v => { this.plugin.settings.confirmClose = v; await this.plugin.saveSettings(); }));
     new Setting(containerEl).setName('System notifications').setDesc('When Obsidian is in the background and a terminal needs you.').addToggle(t => t.setValue(this.plugin.settings.osNotify).onChange(async v => { this.plugin.settings.osNotify = v; await this.plugin.saveSettings(); }));
     new Setting(containerEl).setName('Claude resume command').setDesc('Must contain {id}. Used by "Resume Claude session" in the sidebar.').addText(t => { t.setValue(this.plugin.settings.resumeCommand).onChange(async v => { if (v.includes('{id}')) { this.plugin.settings.resumeCommand = v; await this.plugin.saveSettings(); } }); t.inputEl.style.width = '320px'; });
