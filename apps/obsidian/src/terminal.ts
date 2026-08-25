@@ -50,8 +50,13 @@ export class TerminalView extends ItemView {
       cursorBlink: true,
       allowProposedApi: true,
       fontSize: s.fontSize,
-      fontFamily: s.fontFamily,
+      fontFamily: this.fontFamily(),
+      lineHeight: 1.25,
+      letterSpacing: 0,
+      cursorStyle: 'bar',
+      cursorWidth: 2,
       scrollback: 10000,
+      minimumContrastRatio: 3,
       theme: this.theme(),
       windowsPty: { backend: 'conpty' },
     });
@@ -77,9 +82,16 @@ export class TerminalView extends ItemView {
       });
     }
 
+    this.registerEvent(this.app.workspace.on('css-change', () => this.applyTheme()));
+    this.registerEvent(this.app.workspace.on('resize', () => this.refit()));
+    this.registerEvent(this.app.workspace.on('active-leaf-change', (l) => { if (l === this.leaf) this.refit(); }));
     this.ro = new ResizeObserver(() => this.refit());
     this.ro.observe(this.contentEl);
+    // First layout can land after onOpen; fit again once the pane has real dimensions.
     this.refit();
+    requestAnimationFrame(() => this.refit());
+    setTimeout(() => this.refit(), 150);
+    setTimeout(() => this.refit(), 600);
     if (this.state.shell || this.state.sid) this.connect();
   }
 
@@ -118,14 +130,53 @@ export class TerminalView extends ItemView {
       const out = getComputedStyle(probe).color;
       return out && out !== 'rgba(0, 0, 0, 0)' ? out : fb;
     };
+    const mix = (n: string, fb: string, pct: number, toward: string) => {
+      probe.style.color = `color-mix(in srgb, ${cs.getPropertyValue(n).trim() || fb} ${pct}%, ${toward})`;
+      return getComputedStyle(probe).color || fb;
+    };
+    const dark = document.body.classList.contains('theme-dark');
+    const fg = v('--text-normal', dark ? '#dadada' : '#222222');
+    const bg = v('--background-primary', dark ? '#1e1e1e' : '#ffffff');
     const t = {
-      background: v('--background-primary', '#1e1e1e'),
-      foreground: v('--text-normal', '#dadada'),
+      background: bg,
+      foreground: fg,
       cursor: v('--text-accent', '#a882ff'),
-      selectionBackground: v('--text-selection', 'rgba(255,255,255,.2)'),
+      cursorAccent: bg,
+      selectionBackground: mix('--text-accent', '#a882ff', 25, 'transparent'),
+      selectionInactiveBackground: mix('--text-accent', '#a882ff', 12, 'transparent'),
+      // ANSI 16 from the vault palette so shells, git and Claude match the theme.
+      black: dark ? v('--background-modifier-border', '#3a3a3a') : v('--text-muted', '#5c5c5c'),
+      red: v('--color-red', '#e93147'),
+      green: v('--color-green', '#08b94e'),
+      yellow: v('--color-yellow', '#e0ac00'),
+      blue: v('--color-blue', '#086ddd'),
+      magenta: v('--color-purple', '#7852ee'),
+      cyan: v('--color-cyan', '#00bfbc'),
+      white: dark ? v('--text-muted', '#999999') : v('--text-faint', '#aaaaaa'),
+      brightBlack: v('--text-faint', '#888888'),
+      brightRed: mix('--color-red', '#e93147', 80, fg),
+      brightGreen: mix('--color-green', '#08b94e', 80, fg),
+      brightYellow: mix('--color-yellow', '#e0ac00', 80, fg),
+      brightBlue: mix('--color-blue', '#086ddd', 80, fg),
+      brightMagenta: mix('--color-purple', '#7852ee', 80, fg),
+      brightCyan: mix('--color-cyan', '#00bfbc', 80, fg),
+      brightWhite: fg,
     };
     probe.remove();
     return t;
+  }
+
+  applyTheme() {
+    if (!this.term) return;
+    this.term.options.theme = this.theme();
+    this.term.options.fontFamily = this.fontFamily();
+  }
+
+  fontFamily(): string {
+    const s = this.plugin.settings.fontFamily.trim();
+    if (s) return s;
+    const mono = getComputedStyle(document.body).getPropertyValue('--font-monospace').trim();
+    return mono || 'Cascadia Mono, Consolas, monospace';
   }
 
   refit() {

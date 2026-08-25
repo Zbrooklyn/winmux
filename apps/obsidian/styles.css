@@ -1,7 +1,13 @@
 /* WinMux for Obsidian */
 .winmux-terminal-view { padding: 0; overflow: hidden; background: var(--background-primary); }
 .winmux-terminal-view .winmux-term { width: 100%; height: 100%; }
-.winmux-terminal-view .xterm { height: 100%; padding: 4px 0 0 6px; }
+.winmux-terminal-view .xterm { height: 100%; padding: 12px 8px 8px 16px; box-sizing: border-box; }
+/* Obsidian-style thin scrollbar on the xterm viewport */
+.winmux-terminal-view .xterm-viewport::-webkit-scrollbar { width: 10px; }
+.winmux-terminal-view .xterm-viewport::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb-bg); border-radius: var(--radius-l); border: 2px solid transparent; background-clip: padding-box; }
+.winmux-terminal-view .xterm-viewport::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-active-thumb-bg); background-clip: padding-box; }
+.winmux-terminal-view .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+.winmux-terminal-view .xterm .xterm-rows { color: var(--text-normal); }
 .winmux-sessions { padding: 6px 4px; }
 .winmux-sessions .wm-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 6px 8px; color: var(--text-muted); font-size: var(--font-ui-smaller); text-transform: uppercase; letter-spacing: .04em; }
 .winmux-sessions .wm-head button { font-size: var(--font-ui-small); padding: 2px 8px; }

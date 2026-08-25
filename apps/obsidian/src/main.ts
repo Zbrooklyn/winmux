@@ -19,7 +19,7 @@ const DEFAULTS: WinMuxSettings = {
   defaultShell: 'pwsh',
   defaultCwd: '',
   fontSize: 13,
-  fontFamily: 'Cascadia Mono, Consolas, monospace',
+  fontFamily: '',
   passthroughKeys: ['Ctrl+C', 'Ctrl+V', 'Ctrl+W', 'Ctrl+Tab', 'Ctrl+Shift+Tab', 'Ctrl+L', 'Ctrl+D', 'Ctrl+P', 'Ctrl+E', 'Ctrl+K', 'Ctrl+F'],
   restoreOnStart: true,
 };
@@ -141,7 +141,7 @@ class WinMuxSettingTab extends PluginSettingTab {
     });
     new Setting(containerEl).setName('Default folder').setDesc('Blank = your home folder.').addText(t => t.setValue(this.plugin.settings.defaultCwd).onChange(async v => { this.plugin.settings.defaultCwd = v.trim(); await this.plugin.saveSettings(); }));
     new Setting(containerEl).setName('Font size').addSlider(s => s.setLimits(10, 20, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async v => { this.plugin.settings.fontSize = v; await this.plugin.saveSettings(); }));
-    new Setting(containerEl).setName('Font family').addText(t => t.setValue(this.plugin.settings.fontFamily).onChange(async v => { this.plugin.settings.fontFamily = v; await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName('Font family').setDesc("Blank = Obsidian's monospace font (Settings → Appearance).").addText(t => t.setValue(this.plugin.settings.fontFamily).onChange(async v => { this.plugin.settings.fontFamily = v; await this.plugin.saveSettings(); }));
     new Setting(containerEl).setName('Keys the terminal keeps').setDesc('Comma-separated. While a terminal is focused these go to the shell instead of Obsidian.').addTextArea(t => t.setValue(this.plugin.settings.passthroughKeys.join(', ')).onChange(async v => { this.plugin.settings.passthroughKeys = v.split(',').map(s => s.trim()).filter(Boolean); await this.plugin.saveSettings(); }));
     new Setting(containerEl).setName('Engine').setDesc('Bundled winmux-core.exe. Shared with the WinMux app if both are installed.').addButton(b => b.setButtonText('Status').onClick(async () => {
       const i = await this.plugin.core.info();
