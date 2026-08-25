@@ -30,7 +30,7 @@ export interface WinMuxSettings {
   osNotify: boolean;
   resumeCommand: string;
   keepSessions: boolean;
-  trayIcon: boolean;
+  trayIcon: 'auto' | 'on' | 'off';
 }
 
 const DEFAULTS: WinMuxSettings = {
@@ -50,7 +50,7 @@ const DEFAULTS: WinMuxSettings = {
   osNotify: true,
   resumeCommand: 'claude --resume {id} --dangerously-skip-permissions',
   keepSessions: true,
-  trayIcon: true,
+  trayIcon: 'auto',
 };
 
 const FALLBACK_SHELLS = [{ key: 'pwsh', label: 'PowerShell 7' }, { key: 'powershell', label: 'Windows PowerShell' }, { key: 'cmd', label: 'Command Prompt' }, { key: 'bash', label: 'Git Bash' }, { key: 'wsl', label: 'WSL' }];
@@ -147,6 +147,8 @@ export default class WinMuxPlugin extends Plugin {
     this.addCommand({ id: 'cheat-sheet', name: 'Cheat sheet (shortcuts & words)', hotkeys: [{ modifiers: ['Mod', 'Shift'], key: '/' }], callback: () => new CheatModal(this.app, this).open() });
     this.addCommand({ id: 'phone-settings', name: 'Phone access…', callback: () => { (this.app as any).setting.open(); (this.app as any).setting.openTabById('winmux'); } });
     this.addCommand({ id: 'install-tools', name: 'Install WinMux tools (winmux CLI, MCP server, skill)', callback: () => { try { notifyList(installTools(this)); } catch (e: any) { new Notice('Install failed: ' + e.message); } } });
+    this.addCommand({ id: 'register-mcp', name: 'Register MCP server with Claude Code', callback: () => { if (!toolsInstalled()) { new Notice('Install WinMux tools first'); return; } new Notice(registerMcp()); } });
+    this.addCommand({ id: 'install-hooks', name: 'Install Claude Code hooks (working / needs you / done)', callback: () => { if (!toolsInstalled()) { new Notice('Install WinMux tools first'); return; } new Notice(installHooks(this)); } });
     this.addCommand({ id: 'reclaim-control', name: 'Reclaim agent control (answer winmux commands in this window)', callback: () => { this.control.stop(); this.control.connect(); new Notice('This window now answers agent commands'); } });
     this.addCommand({ id: 'engine-info', name: 'Engine status', callback: async () => {
       const i = await this.core.info();
@@ -264,8 +266,12 @@ export default class WinMuxPlugin extends Plugin {
   }
 
   /** Tray icon next to the clock: visible while the engine is alive, even with Obsidian closed. Single-instance (mutex). */
+  /** The community "Tray" plugin already gives Obsidian a tray icon + run-in-background; in auto mode ours steps aside. */
+  trayPluginActive(): boolean { return !!(this.app as any).plugins?.enabledPlugins?.has('tray'); }
+
   startTray() {
-    if (!this.settings.trayIcon) return;
+    const raw: any = this.settings.trayIcon; const mode = raw === true ? 'on' : raw === false ? 'off' : raw;
+    if (mode === 'off' || (mode === 'auto' && this.trayPluginActive())) return;
     const exe = join(this.pluginDir(), 'binaries', 'winmux-tray.exe');
     if (!existsSync(exe)) return;
     const inst = process.env.WINMUX_INSTANCE_FILE || join(homedir(), '.winmux', 'instance.json');
@@ -290,6 +296,9 @@ export default class WinMuxPlugin extends Plugin {
       this.sessionsChanged();
     } catch (e: any) { new Notice('Engine restart failed: ' + e.message, 8000); }
   }
+
+  /** Programmatic access to the agent-tools installer (also used by the settings buttons). */
+  tools = { installTools: () => installTools(this), uninstallTools, registerMcp, unregisterMcp, installHooks: () => installHooks(this), uninstallHooks, mcpRegistered, hooksInstalled, toolsInstalled };
 
   openProjects() { new ProjectsModal(this.app, this).open(); }
 
@@ -341,7 +350,8 @@ class WinMuxSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Keep shells running when Obsidian is closed').setDesc(this.plugin.backgroundMode ? 'On — the engine is in background mode. Closing Obsidian leaves every terminal running; reopen and the tabs reconnect. End sessions from the sidebar, or "Stop engine" to shut everything down.' : 'Applies to the engine this plugin starts. The current engine is NOT in background mode — use "Restart engine in background mode".')
       .addToggle(t => t.setValue(this.plugin.settings.keepSessions).onChange(async v => { this.plugin.settings.keepSessions = v; await this.plugin.saveSettings(); }))
       .addButton(b => b.setButtonText('Restart engine now').onClick(() => this.plugin.restartEngineBackground()));
-    new Setting(containerEl).setName('Tray icon').setDesc('Icon by the clock while the engine runs: shows how many shells are alive, opens Obsidian, stops the engine. Stays after Obsidian closes.').addToggle(t => t.setValue(this.plugin.settings.trayIcon).onChange(async v => { this.plugin.settings.trayIcon = v; await this.plugin.saveSettings(); if (v) this.plugin.startTray(); }));
+    new Setting(containerEl).setName('WinMux tray icon').setDesc(this.plugin.trayPluginActive() ? 'The "Tray" community plugin is active, so Obsidian itself lives in the tray (run in background, launch at startup, Ctrl+Shift+Tab to show/hide). Auto = WinMux\'s own engine icon stays hidden.' : 'Icon by the clock while the engine runs: shells alive, open Obsidian, stop engine. Auto = shown unless the "Tray" community plugin is active.')
+      .addDropdown(d => d.addOptions({ auto: 'Auto', on: 'Always', off: 'Never' }).setValue(String(this.plugin.settings.trayIcon)).onChange(async v => { this.plugin.settings.trayIcon = v as any; await this.plugin.saveSettings(); this.plugin.startTray(); }));
     new Setting(containerEl).setName('Confirm before ending running terminals').setDesc('When opening a project.').addToggle(t => t.setValue(this.plugin.settings.confirmClose).onChange(async v => { this.plugin.settings.confirmClose = v; await this.plugin.saveSettings(); }));
     new Setting(containerEl).setName('System notifications').setDesc('When Obsidian is in the background and a terminal needs you.').addToggle(t => t.setValue(this.plugin.settings.osNotify).onChange(async v => { this.plugin.settings.osNotify = v; await this.plugin.saveSettings(); }));
     new Setting(containerEl).setName('Claude resume command').setDesc('Must contain {id}. Used by "Resume Claude session" in the sidebar.').addText(t => { t.setValue(this.plugin.settings.resumeCommand).onChange(async v => { if (v.includes('{id}')) { this.plugin.settings.resumeCommand = v; await this.plugin.saveSettings(); } }); t.inputEl.style.width = '320px'; });
