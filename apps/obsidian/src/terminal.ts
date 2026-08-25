@@ -39,7 +39,7 @@ export class TerminalView extends ItemView {
   async setState(state: any, result: any) {
     this.state = { sid: state?.sid, shell: state?.shell, cwd: state?.cwd, title: state?.title };
     await super.setState(state, result);
-    if (this.term) this.connect();
+    if (this.term) { this.connect(); this.refreshTitle(); }
   }
 
   async onOpen() {
@@ -168,7 +168,8 @@ export class TerminalView extends ItemView {
     if (m.sid) {
       const changed = m.sid !== this.state.sid || m.shell !== this.state.shell || m.cwd !== this.state.cwd;
       this.state.sid = m.sid; this.state.shell = m.shell || this.state.shell; this.state.cwd = m.cwd || this.state.cwd;
-      if (changed) { this.app.workspace.requestSaveLayout(); (this.leaf as any).updateHeader?.(); }
+      if (changed) this.app.workspace.requestSaveLayout();
+      this.refreshTitle();
       if (m.lost) this.term.writeln('\r\n\x1b[33m[session was lost — started fresh]\x1b[0m');
       if (m.cwdLost) this.term.writeln(`\x1b[33m[folder not found: ${m.cwdLost} — opened in ${m.cwd}]\x1b[0m`);
       this.plugin.sessionsChanged();
@@ -202,6 +203,13 @@ export class TerminalView extends ItemView {
       if (end) { try { ws.send(JSON.stringify({ t: 'x' })); } catch { /* ignore */ } }
       try { ws.close(); } catch { /* ignore */ }
     }
+  }
+
+  refreshTitle() {
+    const t = this.getDisplayText();
+    (this as any).titleEl?.setText?.(t);
+    (this.leaf as any).tabHeaderInnerTitleEl?.setText?.(t);
+    (this.leaf as any).updateHeader?.();
   }
 
   focusTerm() { this.term?.focus(); }

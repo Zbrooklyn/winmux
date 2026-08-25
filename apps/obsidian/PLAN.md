@@ -22,7 +22,7 @@ Size: existing/high-risk → full plan, compressed. Critic: Codex (20 findings; 
 - `runControl` verbs (app.js L5930+): list · read-screen · send · focus · close · split · new-tab · agent · browser · markdown · notify · project.
 - Working/idle heuristic in standalone (app.js L1851): any PTY output → `working`; no output for **1200 ms** → `idle`; bell/exit while unfocused → `needsyou`.
 - CLI discovery (`bin/winmux.cjs` L20–37): `WINMUX_PORT` env → else `~/.winmux/instance*.json` with pid-alive check. **Plugin must use the same default instance file** so CLI/MCP need no change (resolves B3).
-- Obsidian 1.12.7 installed; `obsidian` npm 1.13.1 (types) — pin `minAppVersion` 1.12.0 and prove load in 1.12.7 at P0. esbuild 0.28.2, node 24.16, codex 0.144.5. Termy (`isDesktopOnly`, spawns bundled exe, local WS) proves the pattern in this Electron.
+- Obsidian **1.13.4** installed (corrected from 1.12.7 at P0); `obsidian` npm 1.13.1 (types) — `minAppVersion` 1.12.0. esbuild 0.28.2, node 24.16, codex 0.144.5. Termy (`isDesktopOnly`, spawns bundled exe, local WS) proves the pattern in this Electron.
 - Confidence: high on protocol/toolchain/routing; medium on keymap behaviour (U1); unknowns U1 keymap capture, U3 restore-after-relaunch UX.
 
 ## 3. Plan Control

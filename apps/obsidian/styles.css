@@ -17,3 +17,5 @@
 .winmux-sessions .wm-sub { font-size: var(--font-ui-smaller); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .winmux-sessions .wm-empty { color: var(--text-faint); padding: 8px; font-size: var(--font-ui-small); }
 .winmux-terminal-view .xterm, .winmux-terminal-view .xterm-viewport, .winmux-terminal-view .xterm-screen { background: var(--background-primary) !important; }
+/* Obsidian's global CSS makes the DOM-renderer cursor span block+absolute (it grew to the full rows height). */
+.winmux-terminal-view .xterm-rows span.xterm-cursor { display: inline !important; position: static !important; height: auto !important; }
