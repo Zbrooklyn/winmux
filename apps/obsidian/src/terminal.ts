@@ -21,6 +21,7 @@ export class TerminalView extends ItemView {
   ro: ResizeObserver | null = null;
   host!: HTMLElement;
   reconnectTimer: number | null = null;
+  exitEl: HTMLElement | null = null;
 
   constructor(leaf: WorkspaceLeaf, private plugin: WinMuxPlugin) { super(leaf); }
 
@@ -64,7 +65,7 @@ export class TerminalView extends ItemView {
     this.term.loadAddon(this.fit);
     this.term.loadAddon(new WebLinksAddon());
     this.term.open(this.host);
-    this.term.onData(d => this.send({ t: 'i', d }));
+    this.term.onData(d => { if (this.status === 'closed') { if (d === '\r') this.restart(); return; } this.send({ t: 'i', d }); });
     this.term.onResize(({ cols, rows }) => this.send({ t: 'r', c: cols, r: rows }));
     this.term.onBell(() => { if (!this.isFocused()) this.setStatus('needsyou'); });
     this.term.textarea?.addEventListener('focus', () => { if (this.status === 'needsyou') this.setStatus('idle'); });
@@ -227,7 +228,7 @@ export class TerminalView extends ItemView {
     }
     if (m.exited) {
       this.setStatus('closed');
-      this.term.writeln(`\r\n\x1b[90m[process exited with code ${m.code ?? '?'}]\x1b[0m`);
+      this.showExited(m.code ?? '?');
       this.plugin.sessionsChanged();
     }
     if (m.error) this.term.writeln(`\r\n\x1b[31m[${m.error}]\x1b[0m`);
@@ -243,6 +244,40 @@ export class TerminalView extends ItemView {
   setStatus(s: TermStatus) {
     if (this.status === s) return;
     this.status = s;
+    this.updateTabStatus();
+    this.plugin.sessionsChanged();
+  }
+
+  /** Small dot in the Obsidian tab header: orange = working, red = needs you, grey = ended. */
+  updateTabStatus() {
+    const box: HTMLElement | undefined = (this.leaf as any).tabHeaderStatusContainerEl;
+    if (!box) return;
+    let dot = box.querySelector<HTMLElement>('.winmux-tab-dot');
+    if (this.status === 'idle') { dot?.remove(); return; }
+    if (!dot) dot = box.createSpan({ cls: 'winmux-tab-dot' });
+    dot.className = 'winmux-tab-dot is-' + this.status;
+    dot.setAttr('aria-label', this.status === 'working' ? 'Working' : this.status === 'needsyou' ? 'Needs you' : 'Ended');
+  }
+
+  showExited(code: number | string) {
+    this.exitEl?.remove();
+    this.exitEl = this.contentEl.createDiv({ cls: 'winmux-exited' });
+    this.exitEl.createSpan({ cls: 'winmux-exited-msg', text: `Process ended${code === 0 || code === '0' ? '' : ' · exit code ' + code}` });
+    const b = this.exitEl.createEl('button', { text: 'Restart' });
+    b.onclick = () => this.restart();
+    this.exitEl.createSpan({ cls: 'winmux-exited-hint', text: 'or press Enter' });
+    this.term.write('\x1b[?25l'); // hide the cursor of a dead pty
+    this.term.textarea?.focus();
+  }
+
+  restart() {
+    this.exitEl?.remove(); this.exitEl = null;
+    this.state.sid = undefined;
+    this.status = 'idle';
+    this.term.reset();
+    this.term.write('\x1b[?25h');
+    this.connect();
+    this.updateTabStatus();
     this.plugin.sessionsChanged();
   }
 
@@ -257,6 +292,7 @@ export class TerminalView extends ItemView {
   }
 
   refreshTitle() {
+    this.updateTabStatus();
     const t = this.getDisplayText();
     (this as any).titleEl?.setText?.(t);
     (this.leaf as any).tabHeaderInnerTitleEl?.setText?.(t);

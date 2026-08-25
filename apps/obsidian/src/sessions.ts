@@ -58,11 +58,11 @@ export class SessionsView extends ItemView {
     for (const r of rows) {
       const row = this.listEl.createDiv({ cls: 'wm-row' + (r.view ? ' is-open' : '') });
       const dot = row.createDiv({ cls: 'wm-dot' });
-      if (r.view) dot.addClass(r.view.status === 'working' ? 'working' : r.view.status === 'needsyou' ? 'needsyou' : 'open');
+      if (r.view) dot.addClass(r.view.status === 'working' ? 'working' : r.view.status === 'needsyou' ? 'needsyou' : r.view.status === 'closed' ? 'ended' : 'open');
       else if (r.live) dot.addClass('open');
       const txt = row.createDiv({ cls: 'wm-txt' });
       txt.createDiv({ cls: 'wm-title', text: (r.view?.state.title) || `${this.folderOf(r.cwd)} · ${r.shell || 'shell'}` });
-      txt.createDiv({ cls: 'wm-sub', text: r.view ? (r.view.status === 'working' ? 'Working' : r.view.status === 'needsyou' ? 'Needs you' : r.cwd) : (r.live ? 'Live in another window' : 'Recoverable · ' + r.cwd) });
+      txt.createDiv({ cls: 'wm-sub', text: r.view ? (r.view.status === 'working' ? 'Working' : r.view.status === 'needsyou' ? 'Needs you' : r.view.status === 'closed' ? 'Ended' : r.cwd) : (r.live ? 'Live in another window' : 'Recoverable · ' + r.cwd) });
       row.setAttr('title', r.cwd);
       row.onclick = () => this.plugin.openSession(r.sid.startsWith('pending:') ? undefined : r.sid, r.shell, r.cwd, r.view);
       row.oncontextmenu = (e) => {

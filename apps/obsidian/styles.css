@@ -18,6 +18,7 @@
 .winmux-sessions .wm-dot.working { background: var(--color-orange); }
 .winmux-sessions .wm-dot.needsyou { background: var(--color-red); }
 .winmux-sessions .wm-dot.open { background: var(--color-green); }
+.winmux-sessions .wm-dot.ended { background: transparent; border: 1.5px solid var(--text-faint); box-sizing: border-box; }
 .winmux-sessions .wm-txt { min-width: 0; flex: 1; }
 .winmux-sessions .wm-title { font-size: var(--font-ui-small); color: var(--text-normal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .winmux-sessions .wm-sub { font-size: var(--font-ui-smaller); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -25,3 +26,15 @@
 .winmux-terminal-view .xterm, .winmux-terminal-view .xterm-viewport, .winmux-terminal-view .xterm-screen { background: var(--background-primary) !important; }
 /* Obsidian's global CSS makes the DOM-renderer cursor span block+absolute (it grew to the full rows height). */
 .winmux-terminal-view .xterm-rows span.xterm-cursor { display: inline !important; position: static !important; height: auto !important; }
+
+/* Tab-header status dot */
+.winmux-tab-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin: 0 2px; vertical-align: middle; background: var(--text-faint); }
+.winmux-tab-dot.is-working { background: var(--color-orange); }
+.winmux-tab-dot.is-needsyou { background: var(--color-red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-red) 25%, transparent); }
+.winmux-tab-dot.is-closed { background: var(--text-faint); }
+/* Ended-session strip */
+.winmux-terminal-view { position: relative; }
+.winmux-exited { position: absolute; left: 16px; right: 16px; bottom: 12px; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--radius-m); background: var(--background-secondary); border: 1px solid var(--background-modifier-border); color: var(--text-muted); font-size: var(--font-ui-small); box-shadow: var(--shadow-s); }
+.winmux-exited-msg { color: var(--text-normal); }
+.winmux-exited button { font-size: var(--font-ui-small); padding: 2px 10px; }
+.winmux-exited-hint { color: var(--text-faint); }
