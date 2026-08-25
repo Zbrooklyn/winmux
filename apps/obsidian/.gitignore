@@ -2,3 +2,4 @@ node_modules/
 main.js
 binaries/*.exe
 evidence/*.original.png
+release/

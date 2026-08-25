@@ -158,7 +158,7 @@ export class DiagnosticsModal extends Modal {
       ['WinMux', 'v' + i.version + ' (Obsidian plugin ' + this.plugin.manifest.version + ')'], ['Engine', `${i.runtime} · pid ${i.pid} · ${i.host}:${i.port}`], ['Uptime', Math.round((i.uptime || 0) / 60) + ' min'],
       ['Platform', `${i.platform} · ${i.arch} · ${i.cpus} cores · ${i.mem}`], ['Live shells', String(i.sessions)], ['Recoverable', String(i.recoverable)], ['Shells found', (i.shells || []).join(', ')],
       ['Workspace file', i.workspaceFile], ['Projects folder', i.projectsDir], ['Recovery folder', i.backlogDir], ['Settings file', i.configFile], ['Phone access', i.phone],
-      ['Terminals open here', String(this.plugin.terminalViews().length)], ['Obsidian', (this.app as any).appVersion || ''], ['Plugin folder', this.plugin.pluginDir()],
+      ['Terminals open here', String(this.plugin.terminalViews().length)], ['Obsidian', String((window as any).apiVersion || '')], ['Plugin folder', this.plugin.pluginDir()],
     ] : [['Engine', 'not reachable']];
     const tbl = contentEl.createEl('table', { cls: 'winmux-diag' });
     for (const [k, v] of rows) { const tr = tbl.createEl('tr'); tr.createEl('td', { text: k }); tr.createEl('td', { text: v }); }

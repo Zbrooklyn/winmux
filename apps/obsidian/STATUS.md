@@ -1,33 +1,50 @@
 # STATUS — WinMux for Obsidian
 
-Plan: PLAN.md v0.3 (approved 2026-08-25). Branch `feature/obsidian-plugin` off 3ffff3f.
+Plan: PLAN.md v0.3 (approved 2026-08-25, full standalone replacement). Branch `feature/obsidian-plugin` off 3ffff3f. Edward: "full takeover until complete" (2026-08-25).
 
-## Current
-- Phase: **P3 Native chrome** next · P0 + P1 + P2 (sidebar) + terminal design pass 1 DONE (validated 2026-08-25)
-- LKG: commit after P1 (see git log) — plugin loads in Obsidian 1.13.4 (Brain vault), engine boots from plugin alone, terminal tabs work.
+## Checklist (parity inventory → done when Verified)
 
-## Done (with evidence)
-- P0: scaffold (`manifest.json`, esbuild, `src/{main,core,terminal,sessions}.ts`, `styles.css`, `scripts/{bundle-engine,sync}.mjs`), engine bundled (3,536,896 B), plugin-spawned engine wrote `~/.winmux/instance.json` (port 9922) with NO WinMux app running.
-- P1: terminal tab over `/pty`, I/O + resize, folder honoured, reload-restore by sid (2/2 tabs reconnected, `meta.resumed`), keymap matrix 15/15 (Ctrl+W/P/C/L/D/E/K/F/Tab/Shift+Tab/V/Shift+C reach shell or are absorbed; Obsidian never acts), theme follows vault, cursor 15×8 px, header/tab title = folder · shell. Evidence: `evidence/p1/*.png`.
+- [x] P0 Engine bundled, plugin boots it alone (no WinMux app) — Verified
+- [x] P1 Terminal tab over /pty, resize, reload-restore by sid, keymap 15/15 — Verified
+- [x] P2 Sessions sidebar (open + other-UI live + recoverable), + New shell menu, row menu — Verified
+- [x] Terminal design: vault palette light/dark, Obsidian mono, inset, scrollbar, cursor, refit — Verified (Edward's eye pending)
+- [x] Tab status dot, ended-session strip + Enter/Restart — Verified
+- [x] P3 Split right/down + hotkeys, rename (modal, persisted), tab "…" menu, terminal right-click menu — Verified
+- [x] P3 Instant typing (SP-1 predictor: confidence 8, overlay painted) — Verified mechanically
+- [x] P3 Broadcast (Ctrl+Alt+B, status bar, 4/4 terminals received) — Verified
+- [x] P3 Notifications: needs-you from bell / verbs, Obsidian Notice, OS notification when unfocused, Approve/Deny (commands + sidebar) — Verified
+- [x] P3 OSC titles (folder · <shell title>), shell-key mapping fix — Verified
+- [x] P4 /control client: list · read-screen · send · focus · close · split · new-tab · agent · browser(open) · markdown(vault) · notify · project — Verified via real `winmux` CLI
+- [x] P4 Jobs: agent register / spawn --cmd / wait → result — Verified (job done, result "SPAWN-OK")
+- [x] P4 MCP server over stdio: initialize, 15 tools, list/send/read-screen/agent — Verified
+- [x] P4 Tools installer: ~/.winmux/bin (winmux.cjs, winmux-mcp.cjs, shims using node or Obsidian-as-node), user PATH, ~/.claude/skills/winmux-orchestrate — Verified on this machine
+- [x] P4 Engine env for shells: WINMUX_CLI_DIR + WINMUX_APP_EXE (only for an engine this plugin spawns)
+- [x] P5 Projects (app-compatible .winmux.json, save/open/remove/delete) — Verified (saved "Obsidian dev")
+- [x] P5 Phone access pane (toggle, QR, URL, trust tailnet, devices) — Implemented; toggle NOT exercised (would open the tailnet door — Edward's call)
+- [x] P5 Diagnostics, Cheat sheet, full settings (scrollback, cursor, copy-on-select, right-click paste, confirm close, OS notify, resume command, engine autostart + history) — Verified renders
+- [x] P5 Claude session resume from sidebar (/api/claude-sessions) — Implemented; menu not exercised
+- [x] P5 Workspace save/load — provided by Obsidian's own workspace (tabs restore with sid); WinMux workspace.json not used
+- [ ] P6 Release zip + README — in progress
+- [ ] Edward: full workday with the WinMux app closed → Accepted
+- [ ] Edward (one click each, Settings → WinMux → Agent tools): Register MCP server · Install Claude hooks
+- [ ] Community submission — gated (D3c)
 
-- Terminal design pass 1 (Edward: "focus on the design of the terminal itself"): vault-mapped ANSI palette (light+dark, live re-theme on css-change), Obsidian monospace font, 16 px inset, Obsidian-style scrollbar, 2 px bar cursor, refit on resize/active-leaf/post-open (48 rows in 954 px), tab-header status dot (working/needs-you/ended), ended strip with Restart button + Enter (verified: new sid, dot cleared), sidebar ended state. Claude Code renders correctly inside a tab (evidence/p1 + scratch d1/d2/d3 shots sent to Edward).
-- P2 sidebar verified: 30 rows listed (2 live incl. one owned by another UI, 28 recoverable), "+ New" shell menu (5 shells), right-click menu (open / close tab / end), row 42 px, titles not clipped at 264 px.
+## Accepted gaps (G1)
+Quake drop-down window; start-at-login for the Obsidian window. Agents overlay = replaced by sidebar needs-you rows + cheat sheet text. `browser` verb only supports open (web viewer); others need the desktop app.
 
 ## Corrections to PLAN
-- Obsidian installed is **1.13.4** (plan said 1.12.7). `minAppVersion` 1.12.0 kept.
-- `/api/backlog` items carry `live:true` for sessions held by another UI → sidebar CAN list standalone-owned sessions (plan §2 B1 was too pessimistic; D6 not needed).
-- Engine HTTP must go through Obsidian `requestUrl` (CORS blocks `fetch` from app://obsidian.md). WebSocket is fine.
-- Never spawn while `instance.json` pid is alive (first version double-spawned once; fixed).
+- Obsidian installed is 1.13.4 (plan said 1.12.7); `minAppVersion` 1.12.0.
+- `/api/backlog` items carry `live:true` → sidebar lists sessions held by other UIs (B1 resolved; D6 not needed).
+- Engine HTTP must use Obsidian `requestUrl` (CORS blocks fetch from app://obsidian.md); WebSocket is fine.
 
 ## Gotchas
-- Bash tool turns `\x1b` text into a raw ESC byte — patch such lines via a script file.
-- Obsidian global CSS makes xterm's DOM cursor span block+absolute → overridden in styles.css.
-- A Scope handler returning false stops the event before xterm sees it → plugin feeds the control code itself (`handleKey`).
+- Bash tool turns `\x1b` / `\n` text into raw bytes inside heredocs — patch source via script files.
+- Obsidian global CSS makes xterm's DOM cursor block+absolute → CSS override.
+- A Scope handler returning false stops the key before xterm sees it → `handleKey` feeds the control code.
+- `revealLeaf` does not activate a leaf; use `setActiveLeaf` before split/focus logic.
+- Git Bash mangles `https://` and paths with spaces in CLI args — test verbs from PowerShell.
 - Engine exe is locked while running; `sync.mjs` keeps the existing copy.
-
-## Blockers / risks
-- None open. Ctrl+V paste relies on `navigator.clipboard.readText` (untested with real clipboard content).
+- Broadcast fans input into EVERY terminal including a running Claude Code prompt.
 
 ## Next
-- P3: split commands + hotkeys defaults, palette commands audit, local echo (instant typing), broadcast to group, tab context menu (rename/end), needs-you Notice. Then P4 tools installer + verbs.
-- Design backlog: sidebar working dot for other-UI live sessions (no engine signal yet), `--font-monospace` on this machine starts with two garbled entries ('??') — harmless, fallbacks apply.
+- Finish P6 (zip + README), commit. Then Edward's workday + the two one-click registrations.
