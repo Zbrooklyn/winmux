@@ -24,7 +24,7 @@ Plan: PLAN.md v0.3 (approved 2026-08-25, full standalone replacement). Branch `f
 - [x] P5 Diagnostics, Cheat sheet, full settings (scrollback, cursor, copy-on-select, right-click paste, confirm close, OS notify, resume command, engine autostart + history) — Verified renders
 - [x] P5 Claude session resume from sidebar (/api/claude-sessions) — Implemented; menu not exercised
 - [x] P5 Workspace save/load — provided by Obsidian's own workspace (tabs restore with sid); WinMux workspace.json not used
-- [ ] P6 Release zip + README — in progress
+- [x] P6 Release zip (`%LOCALAPPDATA%winmuxeleaseswinmux-obsidian-0.1.0.zip`, 1.49 MB) + README — Verified
 - [ ] Edward: full workday with the WinMux app closed → Accepted
 - [ ] Edward (one click each, Settings → WinMux → Agent tools): Register MCP server · Install Claude hooks
 - [ ] Community submission — gated (D3c)
@@ -47,4 +47,4 @@ Quake drop-down window; start-at-login for the Obsidian window. Agents overlay =
 - Broadcast fans input into EVERY terminal including a running Claude Code prompt.
 
 ## Next
-- Finish P6 (zip + README), commit. Then Edward's workday + the two one-click registrations.
+- Edward: workday acceptance with the WinMux app closed; click Register MCP / Install hooks in Settings → WinMux; decide BRAT publish (G3b).
